@@ -7,6 +7,7 @@
     <title>像素斗地主 · 王牌协作版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <link rel="manifest" href="./manifest.json">
     <style>
         * {
             image-rendering: pixelated;
@@ -598,6 +599,15 @@
     window.addEventListener('resize',()=>{ if(GameState.players[0].length) renderPlayerHand(); });
     window.onload=()=>{ let saved=localStorage.getItem('landlord_stats'); if(saved){ let data=JSON.parse(saved); GameState.coins=data.coins||1000; GameState.stats=data.stats||{total:0,win:0}; updateStats(); } };
     window.onbeforeunload=()=>{ localStorage.setItem('landlord_stats',JSON.stringify({coins:GameState.coins,stats:GameState.stats})); };
+</script>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sv.js').then(reg => {
+      console.log('Service Worker 注册成功，作用域:', reg.scope);
+    }).catch(err => {
+      console.error('Service Worker 注册失败:', err);
+    });
+  }
 </script>
 </body>
 </html>
