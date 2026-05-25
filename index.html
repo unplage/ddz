@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <title>像素斗地主 · 智能王牌版</title>
+    <title>像素斗地主 · 稳定智能版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
     <link rel="manifest" href="./manifest.json">
@@ -155,16 +155,14 @@
     function countValues(values) { let cnt = {}; values.forEach(v => cnt[v] = (cnt[v] || 0) + 1); return cnt; }
     function isStraight(values) { for (let i = 1; i < values.length; i++) if (values[i] !== values[i-1] + 1) return false; return true; }
 
-    // 牌型定义
     const CardType = {
         SINGLE:'single', PAIR:'pair', TRIPLE:'triple', TRIPLE_WITH_SINGLE:'triple_single', TRIPLE_WITH_PAIR:'triple_pair',
         STRAIGHT:'straight', STRAIGHT_PAIR:'straight_pair', FOUR_WITH_TWO_SINGLE:'four_two_single', FOUR_WITH_TWO_PAIR:'four_two_pair',
         BOMB:'bomb', ROCKET:'rocket'
     };
 
-    // 获取牌型及主牌值
     function getCardType(cards) {
-        if (cards.length === 0) return null;
+        if (!cards || cards.length === 0) return null;
         const sorted = [...cards].sort((a,b)=>a.value-b.value);
         const values = sorted.map(c=>c.value);
         const uniq = [...new Set(values)];
@@ -201,10 +199,10 @@
     // ======================== 记牌器 ========================
     class CardMemory {
         constructor() {
-            this.played = new Set();          // 已出牌的id
+            this.played = new Set();
             this.remainCount = new Array(15).fill(4);
-            this.remainCount[13] = 2; // 小王
-            this.remainCount[14] = 2; // 大王
+            this.remainCount[13] = 2;
+            this.remainCount[14] = 2;
         }
         record(cards) {
             cards.forEach(c => {
@@ -219,7 +217,6 @@
             let ownCount = ownHand.filter(c => c.value === value).length;
             return this.getRemain(value) > ownCount;
         }
-        // 获取外面最大可能的牌（用于决策）
         getMaxCardOutside(ownHand) {
             for (let v = 14; v >= 3; v--) {
                 if (this.getRemain(v) > ownHand.filter(c=>c.value===v).length) return v;
@@ -262,10 +259,9 @@
         }
         if (hand.some(c=>c.value===14) && hand.some(c=>c.value===13)) score += 40;
         else { if (hand.some(c=>c.value===14)) score += 15; if (hand.some(c=>c.value===13)) score += 8; }
-        score += (cnt[12]||0)*4;  // K
-        score += (cnt[11]||0)*5;  // A
-        score += (cnt[10]||0)*7;  // 2
-        // 顺子潜力
+        score += (cnt[12]||0)*4;
+        score += (cnt[11]||0)*5;
+        score += (cnt[10]||0)*7;
         let sortedUnique = [...new Set(values.filter(v=>v<13))].sort((a,b)=>a-b);
         let maxLen = 1, cur = 1;
         for (let i=1;i<sortedUnique.length;i++) {
@@ -274,14 +270,14 @@
         }
         maxLen = Math.max(maxLen, cur);
         score += maxLen * 3;
-        // 手牌越少越好
         score += (20 - hand.length) * 5;
         if (isLandlord) score += 20;
         return score;
     }
 
-    // 生成所有合法出牌（简化高效版，包含主要牌型）
+    // 生成所有合法出牌（去重，强稳定）
     function getAllValidPlays(hand, lastPlay = null) {
+        if (!hand || hand.length === 0) return [];
         let candidates = [];
         const byValue = {};
         hand.forEach(c => { if (!byValue[c.value]) byValue[c.value] = []; byValue[c.value].push(c); });
@@ -297,8 +293,8 @@
         if (byValue[13] && byValue[14]) candidates.push([byValue[13][0], byValue[14][0]]);
         // 三带一
         for (let triple of Object.values(byValue).filter(arr=>arr.length>=3)) {
-            for (let single of hand.filter(c=>c.value !== triple[0].value)) {
-                candidates.push([...triple.slice(0,3), single]);
+            for (let single of hand) {
+                if (single.value !== triple[0].value) candidates.push([...triple.slice(0,3), single]);
             }
         }
         // 三带二
@@ -309,7 +305,7 @@
         }
         // 四带二单
         for (let quad of Object.values(byValue).filter(arr=>arr.length===4)) {
-            let singles = hand.filter(c=>c.value !== quad[0].value);
+            let singles = hand.filter(c => c.value !== quad[0].value);
             for (let i=0;i<singles.length;i++) for (let j=i+1;j<singles.length;j++) {
                 candidates.push([...quad, singles[i], singles[j]]);
             }
@@ -321,15 +317,19 @@
                 candidates.push([...quad, ...pairs[i].slice(0,2), ...pairs[j].slice(0,2)]);
             }
         }
-        // 顺子 5~12张
+        // 顺子
         let sortedValues = [...new Set(hand.map(c=>c.value).filter(v=>v<13))].sort((a,b)=>a-b);
         for (let len=5; len<=12; len++) {
             for (let i=0; i+len <= sortedValues.length; i++) {
                 let seq = sortedValues.slice(i, i+len);
                 if (isStraight(seq)) {
                     let cards = [];
-                    for (let v of seq) cards.push(byValue[v][0]);
-                    candidates.push(cards);
+                    let ok = true;
+                    for (let v of seq) {
+                        if (!byValue[v]) { ok=false; break; }
+                        cards.push(byValue[v][0]);
+                    }
+                    if (ok) candidates.push(cards);
                 }
             }
         }
@@ -340,24 +340,30 @@
                 let seq = pairsValues.slice(i, i+len);
                 if (isStraight(seq)) {
                     let cards = [];
-                    for (let v of seq) cards.push(...byValue[v].slice(0,2));
-                    candidates.push(cards);
+                    let ok = true;
+                    for (let v of seq) {
+                        if (!byValue[v] || byValue[v].length<2) { ok=false; break; }
+                        cards.push(...byValue[v].slice(0,2));
+                    }
+                    if (ok) candidates.push(cards);
                 }
             }
         }
-        // 去重（基于id串）
+        // 去重（基于id排序后字符串）
         let unique = new Map();
         candidates.forEach(arr => {
             let key = arr.map(c=>c.id).sort().join(',');
             if (!unique.has(key)) unique.set(key, arr);
         });
         let result = Array.from(unique.values());
-        if (lastPlay) result = result.filter(c => canBeat(getCardType(c), lastPlay));
+        // 合法性最终过滤
+        result = result.filter(play => getCardType(play) !== null);
+        if (lastPlay) result = result.filter(play => canBeat(getCardType(play), lastPlay));
         result.sort((a,b)=>getPlayPower(a)-getPlayPower(b));
         return result;
     }
 
-    // ======================== 专业AI ========================
+    // ======================== 专业AI (防卡死增强版) ========================
     class ProAI {
         constructor(id, difficulty, memory) {
             this.id = id;
@@ -377,7 +383,6 @@
                 if (strength > 20) return 1;
                 return 0;
             }
-            // hard 激进
             if (strength > 45) return 3;
             if (strength > 32) return 2;
             if (strength > 22) return 1;
@@ -385,58 +390,49 @@
         }
         playDecision(state) {
             let hand = [...state.players[this.id]];
+            if (hand.length === 0) return [];
             let lastPlay = state.lastPlay;
             let role = (this.id === state.landlord) ? 'landlord' : 'farmer';
             let partnerId = (role === 'farmer') ? (this.id === 1 ? 2 : 1) : null;
             let partnerHandCount = partnerId !== null ? state.players[partnerId].length : 0;
             let allPlays = getAllValidPlays(hand, lastPlay);
-            if (allPlays.length === 0) return [];
-            // 首出 or 无人压
+            // 首出或上一轮是自己
             if (!lastPlay || state.lastPlayerId === this.id) {
+                if (allPlays.length === 0) return []; // 无牌可出（理论上不会）
                 return this.selectLead(allPlays, role);
             }
-            // 压制选择
             let beatable = allPlays.filter(p => canBeat(getCardType(p), lastPlay));
             if (beatable.length === 0) return [];
-            // 农民协作（仅困难且农民角色）
+            // 农民协作（仅困难难度）
             if (this.difficulty === 'hard' && role === 'farmer') {
-                // 队友只剩1-2张，尽量用最小牌送队友
                 if (partnerHandCount <= 2) {
                     let smallest = beatable.sort((a,b)=>getPlayPower(a)-getPlayPower(b))[0];
                     return smallest;
                 }
-                // 顶牌：如果上一手是地主出的且是单张/对子，且牌值不大，用刚好大一点点的牌压
                 if (state.lastPlayerId === state.landlord && lastPlay.type === CardType.SINGLE && lastPlay.value < 12) {
                     let justBeat = beatable.find(p => getPlayPower(p) > lastPlay.value && getPlayPower(p) - lastPlay.value <= 3);
                     if (justBeat) return justBeat;
                 }
-                // 忍让：如果地主出小牌，而队友手牌较多，自己手中有大牌但不出，让队友接
                 if (state.lastPlayerId === state.landlord && lastPlay.type === CardType.SINGLE && lastPlay.value <= 7 && partnerHandCount > 4) {
-                    // 如果自己压牌需要拆大牌，就pass
                     let needBig = beatable.some(p => getCardType(p).value >= 12);
                     if (needBig) return [];
                 }
             }
-            // 地主策略：尽量用刚好大一点点的牌，保留大牌控制权
+            // 地主策略：保留大牌
             if (role === 'landlord' && this.difficulty !== 'easy') {
                 let justBeat = beatable.find(p => getPlayPower(p) > lastPlay.value && getPlayPower(p) - lastPlay.value <= 4);
                 if (justBeat) return justBeat;
             }
-            // 默认选最小能压的牌
             return beatable.sort((a,b)=>getPlayPower(a)-getPlayPower(b))[0];
         }
         selectLead(plays, role) {
             if (role === 'landlord') {
-                // 地主首出：优先出单张小牌（3~6）
                 let smallSingle = plays.find(p => p.length === 1 && p[0].value <= 6);
                 if (smallSingle) return smallSingle;
-                // 其次最小牌型
                 return plays.sort((a,b)=>getPlayPower(a)-getPlayPower(b))[0];
             } else {
-                // 农民首出：尽量出中等单牌（7~10）顶牌
                 let midSingle = plays.find(p => p.length === 1 && p[0].value >= 7 && p[0].value <= 10);
                 if (midSingle) return midSingle;
-                // 没有则出最小
                 return plays.sort((a,b)=>getPlayPower(a)-getPlayPower(b))[0];
             }
         }
@@ -451,7 +447,6 @@
         cardMemory: null, aiList: []
     };
 
-    // 辅助函数
     function createDeck() {
         const suits = ['♠','♥','♣','♦'], ranks = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
         let deck = [];
@@ -481,12 +476,7 @@
         GameState.lordPlayCount = 0;
         GameState.farmerPlayed = false;
         GameState.cardMemory = new CardMemory();
-        // 创建AI
-        GameState.aiList = [
-            null,   // 玩家自己不用AI
-            new ProAI(1, GameState.difficulty, GameState.cardMemory),
-            new ProAI(2, GameState.difficulty, GameState.cardMemory)
-        ];
+        GameState.aiList = [null, new ProAI(1, GameState.difficulty, GameState.cardMemory), new ProAI(2, GameState.difficulty, GameState.cardMemory)];
         dealCards();
     }
 
@@ -565,23 +555,43 @@
             if (passBtn) passBtn.disabled = (!GameState.lastPlay || GameState.lastPlayerId === 0);
         } else {
             if (playBtn) playBtn.disabled = true; if (passBtn) passBtn.disabled = true;
-            setTimeout(()=>{
+            let timeoutId = setTimeout(() => {
+                showToast((id===1?'农民A':'农民B')+' 思考超时，自动不出');
+                playCardsAI(id, []);
+            }, 1500);
+            setTimeout(() => {
                 let ai = GameState.aiList[id];
                 let cards = ai.think('play', GameState);
-                playCardsAI(id, cards);
-            }, 800);
+                clearTimeout(timeoutId);
+                // 二次校验：cards必须属于当前手牌且牌型合法
+                if (cards && cards.length > 0) {
+                    let isValid = cards.every(c => GameState.players[id].includes(c));
+                    let typeValid = getCardType(cards) !== null;
+                    if (!isValid || !typeValid) {
+                        console.warn("AI returned invalid cards, fallback to pass");
+                        cards = [];
+                    }
+                }
+                playCardsAI(id, cards || []);
+            }, 50);
         }
     }
     function playCardsAI(id, cards) {
-        let isPlay = (cards.length > 0);
+        let isPlay = (cards && cards.length > 0);
         if (!isPlay) {
             showToast((id===1?'农民A':id===2?'农民B':'你')+' 不出');
             GameState.passCount++;
         } else {
             let type = getCardType(cards);
-            // 记录到记牌器
+            if (!type) {
+                // 防御：牌型非法则转为不出
+                showToast((id===1?'农民A':id===2?'农民B':'你')+' 牌型非法，自动不出');
+                GameState.passCount++;
+                GameState.currentPlayer = (id+1)%3;
+                setTimeout(processPlay, 600);
+                return;
+            }
             GameState.cardMemory.record(cards);
-            // 移除手牌
             GameState.players[id] = GameState.players[id].filter(c => !cards.includes(c));
             GameState.lastPlay = type;
             GameState.lastPlayerId = id;
@@ -679,7 +689,7 @@
         if (GameState.phase !== 'playing' || GameState.currentPlayer !== 0) return;
         let plays = getAllValidPlays(GameState.players[0], GameState.lastPlay);
         if (plays.length > 0) {
-            let best = plays[0]; // 最小的合法牌
+            let best = plays[0];
             GameState.selectedCards = new Set(best);
             renderPlayerHand();
             showToast('已选推荐牌');
