@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <title>像素斗地主 · 手机语音最终版</title>
+    <title>像素斗地主 · 战绩记录版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
     <link rel="manifest" href="./manifest.json">
@@ -111,7 +111,7 @@
         .scanlines { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.05) 50%, rgba(0,0,0,0.05)); background-size: 100% 4px; pointer-events: none; z-index: 9999; opacity: 0.2; }
         .safe-area-top { padding-top: env(safe-area-inset-top); }
         .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom); }
-        .voice-btn, .stats-btn, .test-voice-btn { background: rgba(0,0,0,0.5); border-radius: 20px; padding: 4px 8px; font-size: 8px; cursor: pointer; margin-left: 5px; }
+        .voice-btn, .stats-btn { background: rgba(0,0,0,0.5); border-radius: 20px; padding: 4px 8px; font-size: 8px; cursor: pointer; margin-left: 5px; }
         .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.95); display: flex; align-items: center; justify-content: center; z-index: 1000; }
         .modal-content { background: #2a2a3e; border: 4px solid #fff; border-radius: 8px; max-width: 90%; max-height: 80%; overflow-y: auto; padding: 16px; width: 400px; }
         .history-item { background: #1e1e2e; margin: 8px 0; padding: 8px; border-left: 4px solid; font-size: 8px; }
@@ -129,7 +129,6 @@
             <select id="difficulty" class="difficulty-select" onchange="changeDifficulty(this.value)"><option value="easy">简单</option><option value="medium">中等</option><option value="hard" selected>困难（终极AI）</option></select>
             <select id="aiSpeed" class="speed-select" onchange="changeSpeed(this.value)"><option value="fast">快速</option><option value="normal" selected>中等</option><option value="slow">慢速</option></select>
             <div id="voiceToggle" class="voice-btn pixel-btn" style="background:#333; padding:4px 8px;" onclick="toggleVoice()">🔊 开</div>
-            <div id="testVoiceBtn" class="test-voice-btn pixel-btn" style="background:#333; padding:4px 8px;" onclick="testVoice()">🔊 测试</div>
             <div id="statsBtn" class="stats-btn pixel-btn" style="background:#333; padding:4px 8px;" onclick="showStatsModal()">📊 战绩</div>
         </div>
     </div>
@@ -159,79 +158,16 @@
     let audioEnabled = true;
     let aiSpeed = 'normal';
     let voiceEnabled = true;
-    let selectedVoice = null;
-    let voiceTested = false;   // 是否已经成功测试过语音
-    
     function changeSpeed(val) { aiSpeed = val; }
     function toggleSound() { audioEnabled = !audioEnabled; showToast(audioEnabled ? '音效开' : '音效关'); }
-    
-    // 获取中文语音（同步）
-    function getChineseVoice() {
-        if (!window.speechSynthesis) return null;
-        const voices = window.speechSynthesis.getVoices();
-        if (voices.length === 0) return null;
-        const names = ['Microsoft Kangkang', 'Google 普通话', 'Tingting', 'Huihui', 'Chinese', 'zh'];
-        for (let name of names) {
-            let found = voices.find(v => v.name.includes(name) && v.lang.includes('zh'));
-            if (found) return found;
-        }
-        return voices.find(v => v.lang.includes('zh')) || null;
-    }
-    
-    // 核心语音播放函数（必须在用户手势中同步调用）
-    function speakNow(text) {
-        if (!voiceEnabled) {
-            console.log("语音已关闭");
-            return false;
-        }
-        if (!window.speechSynthesis) {
-            console.warn("不支持语音");
-            showToast("浏览器不支持语音播报");
-            return false;
-        }
-        // 取消任何正在播放的语音，避免叠加
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = 'zh-CN';
-        utterance.rate = 0.9;
-        utterance.volume = 1;
-        if (selectedVoice) utterance.voice = selectedVoice;
-        utterance.onerror = (e) => {
-            console.error("语音播放错误:", e);
-            showToast("语音播放失败，请点击“测试”按钮重试");
-        };
-        utterance.onend = () => {
-            console.log("语音播放完成");
-        };
-        window.speechSynthesis.speak(utterance);
-        return true;
-    }
-    
-    // 手动测试语音（点击测试按钮时调用）
-    function testVoice() {
-        if (!voiceEnabled) { showToast("请先打开语音开关"); return; }
-        let success = speakNow("测试语音");
-        if (success) {
-            voiceTested = true;
-            showToast("正在播放测试语音...");
-        } else {
-            showToast("无法播放语音，请检查浏览器设置");
-        }
-    }
-    
     function toggleVoice() { 
         voiceEnabled = !voiceEnabled; 
         document.getElementById('voiceToggle').innerHTML = voiceEnabled ? '🔊 开' : '🔇 关';
         showToast(voiceEnabled ? '语音播报开' : '语音播报关');
-        if (voiceEnabled) {
-            // 开关打开时立即测试一次
-            testVoice();
-        } else {
-            window.speechSynthesis && window.speechSynthesis.cancel();
-        }
+        if (voiceEnabled && window.speechSynthesis) window.speechSynthesis.cancel();
     }
     
-    // 出牌语音播报（由 playCardsAI 同步调用）
+    // ========== 语音播报函数 ==========
     function speakPlay(cards) {
         if (!voiceEnabled) return;
         if (!cards || cards.length === 0) return;
@@ -260,11 +196,17 @@
             case CardType.ROCKET: text = "王炸"; break;
             default: text = "出牌";
         }
-        if (text) speakNow(text);
+        if (text) {
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'zh-CN';
+            utterance.rate = 0.9;
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(utterance);
+        }
     }
     
     // ========== 战绩存储 ==========
-    let matchHistory = [];
+    let matchHistory = [];  // 存储 { time, result, multiplier, delta, coinsAfter }
     function loadHistory() {
         let saved = localStorage.getItem('landlord_match_history');
         if (saved) {
@@ -272,7 +214,7 @@
         } else { matchHistory = []; }
     }
     function saveHistory() {
-        localStorage.setItem('landlord_match_history', JSON.stringify(matchHistory.slice(0, 50)));
+        localStorage.setItem('landlord_match_history', JSON.stringify(matchHistory.slice(0, 50))); // 最多50条
     }
     function addMatchRecord(result, multiplier, delta, coinsAfter) {
         let now = new Date();
@@ -308,7 +250,7 @@
         if (confirm('确定清空所有历史战绩吗？')) {
             matchHistory = [];
             saveHistory();
-            showStatsModal();
+            showStatsModal(); // 刷新显示
             showToast('历史记录已清空');
         }
     }
@@ -628,20 +570,6 @@
 
     function initGame() {
         initAudio();
-        // 在开始游戏时先测试一下语音（强制激活）
-        if (voiceEnabled && window.speechSynthesis) {
-            // 确保语音列表已加载
-            if (!selectedVoice) {
-                selectedVoice = getChineseVoice();
-            }
-            // 尝试播放一个简短的测试语音来激活权限
-            const testUtter = new SpeechSynthesisUtterance("游戏开始");
-            testUtter.lang = 'zh-CN';
-            testUtter.rate = 0.9;
-            if (selectedVoice) testUtter.voice = selectedVoice;
-            window.speechSynthesis.speak(testUtter);
-        }
-        
         document.getElementById('startScreen').classList.add('hidden');
         GameState.stats.total++;
         updateStats();
@@ -662,6 +590,11 @@
         GameState.cardMemory = new CardMemory();
         GameState.aiList = [null, new UltimateAI(1, GameState.difficulty, GameState.cardMemory), new UltimateAI(2, GameState.difficulty, GameState.cardMemory)];
         dealCards();
+        if (voiceEnabled && window.speechSynthesis) {
+            let utter = new SpeechSynthesisUtterance(' ');
+            utter.lang = 'zh-CN';
+            window.speechSynthesis.speak(utter);
+        }
     }
 
     let callTimeout = null;
@@ -769,7 +702,7 @@
             }
             displayPlayed(cards);
             addHistory(`${id===0?'你':(id===1?'农民A':'农民B')} 出了 ${cards.length}张`);
-            speakPlay(cards);   // 同步调用语音
+            speakPlay(cards);
             if (id === 0) renderPlayerHand(); else updateCount(id);
             if (GameState.players[id].length === 0) { setTimeout(()=>endGame(id), 300); return; }
             if (GameState.players[id].length <= 3) showToast((id===1?'农民A':id===2?'农民B':'你')+' 剩'+GameState.players[id].length+'张！');
@@ -887,6 +820,7 @@
         if (isPlayerWin) { GameState.stats.win++; GameState.coins += amount; playSound('win'); }
         else { GameState.coins = Math.max(0, GameState.coins - amount); }
         let delta = GameState.coins - oldCoins;
+        // 记录历史
         addMatchRecord(isPlayerWin ? 'win' : 'lose', multiplier, delta, GameState.coins);
         updateStats();
         let screen = document.getElementById('gameOverScreen'), title = document.getElementById('resultTitle'), content = document.getElementById('resultContent');
@@ -933,11 +867,6 @@
             GameState.coins = data.coins || 1000;
             GameState.stats = data.stats || {total:0,win:0};
             updateStats();
-        }
-        // 预取语音列表（仅获取，不播放）
-        if (window.speechSynthesis) {
-            window.speechSynthesis.getVoices();
-            selectedVoice = getChineseVoice();
         }
     };
     window.onbeforeunload = () => {
