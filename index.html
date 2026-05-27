@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <title>像素斗地主 · 手机语音修复版</title>
+    <title>像素斗地主 · 手机语音最终版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
     <link rel="manifest" href="./manifest.json">
@@ -160,6 +160,7 @@
     let aiSpeed = 'normal';
     let voiceEnabled = true;
     let selectedVoice = null;
+    let voiceTested = false;   // 是否已经成功测试过语音
     
     function changeSpeed(val) { aiSpeed = val; }
     function toggleSound() { audioEnabled = !audioEnabled; showToast(audioEnabled ? '音效开' : '音效关'); }
@@ -169,7 +170,6 @@
         if (!window.speechSynthesis) return null;
         const voices = window.speechSynthesis.getVoices();
         if (voices.length === 0) return null;
-        // 优先级
         const names = ['Microsoft Kangkang', 'Google 普通话', 'Tingting', 'Huihui', 'Chinese', 'zh'];
         for (let name of names) {
             let found = voices.find(v => v.name.includes(name) && v.lang.includes('zh'));
@@ -178,28 +178,45 @@
         return voices.find(v => v.lang.includes('zh')) || null;
     }
     
-    // 同步播放语音（必须在用户手势回调中调用）
-    function speakNow(text, volume = 0.8) {
-        if (!voiceEnabled) return;
+    // 核心语音播放函数（必须在用户手势中同步调用）
+    function speakNow(text) {
+        if (!voiceEnabled) {
+            console.log("语音已关闭");
+            return false;
+        }
         if (!window.speechSynthesis) {
             console.warn("不支持语音");
-            return;
+            showToast("浏览器不支持语音播报");
+            return false;
         }
+        // 取消任何正在播放的语音，避免叠加
         window.speechSynthesis.cancel();
-        const utter = new SpeechSynthesisUtterance(text);
-        utter.lang = 'zh-CN';
-        utter.rate = 0.9;
-        utter.volume = volume;
-        if (selectedVoice) utter.voice = selectedVoice;
-        utter.onerror = (e) => console.error("语音错误", e);
-        window.speechSynthesis.speak(utter);
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'zh-CN';
+        utterance.rate = 0.9;
+        utterance.volume = 1;
+        if (selectedVoice) utterance.voice = selectedVoice;
+        utterance.onerror = (e) => {
+            console.error("语音播放错误:", e);
+            showToast("语音播放失败，请点击“测试”按钮重试");
+        };
+        utterance.onend = () => {
+            console.log("语音播放完成");
+        };
+        window.speechSynthesis.speak(utterance);
+        return true;
     }
     
     // 手动测试语音（点击测试按钮时调用）
     function testVoice() {
         if (!voiceEnabled) { showToast("请先打开语音开关"); return; }
-        speakNow("测试语音", 0.8);
-        showToast("正在播放测试语音...");
+        let success = speakNow("测试语音");
+        if (success) {
+            voiceTested = true;
+            showToast("正在播放测试语音...");
+        } else {
+            showToast("无法播放语音，请检查浏览器设置");
+        }
     }
     
     function toggleVoice() { 
@@ -207,14 +224,14 @@
         document.getElementById('voiceToggle').innerHTML = voiceEnabled ? '🔊 开' : '🔇 关';
         showToast(voiceEnabled ? '语音播报开' : '语音播报关');
         if (voiceEnabled) {
-            // 立即播放测试语音（同步，在用户点击开关的手势中）
-            speakNow("语音已开启", 0.8);
+            // 开关打开时立即测试一次
+            testVoice();
         } else {
             window.speechSynthesis && window.speechSynthesis.cancel();
         }
     }
     
-    // 出牌语音播报（直接在出牌时同步调用）
+    // 出牌语音播报（由 playCardsAI 同步调用）
     function speakPlay(cards) {
         if (!voiceEnabled) return;
         if (!cards || cards.length === 0) return;
@@ -243,7 +260,7 @@
             case CardType.ROCKET: text = "王炸"; break;
             default: text = "出牌";
         }
-        if (text) speakNow(text, 0.8);
+        if (text) speakNow(text);
     }
     
     // ========== 战绩存储 ==========
@@ -611,18 +628,14 @@
 
     function initGame() {
         initAudio();
-        // 关键修复：在用户点击“开始游戏”的同步回调中直接激活语音
+        // 在开始游戏时先测试一下语音（强制激活）
         if (voiceEnabled && window.speechSynthesis) {
-            // 先取一次中文语音（确保 voices 已加载）
+            // 确保语音列表已加载
             if (!selectedVoice) {
                 selectedVoice = getChineseVoice();
             }
-            // 播放静音语音（volume=0）和测试语音，全部同步执行，不使用 setTimeout
-            const silent = new SpeechSynthesisUtterance(' ');
-            silent.volume = 0;
-            silent.lang = 'zh-CN';
-            window.speechSynthesis.speak(silent);
-            const testUtter = new SpeechSynthesisUtterance('游戏开始');
+            // 尝试播放一个简短的测试语音来激活权限
+            const testUtter = new SpeechSynthesisUtterance("游戏开始");
             testUtter.lang = 'zh-CN';
             testUtter.rate = 0.9;
             if (selectedVoice) testUtter.voice = selectedVoice;
@@ -921,7 +934,7 @@
             GameState.stats = data.stats || {total:0,win:0};
             updateStats();
         }
-        // 预取语音列表（不播放）
+        // 预取语音列表（仅获取，不播放）
         if (window.speechSynthesis) {
             window.speechSynthesis.getVoices();
             selectedVoice = getChineseVoice();
