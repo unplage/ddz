@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <title>像素斗地主 · 终极修复版</title>
+    <title>像素斗地主 · 稳定修复版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
     <link rel="manifest" href="./manifest.json">
@@ -264,8 +264,25 @@
     
     // ========== 战绩存储 ==========
     let matchHistory = [];
-    function loadHistory() { let saved = localStorage.getItem('landlord_stats'); if (saved) { try { matchHistory = JSON.parse(saved); } catch(e){ matchHistory = []; } } else { matchHistory = []; } }
-    function saveHistory() { localStorage.setItem('landlord_stats', JSON.stringify(matchHistory.slice(0, 50))); }
+    function loadHistory() { 
+        let saved = localStorage.getItem('landlord_stats'); 
+        if (saved) { 
+            try { 
+                const data = JSON.parse(saved);
+                matchHistory = data.history || [];
+                GameState.coins = data.coins || 1000;
+                GameState.stats = data.stats || {total:0,win:0};
+                updateStats();
+            } catch(e){ matchHistory = []; } 
+        } else { matchHistory = []; } 
+    }
+    function saveHistory() { 
+        localStorage.setItem('landlord_stats', JSON.stringify({ 
+            coins: GameState.coins, 
+            stats: GameState.stats, 
+            history: matchHistory.slice(0, 50) 
+        })); 
+    }
     function addMatchRecord(result, multiplier, delta, coinsAfter) {
         let now = new Date();
         let timeStr = `${now.getMonth()+1}/${now.getDate()} ${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
@@ -274,9 +291,13 @@
         saveHistory();
     }
     function showStatsModal() {
-        let modal = document.getElementById('statsModal'), container = document.getElementById('statsList');
-        if (matchHistory.length === 0) container.innerHTML = '<div class="text-center text-gray-400 text-[10px] py-4">暂无对局记录</div>';
-        else {
+        let modal = document.getElementById('statsModal');
+        if (!modal) return;
+        let container = document.getElementById('statsList');
+        if (!container) return;
+        if (matchHistory.length === 0) {
+            container.innerHTML = '<div class="text-center text-gray-400 text-[10px] py-4">暂无对局记录</div>';
+        } else {
             let html = '';
             for (let rec of matchHistory) {
                 let resultClass = rec.result === 'win' ? 'history-win' : 'history-lose';
@@ -287,8 +308,18 @@
         }
         modal.classList.remove('hidden');
     }
-    function closeStatsModal() { document.getElementById('statsModal').classList.add('hidden'); }
-    function clearHistory() { if (confirm('确定清空所有历史战绩吗？')) { matchHistory = []; saveHistory(); showStatsModal(); showToast('历史记录已清空'); } }
+    function closeStatsModal() { 
+        const modal = document.getElementById('statsModal');
+        if (modal) modal.classList.add('hidden');
+    }
+    function clearHistory() { 
+        if (confirm('确定清空所有历史战绩吗？')) { 
+            matchHistory = []; 
+            saveHistory(); 
+            showStatsModal(); 
+            showToast('历史记录已清空'); 
+        } 
+    }
     
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     let audioCtx = null;
@@ -427,7 +458,7 @@
         return score;
     }
 
-    // 生成所有合法出牌（优化版，避免空结果）
+    // 生成所有合法出牌
     function getAllValidPlays(hand, lastPlay = null) {
         if (!hand || hand.length === 0) return [];
         let candidates = [];
@@ -484,7 +515,7 @@
         return result;
     }
 
-    // 提取手牌特征（用于AI评分）
+    // 提取手牌特征
     function extractHandFeatures(hand) {
         let values = hand.map(c => c.value);
         let counts = new Array(15).fill(0);
@@ -570,7 +601,7 @@
         }
     }
 
-    // ======================== 大师级AI（修复版） ========================
+    // ======================== 大师级AI ========================
     class MasterAI {
         constructor(id, difficulty, memory) { this.id = id; this.difficulty = difficulty; this.memory = memory; }
         think(phase, state) {
@@ -634,7 +665,7 @@
         }
     }
 
-    // ======================== 游戏状态（修复版） ========================
+    // ======================== 游戏状态 ========================
     const GameState = {
         phase: 'idle', deck: [], players: [[],[],[]], lordCards: [], landlord: -1, currentPlayer: 0,
         lastPlay: null, lastPlayerId: -1, currentScore: 0, selectedCards: new Set(), bombCount: 0,
@@ -906,6 +937,7 @@
     }
     function shakeHand() { let c = document.getElementById('handContainer'); c.classList.add('ani-shake'); setTimeout(()=>c.classList.remove('ani-shake'),300); }
     function endGame(winner) {
+        if (GameState.phase === 'gameover') return; // 防止重复调用
         GameState.phase = 'gameover';
         let isPlayerWin = (winner===0) || (winner!==0 && GameState.landlord!==0 && winner!==GameState.landlord);
         let isLordWin = (winner === GameState.landlord);
@@ -932,8 +964,17 @@
             content.innerHTML = `失去 ${amount} 筹码<br>余额：${GameState.coins}`;
         }
         addHistory(isPlayerWin ? '🎉胜利！' : '💔失败');
+        // 清理 processing 标志，避免卡死
+        GameState.processing = false;
+        // 禁用出牌按钮，防止游戏结束后还能操作
+        const playBtn = document.getElementById('playBtn');
+        const passBtn = document.getElementById('passBtn');
+        if (playBtn) playBtn.disabled = true;
+        if (passBtn) passBtn.disabled = true;
     }
     function resetGame() {
+        // 清理所有计时器
+        if (callTimeout) clearTimeout(callTimeout);
         document.getElementById('gameOverScreen').classList.add('hidden');
         document.getElementById('playArea').innerHTML = '<span class="text-gray-500 text-[10px]">等待出牌...</span>';
         document.getElementById('lastPlayer').textContent = '';
@@ -949,17 +990,14 @@
     window.addEventListener('resize', ()=>{ if(GameState.players[0].length) renderPlayerHand(); });
     window.onload = () => {
         loadHistory();
-        let saved = localStorage.getItem('landlord_stats');
-        if (saved) {
-            let data = JSON.parse(saved);
-            GameState.coins = data.coins || 1000;
-            GameState.stats = data.stats || {total:0,win:0};
-            updateStats();
-        }
         if (window.speechSynthesis) { window.speechSynthesis.getVoices(); selectedVoice = getChineseVoice(); }
+        // 确保战绩按钮能正常关闭模态框（防止某些情况下点击关闭无效）
+        const closeBtn = document.querySelector('#statsModal .modal-content button:last-child');
+        if (closeBtn) closeBtn.onclick = closeStatsModal;
     };
-    window.onbeforeunload = () => { localStorage.setItem('landlord_stats', JSON.stringify({ coins: GameState.coins, stats: GameState.stats })); saveHistory(); };
+    window.onbeforeunload = () => { saveHistory(); };
 </script>
+</body>
 <script>
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sv.js').then(reg => {
@@ -968,6 +1006,5 @@
       console.error('Service Worker 注册失败:', err);
     });
   }
-</script> 
-</body>
+</script>
 </html>
