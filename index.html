@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <title>像素斗地主 · DouZero风格AI</title>
+    <title>像素斗地主 · 终极修复版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
     <link rel="manifest" href="./manifest.json">
@@ -152,7 +152,7 @@
             <div class="text-yellow-400 text-[10px] retro-text">💰<span id="coins">1000</span></div>
         </div>
         <div class="flex items-center gap-2">
-            <select id="difficulty" class="difficulty-select" onchange="changeDifficulty(this.value)"><option value="easy">简单</option><option value="medium">中等</option><option value="hard" selected>DouZero风格</option></select>
+            <select id="difficulty" class="difficulty-select" onchange="changeDifficulty(this.value)"><option value="easy">简单</option><option value="medium">中等</option><option value="hard" selected>大师级</option></select>
             <select id="aiSpeed" class="speed-select" onchange="changeSpeed(this.value)"><option value="fast">快速</option><option value="normal" selected>中等</option><option value="slow">慢速</option></select>
             <div id="voiceToggle" class="voice-btn pixel-btn" style="background:#333; padding:4px 8px;" onclick="toggleVoice()">🔊 开</div>
             <div id="statsBtn" class="stats-btn pixel-btn" style="background:#333; padding:4px 8px;" onclick="showStatsModal()">📊 战绩</div>
@@ -169,17 +169,14 @@
             <div class="hand-wrapper" id="handContainer"><div id="playerHand"></div></div>
             <div class="flex justify-center gap-2 p-2" id="controls"><button id="callBtn" class="pixel-btn bg-green-500 text-[10px]" onclick="callScore(0)">不叫</button><button id="oneBtn" class="pixel-btn bg-blue-500 text-[10px]" onclick="callScore(1)">1分</button><button id="twoBtn" class="pixel-btn bg-yellow-500 text-[10px]" onclick="callScore(2)">2分</button><button id="threeBtn" class="pixel-btn bg-red-500 text-[10px]" onclick="callScore(3)">3分</button></div>
         </div>
-        <div id="startScreen" class="fixed inset-0 bg-black/95 flex flex-col items-center justify-center z-50 safe-area-top safe-area-bottom"><h1 class="text-2xl text-yellow-400 retro-text mb-6 ani-bounce text-center px-4">像素斗地主</h1><div class="bg-gray-800/90 p-6 pixel-border mx-4 max-w-[90%] text-center backdrop-blur"><p class="text-[10px] leading-6 mb-6 text-gray-300">DouZero风格AI · 深度特征决策<br>记牌推理 · 协作迷惑 · 动态博弈</p><button onclick="initGame()" class="pixel-btn start-btn bg-green-500 block w-full mb-3">开始游戏</button></div></div>
-        <div id="rulesModal" class="hidden fixed inset-0 bg-black/95 flex items-center justify-center z-50 p-4"><div class="bg-gray-800 p-4 pixel-border w-full max-w-sm max-h-[80vh] overflow-y-auto"><h2 class="text-lg text-yellow-400 mb-4 retro-text text-center">游戏规则</h2><div class="text-[10px] leading-6 text-gray-300 space-y-2"><div class="bg-black/30 p-2 rounded mb-3"><p class="text-yellow-400 mb-1">✨ DouZero风格AI ✨</p><p>• 全局记牌，剩余牌推断</p><p>• 地主控盘，农民协作顶牌/送牌</p><p>• 深度特征评分 + 前瞻模拟</p><p>• 炸弹忍让，保留至决胜</p></div><p>• 发牌：每人17张，留3张底牌</p><p>• 叫分：1-3分或不叫，高分当地主</p><p>• 牌型：单张、对子、三带一/对、顺子(5+)、连对(3+)、四带二、炸弹、王炸</p><p>• 春天/反春天：底分×2</p></div><button onclick="toggleRules()" class="pixel-btn bg-red-500 mt-4 w-full text-[12px]">关闭</button></div></div>
+        <div id="startScreen" class="fixed inset-0 bg-black/95 flex flex-col items-center justify-center z-50 safe-area-top safe-area-bottom"><h1 class="text-2xl text-yellow-400 retro-text mb-6 ani-bounce text-center px-4">像素斗地主</h1><div class="bg-gray-800/90 p-6 pixel-border mx-4 max-w-[90%] text-center backdrop-blur"><p class="text-[10px] leading-6 mb-6 text-gray-300">大师级AI · 记牌推理 · 协作迷惑<br>动态调控 · 随机应变</p><button onclick="initGame()" class="pixel-btn start-btn bg-green-500 block w-full mb-3">开始游戏</button></div></div>
+        <div id="rulesModal" class="hidden fixed inset-0 bg-black/95 flex items-center justify-center z-50 p-4"><div class="bg-gray-800 p-4 pixel-border w-full max-w-sm max-h-[80vh] overflow-y-auto"><h2 class="text-lg text-yellow-400 mb-4 retro-text text-center">游戏规则</h2><div class="text-[10px] leading-6 text-gray-300 space-y-2"><div class="bg-black/30 p-2 rounded mb-3"><p class="text-yellow-400 mb-1">✨ 大师级AI ✨</p><p>• 全局记牌，剩余牌推断</p><p>• 地主控盘，农民协作顶牌/送牌</p><p>• 前瞻模拟 + 迷惑策略</p><p>• 炸弹忍让，保留至决胜</p></div><p>• 发牌：每人17张，留3张底牌</p><p>• 叫分：1-3分或不叫，高分当地主</p><p>• 牌型：单张、对子、三带一/对、顺子(5+)、连对(3+)、四带二、炸弹、王炸</p><p>• 春天/反春天：底分×2</p></div><button onclick="toggleRules()" class="pixel-btn bg-red-500 mt-4 w-full text-[12px]">关闭</button></div></div>
         <div id="gameOverScreen" class="hidden fixed inset-0 bg-black/95 flex flex-col items-center justify-center z-50 p-4"><h2 id="resultTitle" class="text-2xl retro-text mb-4 text-center"></h2><div id="resultContent" class="text-center mb-6 text-[12px]"></div><button onclick="resetGame()" class="pixel-btn bg-green-500 w-full max-w-[200px]">再来一局</button></div>
         <div id="statsModal" class="modal hidden">
             <div class="modal-content">
                 <h2 class="text-lg text-yellow-400 mb-4 retro-text text-center">📊 历史战绩</h2>
                 <div id="statsList" class="space-y-2 mb-4"></div>
-                <div class="flex gap-2">
-                    <button onclick="clearHistory()" class="pixel-btn bg-red-500 flex-1 text-[10px]">清空记录</button>
-                    <button onclick="closeStatsModal()" class="pixel-btn bg-gray-500 flex-1 text-[10px]">关闭</button>
-                </div>
+                <div class="flex gap-2"><button onclick="clearHistory()" class="pixel-btn bg-red-500 flex-1 text-[10px]">清空记录</button><button onclick="closeStatsModal()" class="pixel-btn bg-gray-500 flex-1 text-[10px]">关闭</button></div>
             </div>
         </div>
     </div>
@@ -267,8 +264,8 @@
     
     // ========== 战绩存储 ==========
     let matchHistory = [];
-    function loadHistory() { let saved = localStorage.getItem('landlord_match_history'); if (saved) { try { matchHistory = JSON.parse(saved); } catch(e){ matchHistory = []; } } else { matchHistory = []; } }
-    function saveHistory() { localStorage.setItem('landlord_match_history', JSON.stringify(matchHistory.slice(0, 50))); }
+    function loadHistory() { let saved = localStorage.getItem('landlord_stats'); if (saved) { try { matchHistory = JSON.parse(saved); } catch(e){ matchHistory = []; } } else { matchHistory = []; } }
+    function saveHistory() { localStorage.setItem('landlord_stats', JSON.stringify(matchHistory.slice(0, 50))); }
     function addMatchRecord(result, multiplier, delta, coinsAfter) {
         let now = new Date();
         let timeStr = `${now.getMonth()+1}/${now.getDate()} ${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
@@ -381,7 +378,6 @@
             for (let v=3; v<=12; v++) if (this.getRemain(v) >= 4) return true;
             return false;
         }
-        // 获取外面剩余炸弹数量（估算）
         getOutsideBombCount() {
             let cnt = 0;
             for (let v=3; v<=12; v++) if (this.getRemain(v) >= 4) cnt++;
@@ -412,135 +408,26 @@
         return base;
     }
 
-    // 提取手牌的结构特征（模仿 DouZero）
-    function extractHandFeatures(hand) {
-        let values = hand.map(c => c.value);
-        let counts = new Array(15).fill(0);
-        values.forEach(v => counts[v]++);
-        let features = {
-            // 单张、对子、三张、炸弹数量
-            single: 0, pair: 0, triple: 0, bomb: 0,
-            // 顺子长度（最长连续）
-            maxStraightLen: 0,
-            // 连对长度
-            maxStraightPairLen: 0,
-            // 大牌计数 (>=12)
-            bigCards: 0,
-            // 王炸标志
-            hasRocket: 0,
-            // 手牌总数
-            total: hand.length
-        };
-        for (let v=3; v<=14; v++) {
-            if (counts[v] === 1) features.single++;
-            else if (counts[v] === 2) features.pair++;
-            else if (counts[v] === 3) features.triple++;
-            else if (counts[v] === 4) features.bomb++;
-            if (v >= 12) features.bigCards += counts[v];
+    function evaluateHandStrength(hand, memory, isLandlord) {
+        let score = 0, values = hand.map(c=>c.value), cnt = countValues(values);
+        for (let v in cnt) {
+            if (cnt[v] === 4) score += 30;
+            else if (cnt[v] === 3) score += 8;
+            else if (cnt[v] === 2) score += 3;
         }
-        if (counts[13] === 1 && counts[14] === 1) features.hasRocket = 1;
-        // 计算最长顺子
-        let straight = 0, best = 0;
-        for (let v=3; v<=11; v++) {
-            if (counts[v] >= 1) straight++;
-            else { best = Math.max(best, straight); straight = 0; }
-        }
-        best = Math.max(best, straight);
-        features.maxStraightLen = best;
-        // 最长连对
-        let pairStraight = 0, bestPair = 0;
-        for (let v=3; v<=11; v++) {
-            if (counts[v] >= 2) pairStraight++;
-            else { bestPair = Math.max(bestPair, pairStraight); pairStraight = 0; }
-        }
-        bestPair = Math.max(bestPair, pairStraight);
-        features.maxStraightPairLen = bestPair;
-        return features;
-    }
-
-    // 对每个候选出牌，提取特征向量
-    function extractPlayFeatures(play, hand, lastPlay, role, memory, state) {
-        let playType = getCardType(play);
-        let newHand = hand.filter(c => !play.includes(c));
-        let handFeatures = extractHandFeatures(newHand);
-        let playPower = getPlayPower(play);
-        let isBomb = [CardType.BOMB, CardType.ROCKET].includes(playType.type);
-        let isLead = (!lastPlay || state.lastPlayerId === state.currentPlayer);
-        let needBeat = (lastPlay && !isLead);
-        
-        let features = {
-            // 出牌本身的特征
-            playLength: play.length,
-            playPower: playPower,
-            isBomb: isBomb ? 1 : 0,
-            isRocket: (playType.type === CardType.ROCKET) ? 1 : 0,
-            // 手牌结构变化
-            remainTotal: newHand.length,
-            remainSingle: handFeatures.single,
-            remainPair: handFeatures.pair,
-            remainTriple: handFeatures.triple,
-            remainBomb: handFeatures.bomb,
-            remainMaxStraight: handFeatures.maxStraightLen,
-            remainBigCards: handFeatures.bigCards,
-            hasRocket: handFeatures.hasRocket,
-            // 角色相关
-            isLandlord: (role === 'landlord') ? 1 : 0,
-            isFarmer: (role === 'farmer') ? 1 : 0,
-            // 局面特征
-            opponentHandCount: state.lastPlayerId !== -1 ? state.players[state.lastPlayerId].length : 0,
-            partnerHandCount: (role === 'farmer') ? (state.players[role === 'farmer' ? (state.landlord === 1 ? 2 : 1) : 0]?.length || 0) : 0,
-            outsideBombCount: memory.getOutsideBombCount(),
-            isCritical: (newHand.length <= 3) ? 1 : 0,
-            // 是否需要压牌
-            needBeat: needBeat ? 1 : 0,
-            // 上一手牌型
-            lastPlayType: lastPlay ? lastPlay.type : 'none',
-            lastPlayPower: lastPlay ? lastPlay.value : 0
-        };
-        return features;
-    }
-
-    // 特征权重（手工调优，可后续学习）
-    const WEIGHTS = {
-        playPower: 0.8,
-        isBomb: -30,          // 非必要不出炸弹
-        isRocket: -50,
-        remainTotal: -2,      // 手牌越少越好
-        remainSingle: 1,
-        remainPair: 2,
-        remainTriple: 4,
-        remainBomb: 15,
-        remainMaxStraight: 3,
-        remainBigCards: 1,
-        hasRocket: 10,
-        isLandlord: 5,
-        isFarmer: 0,
-        opponentHandCount: -1,
-        partnerHandCount: 2,   // 队友牌少时加分
-        outsideBombCount: -5,
-        isCritical: 20,
-        needBeat: 10,
-        // 额外启发式（在 score 中加）
-    };
-
-    // 评分函数
-    function scorePlay(features) {
-        let score = 0;
-        for (let key in WEIGHTS) {
-            if (features[key] !== undefined) score += features[key] * WEIGHTS[key];
-        }
-        // 附加奖励：送队友
-        if (features.isFarmer && features.partnerHandCount <= 2 && features.playLength <= 2) score += 40;
-        // 附加奖励：顶牌（农民用中等牌压地主小单）
-        if (features.isFarmer && features.needBeat && features.lastPlayType === 'single' && features.lastPlayPower <= 10 && features.playPower > features.lastPlayPower && features.playPower - features.lastPlayPower <= 3) score += 30;
-        // 忍让惩罚：如果对手出大牌（>=12）且自己手牌多，不应该用更大的牌压（保留大牌）
-        if (features.needBeat && features.lastPlayPower >= 12 && features.remainTotal > 3 && features.playPower > features.lastPlayPower && features.playPower < 14) score -= 40;
-        // 地主控盘：首出小单奖励
-        if (features.isLandlord && !features.needBeat && features.playLength === 1 && features.playPower <= 6) score += 20;
+        if (hand.some(c=>c.value===14) && hand.some(c=>c.value===13)) score += 40;
+        else { if (hand.some(c=>c.value===14)) score += 15; if (hand.some(c=>c.value===13)) score += 8; }
+        score += (cnt[12]||0)*4 + (cnt[11]||0)*5 + (cnt[10]||0)*7;
+        let sortedUnique = [...new Set(values.filter(v=>v<13))].sort((a,b)=>a-b);
+        let maxLen = 1, cur = 1;
+        for (let i=1;i<sortedUnique.length;i++) { if (sortedUnique[i] === sortedUnique[i-1]+1) cur++; else { maxLen = Math.max(maxLen, cur); cur=1; } }
+        maxLen = Math.max(maxLen, cur);
+        score += maxLen * 3 + (20 - hand.length) * 5;
+        if (isLandlord) score += 20;
         return score;
     }
 
-    // ======================== 生成所有合法出牌 ========================
+    // 生成所有合法出牌（优化版，避免空结果）
     function getAllValidPlays(hand, lastPlay = null) {
         if (!hand || hand.length === 0) return [];
         let candidates = [];
@@ -597,7 +484,68 @@
         return result;
     }
 
-    // 简单前瞻模拟（深度1，对手最优回应）
+    // 提取手牌特征（用于AI评分）
+    function extractHandFeatures(hand) {
+        let values = hand.map(c => c.value);
+        let counts = new Array(15).fill(0);
+        values.forEach(v => counts[v]++);
+        let features = { single:0, pair:0, triple:0, bomb:0, maxStraightLen:0, maxStraightPairLen:0, bigCards:0, hasRocket:0, total:hand.length };
+        for (let v=3; v<=14; v++) {
+            if (counts[v] === 1) features.single++;
+            else if (counts[v] === 2) features.pair++;
+            else if (counts[v] === 3) features.triple++;
+            else if (counts[v] === 4) features.bomb++;
+            if (v >= 12) features.bigCards += counts[v];
+        }
+        if (counts[13] === 1 && counts[14] === 1) features.hasRocket = 1;
+        let straight = 0, best = 0;
+        for (let v=3; v<=11; v++) {
+            if (counts[v] >= 1) straight++;
+            else { best = Math.max(best, straight); straight = 0; }
+        }
+        best = Math.max(best, straight);
+        features.maxStraightLen = best;
+        let pairStraight = 0, bestPair = 0;
+        for (let v=3; v<=11; v++) {
+            if (counts[v] >= 2) pairStraight++;
+            else { bestPair = Math.max(bestPair, pairStraight); pairStraight = 0; }
+        }
+        bestPair = Math.max(bestPair, pairStraight);
+        features.maxStraightPairLen = bestPair;
+        return features;
+    }
+
+    function extractPlayFeatures(play, hand, lastPlay, role, memory, state) {
+        let playType = getCardType(play);
+        let newHand = hand.filter(c => !play.includes(c));
+        let handFeatures = extractHandFeatures(newHand);
+        let playPower = getPlayPower(play);
+        let isBomb = [CardType.BOMB, CardType.ROCKET].includes(playType.type);
+        let needBeat = (lastPlay && state.lastPlayerId !== state.currentPlayer);
+        return {
+            playLength: play.length, playPower, isBomb: isBomb ? 1 : 0, isRocket: (playType.type === CardType.ROCKET) ? 1 : 0,
+            remainTotal: newHand.length, remainSingle: handFeatures.single, remainPair: handFeatures.pair,
+            remainTriple: handFeatures.triple, remainBomb: handFeatures.bomb, remainMaxStraight: handFeatures.maxStraightLen,
+            remainBigCards: handFeatures.bigCards, hasRocket: handFeatures.hasRocket,
+            isLandlord: (role === 'landlord') ? 1 : 0, isFarmer: (role === 'farmer') ? 1 : 0,
+            opponentHandCount: state.lastPlayerId !== -1 ? state.players[state.lastPlayerId].length : 0,
+            partnerHandCount: (role === 'farmer') ? (state.players[role === 'farmer' ? (state.landlord === 1 ? 2 : 1) : 0]?.length || 0) : 0,
+            outsideBombCount: memory.getOutsideBombCount(), isCritical: (newHand.length <= 3) ? 1 : 0,
+            needBeat: needBeat ? 1 : 0, lastPlayType: lastPlay ? lastPlay.type : 'none', lastPlayPower: lastPlay ? lastPlay.value : 0
+        };
+    }
+
+    const WEIGHTS = { playPower:0.8, isBomb:-30, isRocket:-50, remainTotal:-2, remainSingle:1, remainPair:2, remainTriple:4, remainBomb:15, remainMaxStraight:3, remainBigCards:1, hasRocket:10, isLandlord:5, isFarmer:0, opponentHandCount:-1, partnerHandCount:2, outsideBombCount:-5, isCritical:20, needBeat:10 };
+    function scorePlay(features) {
+        let score = 0;
+        for (let key in WEIGHTS) if (features[key] !== undefined) score += features[key] * WEIGHTS[key];
+        if (features.isFarmer && features.partnerHandCount <= 2 && features.playLength <= 2) score += 40;
+        if (features.isFarmer && features.needBeat && features.lastPlayType === 'single' && features.lastPlayPower <= 10 && features.playPower > features.lastPlayPower && features.playPower - features.lastPlayPower <= 3) score += 30;
+        if (features.needBeat && features.lastPlayPower >= 12 && features.remainTotal > 3 && features.playPower > features.lastPlayPower && features.playPower < 14) score -= 40;
+        if (features.isLandlord && !features.needBeat && features.playLength === 1 && features.playPower <= 6) score += 20;
+        return score;
+    }
+
     function simulateOpponentResponse(play, hand, state, role, memory) {
         let newHand = hand.filter(c => !play.includes(c));
         let newState = JSON.parse(JSON.stringify(state));
@@ -606,15 +554,11 @@
         let opponentHand = newState.players[nextPlayer];
         let opponentPlays = getAllValidPlays(opponentHand, getCardType(play));
         if (opponentPlays.length === 0) {
-            // 对手不出，轮到下家
             let thirdPlayer = (nextPlayer + 1) % 3;
             let thirdHand = newState.players[thirdPlayer];
             let thirdPlays = getAllValidPlays(thirdHand, getCardType(play));
-            if (thirdPlays.length === 0) {
-                // 全过，自己获得出牌权
-                return 30;
-            } else {
-                // 下家会出最小的能压的牌
+            if (thirdPlays.length === 0) return 30;
+            else {
                 let thirdPlay = thirdPlays[0];
                 let afterHand = thirdHand.filter(c => !thirdPlay.includes(c));
                 return evaluateHandStrength(afterHand, memory, role === 'landlord');
@@ -626,7 +570,7 @@
         }
     }
 
-    // ======================== 大师级AI（DouZero风格） ========================
+    // ======================== 大师级AI（修复版） ========================
     class MasterAI {
         constructor(id, difficulty, memory) { this.id = id; this.difficulty = difficulty; this.memory = memory; }
         think(phase, state) {
@@ -657,30 +601,22 @@
             let beatable = allPlays.filter(p => canBeat(getCardType(p), lastPlay));
             if (beatable.length === 0) return [];
             
-            // 对每个可出牌计算特征得分并加上前瞻模拟分
             let scored = beatable.map(play => {
                 let features = extractPlayFeatures(play, hand, lastPlay, role, this.memory, state);
                 let baseScore = scorePlay(features);
-                // 前瞻模拟（仅在大师难度启用）
                 let simScore = 0;
-                if (this.difficulty === 'hard') {
-                    simScore = simulateOpponentResponse(play, hand, state, role, this.memory);
-                }
-                return { play: play, score: baseScore + simScore * 0.3 };
+                if (this.difficulty === 'hard') simScore = simulateOpponentResponse(play, hand, state, role, this.memory);
+                return { play, score: baseScore + simScore * 0.3 };
             });
             scored.sort((a,b)=>b.score - a.score);
             
-            // 迷惑策略：非关键局面20%概率选择次优
             let isCritical = (hand.length <= 3) || (this.memory.getMaxOutside(hand) <= 12 && hand.length <= 5);
-            if (!isCritical && Math.random() < 0.2 && scored.length > 1) {
-                return scored[1].play;
-            }
+            if (!isCritical && Math.random() < 0.2 && scored.length > 1) return scored[1].play;
             return scored[0].play;
         }
-        
         selectLead(plays, role, hand, state) {
+            if (plays.length === 0) return [];
             if (role === 'landlord') {
-                // 地主首出：优先小单，其次小对，再短顺
                 let smallSingle = plays.find(p => p.length === 1 && p[0].value <= 6);
                 if (smallSingle) return smallSingle;
                 let smallPair = plays.find(p => p.length === 2 && getCardType(p).value <= 6);
@@ -698,13 +634,13 @@
         }
     }
 
-    // ======================== 游戏状态 ========================
+    // ======================== 游戏状态（修复版） ========================
     const GameState = {
         phase: 'idle', deck: [], players: [[],[],[]], lordCards: [], landlord: -1, currentPlayer: 0,
         lastPlay: null, lastPlayerId: -1, currentScore: 0, selectedCards: new Set(), bombCount: 0,
         difficulty: 'hard', coins: 1000, stats: { total: 0, win: 0 }, passCount: 0,
         firstPlayMade: false, lordPlayCount: 0, farmerPlayed: false,
-        cardMemory: null, aiList: [], history: []
+        cardMemory: null, aiList: [], history: [], processing: false
     };
     function addHistory(msg) { GameState.history.unshift(msg); if (GameState.history.length > 5) GameState.history.pop(); document.getElementById('historyLog').innerHTML = '📜 ' + GameState.history.join(' · '); }
 
@@ -719,9 +655,7 @@
 
     function initGame() {
         initAudio();
-        if (voiceEnabled && window.speechSynthesis) {
-            if (!selectedVoice) selectedVoice = getChineseVoice();
-        }
+        if (voiceEnabled && window.speechSynthesis) { if (!selectedVoice) selectedVoice = getChineseVoice(); }
         document.getElementById('startScreen').classList.add('hidden');
         GameState.stats.total++;
         updateStats();
@@ -737,11 +671,25 @@
         GameState.bombCount = 0;
         GameState.difficulty = document.getElementById('difficulty').value;
         GameState.firstPlayMade = false; GameState.lordPlayCount = 0; GameState.farmerPlayed = false;
+        GameState.passCount = 0;
+        GameState.processing = false;
         GameState.history = [];
         addHistory('游戏开始');
         GameState.cardMemory = new MasterMemory();
         GameState.aiList = [null, new MasterAI(1, GameState.difficulty, GameState.cardMemory), new MasterAI(2, GameState.difficulty, GameState.cardMemory)];
         dealCards();
+    }
+
+    function dealCards() {
+        let count = 0, interval = setInterval(()=>{
+            if (count < 51) {
+                let idx = count % 3, card = GameState.deck.pop();
+                GameState.players[idx].push(card);
+                if (idx === 0 && count % 3 === 0) playSound('deal');
+                if (idx === 0) renderPlayerHand(); else updateCount(idx);
+                count++;
+            } else { clearInterval(interval); GameState.lordCards = GameState.deck.slice(0,3); setTimeout(startCall, 500); }
+        }, 30);
     }
 
     let callTimeout = null;
@@ -789,11 +737,14 @@
         GameState.phase = 'playing';
         GameState.currentPlayer = GameState.landlord;
         GameState.firstPlayMade = false; GameState.lordPlayCount = 0; GameState.farmerPlayed = false;
+        GameState.passCount = 0;
+        GameState.processing = false;
         setTimeout(processPlay, 600);
     }
     function getAIDelay() { if (aiSpeed === 'fast') return 300; if (aiSpeed === 'slow') return 1200; return 700; }
     function processPlay() {
         if (GameState.phase !== 'playing') return;
+        if (GameState.processing) return;
         let id = GameState.currentPlayer;
         if (GameState.lastPlayerId !== -1 && GameState.players[GameState.lastPlayerId].length === 0) { endGame(GameState.lastPlayerId); return; }
         if (GameState.passCount === 2) {
@@ -808,7 +759,8 @@
             if (passBtn) passBtn.disabled = (!GameState.lastPlay || GameState.lastPlayerId === 0);
         } else {
             if (playBtn) playBtn.disabled = true; if (passBtn) passBtn.disabled = true;
-            let timeoutId = setTimeout(() => { showToast((id===1?'农民A':'农民B')+' 思考超时'); playCardsAI(id, []); }, 2000);
+            GameState.processing = true;
+            let timeoutId = setTimeout(() => { showToast((id===1?'农民A':'农民B')+' 思考超时'); playCardsAI(id, []); GameState.processing = false; }, 2000);
             setTimeout(() => {
                 let ai = GameState.aiList[id];
                 let cards = ai.think('play', GameState);
@@ -819,6 +771,7 @@
                     if (!isValid || !typeValid) cards = [];
                 }
                 playCardsAI(id, cards || []);
+                GameState.processing = false;
             }, getAIDelay());
         }
     }
@@ -993,17 +946,6 @@
     function changeDifficulty(val) { GameState.difficulty = val; if(GameState.aiList[1]) { GameState.aiList[1].difficulty = val; GameState.aiList[2].difficulty = val; } }
     function updateStats() { document.getElementById('coins').textContent = GameState.coins; }
     function updateCount(idx) { document.getElementById(idx===1?'leftCount':'rightCount').textContent = GameState.players[idx].length; }
-    function dealCards() {
-        let count = 0, interval = setInterval(()=>{
-            if (count < 51) {
-                let idx = count % 3, card = GameState.deck.pop();
-                GameState.players[idx].push(card);
-                if (idx === 0 && count % 3 === 0) playSound('deal');
-                if (idx === 0) renderPlayerHand(); else updateCount(idx);
-                count++;
-            } else { clearInterval(interval); GameState.lordCards = GameState.deck.slice(0,3); setTimeout(startCall, 500); }
-        }, 30);
-    }
     window.addEventListener('resize', ()=>{ if(GameState.players[0].length) renderPlayerHand(); });
     window.onload = () => {
         loadHistory();
@@ -1014,15 +956,9 @@
             GameState.stats = data.stats || {total:0,win:0};
             updateStats();
         }
-        if (window.speechSynthesis) {
-            window.speechSynthesis.getVoices();
-            selectedVoice = getChineseVoice();
-        }
+        if (window.speechSynthesis) { window.speechSynthesis.getVoices(); selectedVoice = getChineseVoice(); }
     };
-    window.onbeforeunload = () => {
-        localStorage.setItem('landlord_stats', JSON.stringify({ coins: GameState.coins, stats: GameState.stats }));
-        saveHistory();
-    };
+    window.onbeforeunload = () => { localStorage.setItem('landlord_stats', JSON.stringify({ coins: GameState.coins, stats: GameState.stats })); saveHistory(); };
 </script>
 <script>
   if ('serviceWorker' in navigator) {
@@ -1032,6 +968,6 @@
       console.error('Service Worker 注册失败:', err);
     });
   }
-</script>   
+</script> 
 </body>
 </html>
