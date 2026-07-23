@@ -4,84 +4,28 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <title>像素斗地主 · 稳定修复版</title>
+    <title>像素斗地主</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <link rel="manifest" href="./manifest.json">
     <style>
-        * {
-            image-rendering: pixelated;
-            font-family: 'Press Start 2P', cursive;
-            -webkit-tap-highlight-color: transparent;
-            touch-action: manipulation;
-            box-sizing: border-box;
-        }
-        body {
-            background-color: #1a1a2e;
-            background-image: radial-gradient(circle at 50% 50%, #16213e 0%, #0f0f23 100%);
-            overflow: hidden;
-            position: fixed;
-            width: 100%;
-            height: 100%;
-            overscroll-behavior: none;
-        }
-        .game-container {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            overflow: hidden;
-        }
-        .pixel-border {
-            box-shadow: -3px 0 0 0 #000, 3px 0 0 0 #000, 0 -3px 0 0 #000, 0 3px 0 0 #000, inset -3px -3px 0 0 rgba(0,0,0,0.2), inset 3px 3px 0 0 rgba(255,255,255,0.2);
-        }
-        .card {
-            background: #fff;
-            border: 2px solid #000;
-            border-radius: 4px;
-            position: relative;
-            cursor: pointer;
-            transition: all 0.15s ease;
-            box-shadow: 2px 2px 0 rgba(0,0,0,0.3);
-            flex-shrink: 0;
-            user-select: none;
-        }
+        * { image-rendering: pixelated; font-family: 'Press Start 2P', cursive; -webkit-tap-highlight-color: transparent; touch-action: manipulation; box-sizing: border-box; }
+        body { background-color: #1a1a2e; background-image: radial-gradient(circle at 50% 50%, #16213e 0%, #0f0f23 100%); overflow: hidden; position: fixed; width: 100%; height: 100%; overscroll-behavior: none; }
+        .game-container { position: fixed; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden; }
+        .pixel-border { box-shadow: -3px 0 0 0 #000, 3px 0 0 0 #000, 0 -3px 0 0 #000, 0 3px 0 0 #000, inset -3px -3px 0 0 rgba(0,0,0,0.2), inset 3px 3px 0 0 rgba(255,255,255,0.2); }
+        .card { background: #fff; border: 2px solid #000; border-radius: 4px; position: relative; cursor: pointer; transition: all 0.15s ease; box-shadow: 2px 2px 0 rgba(0,0,0,0.3); flex-shrink: 0; user-select: none; }
         @media (max-width: 380px) { .card { width: 38px; height: 53px; font-size: 9px; margin-left: -16px; } }
         @media (min-width: 381px) and (max-width: 768px) { .card { width: 44px; height: 61px; font-size: 11px; margin-left: -18px; } }
         @media (min-width: 769px) { .card { width: 60px; height: 84px; font-size: 14px; margin-left: -20px; } }
         .card:first-child { margin-left: 0 !important; }
         .card:active { transform: scale(0.95); }
-        .card.selected {
-            transform: translateY(-12px) scale(1.05);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.4), 0 0 10px #ffd700;
-            z-index: 20;
-            border-color: #ffd700;
-            background: #fffacd;
-        }
-        .card.dragging {
-            opacity: 0.6;
-            z-index: 100;
-        }
+        .card.selected { transform: translateY(-12px) scale(1.05); box-shadow: 0 4px 8px rgba(0,0,0,0.4), 0 0 10px #ffd700; z-index: 20; border-color: #ffd700; background: #fffacd; }
+        .card.dragging { opacity: 0.6; z-index: 100; }
         .card-back { background: #2a2a4a; background-image: repeating-linear-gradient(45deg, transparent, transparent 5px, #3a3a5a 5px, #3a3a5a 10px); }
         .suit-red { color: #e74c3c; }
         .suit-black { color: #2c3e50; }
-        .pixel-btn {
-            background: #4a90e2;
-            border: 3px solid #000;
-            padding: 10px 16px;
-            font-size: 11px;
-            cursor: pointer;
-            box-shadow: 0 4px 0 #2c5aa0, 0 6px 8px rgba(0,0,0,0.3);
-            transition: all 0.1s;
-            text-transform: uppercase;
-            min-width: 64px;
-            min-height: 44px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            touch-action: manipulation;
-        }
+        .pixel-btn { background: #4a90e2; border: 3px solid #000; padding: 10px 16px; font-size: 11px; cursor: pointer; box-shadow: 0 4px 0 #2c5aa0, 0 6px 8px rgba(0,0,0,0.3); transition: all 0.1s; text-transform: uppercase; min-width: 64px; min-height: 44px; display: flex; align-items: center; justify-content: center; touch-action: manipulation; }
         .pixel-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #2c5aa0, 0 3px 4px rgba(0,0,0,0.3); }
         .pixel-btn:disabled { background: #666; box-shadow: 0 4px 0 #444; opacity: 0.6; }
         .retro-text { text-shadow: 2px 2px 0 #000; }
@@ -98,7 +42,7 @@
         .player-area { position: fixed; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.8) 60%, transparent 100%); padding-bottom: env(safe-area-inset-bottom, 10px); z-index: 40; padding-top: 10px; }
         .opponent-top { position: fixed; top: 60px; display: flex; flex-direction: column; align-items: center; gap: 5px; z-index: 30; }
         .opponent-left { left: 10px; } .opponent-right { right: 10px; }
-        .opponent-avatar { width: 48px; height: 48px; border-radius: 50%; border: 3px solid #fff; display: flex; align-items: center; justify-content: center; font-size: 24px; position: relative; box-shadow: 0 4px 8px rgba(0,0,0,0.5); }
+        .opponent-avatar { width: 48px; height: 48px; border-radius: 50%; border: 3px solid #fff; display: flex; align-items: center; justify-content: center; font-size: 24px; position: relative; background: #2c3e50; }
         .card-count { position: absolute; top: -5px; right: -5px; background: #e74c3c; color: white; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #fff; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; }
         .play-area { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 90%; max-width: 400px; height: 120px; display: flex; align-items: center; justify-content: center; z-index: 20; }
         .toast { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); color: #fff; padding: 12px 24px; border: 3px solid #fff; border-radius: 8px; font-size: 12px; z-index: 100; pointer-events: none; white-space: nowrap; }
@@ -112,36 +56,20 @@
         .safe-area-top { padding-top: env(safe-area-inset-top); }
         .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom); }
         .voice-btn, .stats-btn { background: rgba(0,0,0,0.5); border-radius: 20px; padding: 4px 8px; font-size: 8px; cursor: pointer; margin-left: 5px; }
-        .modal {
-            position: fixed;
-            inset: 0;
-            background: rgba(0,0,0,0.95);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 1000;
-            overflow-y: auto;
-            -webkit-overflow-scrolling: touch;
-        }
-        .modal-content {
-            background: #2a2a3e;
-            border: 4px solid #fff;
-            border-radius: 8px;
-            width: 90%;
-            max-width: 400px;
-            margin: 20px auto;
-            padding: 16px;
-        }
-        .history-item {
-            background: #1e1e2e;
-            margin: 8px 0;
-            padding: 8px;
-            border-left: 4px solid;
-            font-size: 8px;
-            word-break: break-word;
-        }
+        .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.95); display: flex; align-items: center; justify-content: center; z-index: 1000; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+        .modal-content { background: #2a2a3e; border: 4px solid #fff; border-radius: 8px; width: 90%; max-width: 400px; margin: 20px auto; padding: 16px; }
+        .history-item { background: #1e1e2e; margin: 8px 0; padding: 8px; border-left: 4px solid; font-size: 8px; word-break: break-word; }
         .history-win { border-left-color: #4ade80; }
         .history-lose { border-left-color: #f87171; }
+        .connect-panel { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); border: 3px solid #fff; border-radius: 16px; padding: 20px; z-index: 200; width: 90%; max-width: 400px; text-align: center; }
+        .connect-panel input { background: #1e1e2e; border: 2px solid #fff; color: #fff; padding: 8px; font-size: 10px; border-radius: 4px; width: 100%; min-height: 40px; text-align: center; margin: 8px 0; }
+        .timer-bar { width: 100%; height: 4px; background: #555; margin-top: 4px; border-radius: 2px; overflow: hidden; }
+        .timer-fill { width: 100%; height: 100%; background: #facc15; transition: width 0.1s linear; }
+        .preview-panel { position: fixed; bottom: 180px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.85); backdrop-filter: blur(8px); border-radius: 20px; padding: 4px 12px; font-size: 10px; z-index: 50; pointer-events: none; white-space: nowrap; }
+        .input-group { margin: 8px 0; }
+        .peer-id { background: #1e1e2e; border: 1px solid #555; border-radius: 4px; padding: 8px; font-size: 10px; word-break: break-all; margin: 8px 0; }
+        .badge { background: rgba(0,0,0,0.6); border-radius: 12px; padding: 2px 8px; font-size: 9px; }
+        .status-online { color: #4ade80; }
     </style>
 </head>
 <body class="text-white safe-area-top safe-area-bottom">
@@ -150,8 +78,9 @@
     <div class="status-bar fixed top-0 left-0 right-0 flex items-center justify-between z-50 safe-area-top px-3">
         <div class="flex items-center gap-2">
             <div class="text-yellow-400 text-[10px] retro-text">💰<span id="coins">1000</span></div>
+            <div id="connStatus" class="hidden text-[8px] bg-green-700 px-2 py-1 rounded">未连接</div>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2" id="topRightControls">
             <select id="difficulty" class="difficulty-select" onchange="changeDifficulty(this.value)"><option value="easy">简单</option><option value="medium">中等</option><option value="hard" selected>大师级</option></select>
             <select id="aiSpeed" class="speed-select" onchange="changeSpeed(this.value)"><option value="fast">快速</option><option value="normal" selected>中等</option><option value="slow">慢速</option></select>
             <div id="voiceToggle" class="voice-btn pixel-btn" style="background:#333; padding:4px 8px;" onclick="toggleVoice()">🔊 开</div>
@@ -159,19 +88,46 @@
         </div>
     </div>
     <div class="relative w-full h-full pt-12 pb-36" id="gameArea">
-        <div class="opponent-top opponent-left"><div class="opponent-avatar bg-blue-600 pixel-border">🧑‍🌾<div class="card-count" id="leftCount">0</div></div><div class="text-[10px] bg-black/50 px-2 py-1 rounded">农民A</div><div class="text-[10px] text-yellow-400 h-4" id="leftStatus"></div></div>
-        <div class="opponent-top opponent-right"><div class="opponent-avatar bg-blue-600 pixel-border">👩‍🌾<div class="card-count" id="rightCount">0</div></div><div class="text-[10px] bg-black/50 px-2 py-1 rounded">农民B</div><div class="text-[10px] text-yellow-400 h-4" id="rightStatus"></div></div>
+        <div class="opponent-top opponent-left"><div class="opponent-avatar bg-blue-600 pixel-border">🧑‍🌾<div class="card-count" id="leftCount">0</div></div><div class="text-[10px] bg-black/50 px-2 py-1 rounded">农民A</div><div class="text-[10px] text-yellow-400 h-4" id="leftStatus"></div><div class="timer-bar w-16"><div id="leftTimerFill" class="timer-fill" style="width:0"></div></div></div>
+        <div class="opponent-top opponent-right"><div class="opponent-avatar bg-blue-600 pixel-border">👩‍🌾<div class="card-count" id="rightCount">0</div></div><div class="text-[10px] bg-black/50 px-2 py-1 rounded">农民B</div><div class="text-[10px] text-yellow-400 h-4" id="rightStatus"></div><div class="timer-bar w-16"><div id="rightTimerFill" class="timer-fill" style="width:0"></div></div></div>
         <div class="play-area"><div id="playTable" class="flex flex-col items-center gap-2 w-full"><div class="text-[10px] text-yellow-400 mb-1" id="scoreDisplay">底分: 1</div><div class="flex gap-1 justify-center min-h-[50px] items-center bg-black/20 rounded-lg p-2 w-full" id="playArea"><span class="text-gray-500 text-[10px]">等待出牌...</span></div><div class="text-[10px] text-white/70" id="lastPlayer"></div></div></div>
         <div class="history-log" id="historyLog">📜 出牌记录</div>
         <div class="player-area safe-area-bottom">
             <div class="text-yellow-400 text-[11px] retro-text text-center mb-1 h-5" id="playerStatus">点击选牌，长按拖动排序</div>
-            <div class="quick-actions"><div class="icon-btn" onclick="showHint()" title="提示">💡</div><div class="icon-btn" onclick="resetSelection()" title="重置">🔄</div><div class="icon-btn" onclick="toggleRules()" title="规则">📋</div><div class="icon-btn" onclick="toggleSound()" title="音效">🔊</div></div>
+            <div class="quick-actions">
+                <div class="icon-btn" onclick="showHint()" title="提示">💡</div>
+                <div class="icon-btn" onclick="resetSelection()" title="重置">🔄</div>
+                <div class="icon-btn" onclick="toggleRules()" title="规则">📋</div>
+                <div class="icon-btn" onclick="toggleSound()" title="音效">🔊</div>
+                <div class="icon-btn hidden" id="emojiBtn" onclick="sendEmoji('😀')" title="表情">😀</div>
+            </div>
             <div class="hand-wrapper" id="handContainer"><div id="playerHand"></div></div>
-            <div class="flex justify-center gap-2 p-2" id="controls"><button id="callBtn" class="pixel-btn bg-green-500 text-[10px]" onclick="callScore(0)">不叫</button><button id="oneBtn" class="pixel-btn bg-blue-500 text-[10px]" onclick="callScore(1)">1分</button><button id="twoBtn" class="pixel-btn bg-yellow-500 text-[10px]" onclick="callScore(2)">2分</button><button id="threeBtn" class="pixel-btn bg-red-500 text-[10px]" onclick="callScore(3)">3分</button></div>
+            <div class="flex justify-center gap-2 p-2" id="controls">
+                <button id="callBtn" class="pixel-btn bg-green-500 text-[10px]" onclick="callScore(0)">不叫</button>
+                <button id="oneBtn" class="pixel-btn bg-blue-500 text-[10px]" onclick="callScore(1)">1分</button>
+                <button id="twoBtn" class="pixel-btn bg-yellow-500 text-[10px]" onclick="callScore(2)">2分</button>
+                <button id="threeBtn" class="pixel-btn bg-red-500 text-[10px]" onclick="callScore(3)">3分</button>
+            </div>
+            <div class="preview-panel" id="previewPanel"></div>
+            <div class="timer-bar w-full max-w-[200px] mx-auto mt-1" id="playerTimerBar" style="display:none"><div id="playerTimerFill" class="timer-fill" style="width:0"></div></div>
         </div>
-        <div id="startScreen" class="fixed inset-0 bg-black/95 flex flex-col items-center justify-center z-50 safe-area-top safe-area-bottom"><h1 class="text-2xl text-yellow-400 retro-text mb-6 ani-bounce text-center px-4">像素斗地主</h1><div class="bg-gray-800/90 p-6 pixel-border mx-4 max-w-[90%] text-center backdrop-blur"><p class="text-[10px] leading-6 mb-6 text-gray-300">大师级AI · 记牌推理 · 协作迷惑<br>动态调控 · 随机应变</p><button onclick="initGame()" class="pixel-btn start-btn bg-green-500 block w-full mb-3">开始游戏</button></div></div>
-        <div id="rulesModal" class="hidden fixed inset-0 bg-black/95 flex items-center justify-center z-50 p-4"><div class="bg-gray-800 p-4 pixel-border w-full max-w-sm max-h-[80vh] overflow-y-auto"><h2 class="text-lg text-yellow-400 mb-4 retro-text text-center">游戏规则</h2><div class="text-[10px] leading-6 text-gray-300 space-y-2"><div class="bg-black/30 p-2 rounded mb-3"><p class="text-yellow-400 mb-1">✨ 大师级AI ✨</p><p>• 全局记牌，剩余牌推断</p><p>• 地主控盘，农民协作顶牌/送牌</p><p>• 前瞻模拟 + 迷惑策略</p><p>• 炸弹忍让，保留至决胜</p></div><p>• 发牌：每人17张，留3张底牌</p><p>• 叫分：1-3分或不叫，高分当地主</p><p>• 牌型：单张、对子、三带一/对、顺子(5+)、连对(3+)、四带二、炸弹、王炸</p><p>• 春天/反春天：底分×2</p></div><button onclick="toggleRules()" class="pixel-btn bg-red-500 mt-4 w-full text-[12px]">关闭</button></div></div>
-        <div id="gameOverScreen" class="hidden fixed inset-0 bg-black/95 flex flex-col items-center justify-center z-50 p-4"><h2 id="resultTitle" class="text-2xl retro-text mb-4 text-center"></h2><div id="resultContent" class="text-center mb-6 text-[12px]"></div><button onclick="resetGame()" class="pixel-btn bg-green-500 w-full max-w-[200px]">再来一局</button></div>
+        <div id="startScreen" class="fixed inset-0 bg-black/95 flex flex-col items-center justify-center z-50 safe-area-top safe-area-bottom">
+            <h1 class="text-2xl text-yellow-400 retro-text mb-6 ani-bounce text-center px-4">像素斗地主</h1>
+            <div class="bg-gray-800/90 p-6 pixel-border mx-4 max-w-[90%] text-center backdrop-blur">
+                <p class="text-[10px] leading-6 mb-6 text-gray-300">选择模式开始游戏</p>
+                <button onclick="startSingleMode()" class="pixel-btn start-btn bg-green-500 block w-full mb-3">🎮 单机模式</button>
+                <button onclick="showOnlinePanel()" class="pixel-btn start-btn bg-blue-500 block w-full">🌐 联机模式</button>
+            </div>
+        </div>
+        <div id="connectPanel" class="connect-panel hidden">
+            <h2 class="text-yellow-400 text-sm mb-2">🃏 斗地主联机</h2>
+            <div class="text-[10px] text-gray-400 mb-2">房主创建房间，其余两人输入房主房间码加入</div>
+            <div class="peer-id">🔑 房间码：<span id="myPeerId">生成中...</span><button onclick="copyPeerId()" class="ml-2 text-[8px] pixel-btn py-0 px-2 inline-flex">复制</button></div>
+            <div class="input-group"><input type="text" id="targetPeerId" placeholder="输入对方房间码"><button onclick="joinGame()" class="pixel-btn bg-green-500 w-full mt-1">加入房间</button></div>
+            <button onclick="hideOnlinePanel()" class="pixel-btn bg-gray-600 w-full mt-2 text-[10px]">返回</button>
+        </div>
+        <div id="rulesModal" class="hidden fixed inset-0 bg-black/95 flex items-center justify-center z-50 p-4"><div class="bg-gray-800 p-4 pixel-border w-full max-w-sm max-h-[80vh] overflow-y-auto"><h2 class="text-lg text-yellow-400 mb-4 retro-text text-center">游戏规则</h2><div class="text-[10px] leading-6 text-gray-300 space-y-2"><p>• 发牌：每人17张，留3张底牌</p><p>• 叫分：1-3分或不叫，高分当地主</p><p>• 牌型：单张、对子、三带一/对、顺子(5+)、连对(3+)、四带二、炸弹、王炸</p><p>• 春天/反春天：底分×2</p></div><button onclick="toggleRules()" class="pixel-btn bg-red-500 mt-4 w-full text-[12px]">关闭</button></div></div>
+        <div id="gameOverScreen" class="hidden fixed inset-0 bg-black/95 flex flex-col items-center justify-center z-50 p-4"><h2 id="resultTitle" class="text-2xl retro-text mb-4 text-center"></h2><div id="resultContent" class="text-center mb-6 text-[12px]"></div><button onclick="resetGame()" class="pixel-btn bg-green-500 w-full max-w-[200px]">再来一局</button><button onclick="backToMenu()" class="pixel-btn bg-gray-500 w-full max-w-[200px] mt-2">返回菜单</button></div>
         <div id="statsModal" class="modal hidden">
             <div class="modal-content">
                 <h2 class="text-lg text-yellow-400 mb-4 retro-text text-center">📊 历史战绩</h2>
@@ -190,15 +146,21 @@
         if (e.target.closest('.modal')) return;
         e.preventDefault();
     }, { passive: false });
-    
+
     let audioEnabled = true;
     let aiSpeed = 'normal';
     let voiceEnabled = true;
     let selectedVoice = null;
-    
+    let callTimeout = null;
+    let timerInterval = null;
+    let remainingSeconds = 0;
+    let matchHistory = [];
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    let audioCtx = null;
+
     function changeSpeed(val) { aiSpeed = val; }
     function toggleSound() { audioEnabled = !audioEnabled; showToast(audioEnabled ? '音效开' : '音效关'); }
-    
+
     function getChineseVoice() {
         if (!window.speechSynthesis) return null;
         const voices = window.speechSynthesis.getVoices();
@@ -210,7 +172,7 @@
         }
         return voices.find(v => v.lang.includes('zh')) || null;
     }
-    
+
     function speakNow(text) {
         if (!voiceEnabled) return false;
         if (!window.speechSynthesis) return false;
@@ -223,14 +185,14 @@
         window.speechSynthesis.speak(utterance);
         return true;
     }
-    
-    function toggleVoice() { 
-        voiceEnabled = !voiceEnabled; 
+
+    function toggleVoice() {
+        voiceEnabled = !voiceEnabled;
         document.getElementById('voiceToggle').innerHTML = voiceEnabled ? '🔊 开' : '🔇 关';
         showToast(voiceEnabled ? '语音播报开' : '语音播报关');
         if (!voiceEnabled) window.speechSynthesis && window.speechSynthesis.cancel();
     }
-    
+
     function speakPlay(cards) {
         if (!voiceEnabled) return;
         if (!cards || cards.length === 0) return;
@@ -238,7 +200,10 @@
         if (!type) return;
         let text = "";
         const valueToChinese = (v) => {
-            if (v <= 10) return (v+3).toString();
+            if (v <= 7) return (v+3).toString();
+            if (v === 8) return "J";
+            if (v === 9) return "Q";
+            if (v === 10) return "K";
             if (v === 11) return "A";
             if (v === 12) return "2";
             if (v === 13) return "小王";
@@ -261,27 +226,26 @@
         }
         if (text) speakNow(text);
     }
-    
+
     // ========== 战绩存储 ==========
-    let matchHistory = [];
-    function loadHistory() { 
-        let saved = localStorage.getItem('landlord_stats'); 
-        if (saved) { 
-            try { 
+    function loadHistory() {
+        let saved = localStorage.getItem('landlord_stats');
+        if (saved) {
+            try {
                 const data = JSON.parse(saved);
                 matchHistory = data.history || [];
                 GameState.coins = data.coins || 1000;
                 GameState.stats = data.stats || {total:0,win:0};
                 updateStats();
-            } catch(e){ matchHistory = []; } 
-        } else { matchHistory = []; } 
+            } catch(e){ matchHistory = []; }
+        } else { matchHistory = []; }
     }
-    function saveHistory() { 
-        localStorage.setItem('landlord_stats', JSON.stringify({ 
-            coins: GameState.coins, 
-            stats: GameState.stats, 
-            history: matchHistory.slice(0, 50) 
-        })); 
+    function saveHistory() {
+        localStorage.setItem('landlord_stats', JSON.stringify({
+            coins: GameState.coins,
+            stats: GameState.stats,
+            history: matchHistory.slice(0, 50)
+        }));
     }
     function addMatchRecord(result, multiplier, delta, coinsAfter) {
         let now = new Date();
@@ -308,21 +272,19 @@
         }
         modal.classList.remove('hidden');
     }
-    function closeStatsModal() { 
+    function closeStatsModal() {
         const modal = document.getElementById('statsModal');
         if (modal) modal.classList.add('hidden');
     }
-    function clearHistory() { 
-        if (confirm('确定清空所有历史战绩吗？')) { 
-            matchHistory = []; 
-            saveHistory(); 
-            showStatsModal(); 
-            showToast('历史记录已清空'); 
-        } 
+    function clearHistory() {
+        if (confirm('确定清空所有历史战绩吗？')) {
+            matchHistory = [];
+            saveHistory();
+            showStatsModal();
+            showToast('历史记录已清空');
+        }
     }
-    
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    let audioCtx = null;
+
     function initAudio() { if (!audioCtx && audioEnabled) { audioCtx = new AudioContext(); if (audioCtx.state === 'suspended') audioCtx.resume(); } }
     function playSound(type) {
         if (!audioEnabled || !audioCtx) return;
@@ -377,13 +339,14 @@
         return current.value > last.value;
     }
 
-    // ======================== 大师级记牌器 ========================
+    // ======================== 大师级记牌器 (E) ========================
     class MasterMemory {
         constructor() {
             this.remain = new Array(15).fill(4);
             this.remain[13] = 2; this.remain[14] = 2;
             this.seen = new Set();
             this.history = [];
+            this.playerHistory = [[], [], []];
         }
         record(cards) {
             cards.forEach(c => {
@@ -393,6 +356,10 @@
                 }
             });
             this.history.push(cards.map(c=>c.id));
+        }
+        recordPlayerPlay(playerId, cards) {
+            this.playerHistory[playerId].push(cards.map(c=>c.id));
+            this.record(cards);
         }
         getRemain(v) { return this.remain[v] || 0; }
         getMaxOutside(myHand) {
@@ -413,6 +380,23 @@
             let cnt = 0;
             for (let v=3; v<=12; v++) if (this.getRemain(v) >= 4) cnt++;
             return cnt;
+        }
+        getOutsideRocketPossible() {
+            return this.getRemain(13) >= 1 && this.getRemain(14) >= 1;
+        }
+        getRemainingCounts() { return [...this.remain]; }
+        getProbOpponentHas(value, minCount, opponentId, myHand) {
+            let outside = this.getRemain(value);
+            if (outside === 0) return 0;
+            let myCount = myHand.filter(c=>c.value===value).length;
+            let totalOutside = outside - myCount;
+            if (totalOutside <= 0) return 0;
+            let oppTotal = opponentId >= 0 ? 17 - (this.playerHistory[opponentId]?.length || 0) : 10;
+            if (oppTotal <= 0) return 0.5;
+            return Math.min(1, totalOutside / (totalOutside + 1)) * Math.min(1, oppTotal / 10);
+        }
+        getOpponentHandSize(playerId) {
+            return 17 - (this.playerHistory[playerId]?.length || 0);
         }
     }
 
@@ -439,26 +423,29 @@
         return base;
     }
 
-    function evaluateHandStrength(hand, memory, isLandlord) {
+    function evaluateHandStrength(hand, memory, isLandlord, callPosition) {
         let score = 0, values = hand.map(c=>c.value), cnt = countValues(values);
         for (let v in cnt) {
-            if (cnt[v] === 4) score += 30;
-            else if (cnt[v] === 3) score += 8;
+            if (cnt[v] === 4) score += 35;
+            else if (cnt[v] === 3) score += 10;
             else if (cnt[v] === 2) score += 3;
         }
-        if (hand.some(c=>c.value===14) && hand.some(c=>c.value===13)) score += 40;
-        else { if (hand.some(c=>c.value===14)) score += 15; if (hand.some(c=>c.value===13)) score += 8; }
-        score += (cnt[12]||0)*4 + (cnt[11]||0)*5 + (cnt[10]||0)*7;
+        if (hand.some(c=>c.value===14) && hand.some(c=>c.value===13)) score += 50;
+        else { if (hand.some(c=>c.value===14)) score += 18; if (hand.some(c=>c.value===13)) score += 10; }
+        score += (cnt[12]||0)*6 + (cnt[11]||0)*7 + (cnt[10]||0)*9;
         let sortedUnique = [...new Set(values.filter(v=>v<13))].sort((a,b)=>a-b);
         let maxLen = 1, cur = 1;
         for (let i=1;i<sortedUnique.length;i++) { if (sortedUnique[i] === sortedUnique[i-1]+1) cur++; else { maxLen = Math.max(maxLen, cur); cur=1; } }
         maxLen = Math.max(maxLen, cur);
-        score += maxLen * 3 + (20 - hand.length) * 5;
+        score += maxLen * 4 + (20 - hand.length) * 5;
+        let singleCount = Object.values(cnt).filter(c => c === 1).length;
+        score -= singleCount * 3;
+        if (memory && memory.isBombPossible()) score += 8;
+        if (callPosition === 2) score += 8;
         if (isLandlord) score += 20;
         return score;
     }
 
-    // 生成所有合法出牌
     function getAllValidPlays(hand, lastPlay = null) {
         if (!hand || hand.length === 0) return [];
         let candidates = [];
@@ -515,7 +502,6 @@
         return result;
     }
 
-    // 提取手牌特征
     function extractHandFeatures(hand) {
         let values = hand.map(c => c.value);
         let counts = new Array(15).fill(0);
@@ -567,41 +553,356 @@
     }
 
     const WEIGHTS = { playPower:0.8, isBomb:-30, isRocket:-50, remainTotal:-2, remainSingle:1, remainPair:2, remainTriple:4, remainBomb:15, remainMaxStraight:3, remainBigCards:1, hasRocket:10, isLandlord:5, isFarmer:0, opponentHandCount:-1, partnerHandCount:2, outsideBombCount:-5, isCritical:20, needBeat:10 };
-    function scorePlay(features) {
+
+    function scorePlay(features, role, memory, state, playerHand) {
         let score = 0;
         for (let key in WEIGHTS) if (features[key] !== undefined) score += features[key] * WEIGHTS[key];
         if (features.isFarmer && features.partnerHandCount <= 2 && features.playLength <= 2) score += 40;
         if (features.isFarmer && features.needBeat && features.lastPlayType === 'single' && features.lastPlayPower <= 10 && features.playPower > features.lastPlayPower && features.playPower - features.lastPlayPower <= 3) score += 30;
         if (features.needBeat && features.lastPlayPower >= 12 && features.remainTotal > 3 && features.playPower > features.lastPlayPower && features.playPower < 14) score -= 40;
         if (features.isLandlord && !features.needBeat && features.playLength === 1 && features.playPower <= 6) score += 20;
+
+        let oppAboutToWin = state.lastPlayerId >= 0 && state.players[state.lastPlayerId] && state.players[state.lastPlayerId].length <= 3;
+        let farmerWinPossible = role === 'farmer' && oppAboutToWin && features.needBeat;
+        let lordWinPossible = role === 'landlord' && oppAboutToWin;
+
+        if ((features.isBomb || features.isRocket) && oppAboutToWin) score += 120;
+        if ((features.isBomb || features.isRocket) && role === 'landlord' && features.remainTotal <= 4) score += 100;
+        if ((features.isBomb || features.isRocket) && features.remainTotal <= 2) score += 150;
+        if (features.isBomb && memory.getOutsideBombCount() <= 1 && !memory.getOutsideRocketPossible()) score += 30;
+        if (features.isRocket) score += 20;
+        if ((features.isBomb || features.isRocket) && features.needBeat && features.remainTotal > 6 && !oppAboutToWin) score -= 60;
+
+        if (features.needBeat && features.remainTotal <= 3 && features.remainTotal + features.playLength <= (playerHand ? playerHand.length : 20)) score += 80;
+
         return score;
     }
 
-    function simulateOpponentResponse(play, hand, state, role, memory) {
+    function simulateOpponentResponseV2(play, hand, state, role, memory) {
         let newHand = hand.filter(c => !play.includes(c));
         let newState = JSON.parse(JSON.stringify(state));
         newState.players[state.currentPlayer] = newHand;
         let nextPlayer = (state.currentPlayer + 1) % 3;
-        let opponentHand = newState.players[nextPlayer];
-        let opponentPlays = getAllValidPlays(opponentHand, getCardType(play));
-        if (opponentPlays.length === 0) {
-            let thirdPlayer = (nextPlayer + 1) % 3;
-            let thirdHand = newState.players[thirdPlayer];
-            let thirdPlays = getAllValidPlays(thirdHand, getCardType(play));
-            if (thirdPlays.length === 0) return 30;
-            else {
-                let thirdPlay = thirdPlays[0];
-                let afterHand = thirdHand.filter(c => !thirdPlay.includes(c));
-                return evaluateHandStrength(afterHand, memory, role === 'landlord');
-            }
-        } else {
-            let opponentPlay = opponentPlays[0];
-            let afterHand = opponentHand.filter(c => !opponentPlay.includes(c));
-            return evaluateHandStrength(afterHand, memory, role !== 'landlord');
+        if (newState.players[nextPlayer].length === 0) return 50;
+        let lastType = getCardType(play);
+
+        function sampleOpponentPlays(oppHand, targetPlay) {
+            let plays = getAllValidPlays(oppHand, targetPlay);
+            if (!plays || plays.length === 0) return null;
+            if (plays.length <= 3) return plays;
+            return [plays[0], plays[Math.floor(plays.length/2)], plays[plays.length-1]];
         }
+
+        function evalState(s, pid, myRoleId, depth) {
+            if (s.players[pid].length === 0) {
+                let winnerRole = pid === s.landlord ? 'landlord' : 'farmer';
+                return winnerRole === myRoleId ? 60 : -60;
+            }
+            if (depth <= 0) {
+                let str = evaluateHandStrength(s.players[pid], memory, pid === s.landlord);
+                let sameRole = (pid === s.landlord) === (myRoleId === 'landlord');
+                return sameRole ? str : -str;
+            }
+            let next = (pid + 1) % 3;
+            if (s.players[next].length === 0) {
+                let wRole = next === s.landlord ? 'landlord' : 'farmer';
+                return wRole === myRoleId ? 60 : -60;
+            }
+            let samples = sampleOpponentPlays(s.players[next], s.lastPlay);
+            if (!samples) {
+                s.passCount++;
+                if (s.passCount >= 2) { s.lastPlay = null; s.lastPlayerId = -1; s.passCount = 0; }
+                return evalState(s, (next+1)%3, myRoleId, depth-1);
+            }
+            let total = 0, count = 0;
+            for (let sp of samples) {
+                let s2 = JSON.parse(JSON.stringify(s));
+                s2.players[next] = s2.players[next].filter(c => !sp.includes(c));
+                s2.lastPlay = getCardType(sp);
+                s2.lastPlayerId = next;
+                s2.passCount = 0;
+                if (s2.players[next].length === 0) {
+                    let wRole = next === s2.landlord ? 'landlord' : 'farmer';
+                    total += wRole === myRoleId ? 60 : -60;
+                    count++;
+                } else {
+                    let third = (next+1)%3;
+                    let thirdSamples = sampleOpponentPlays(s2.players[third], s2.lastPlay);
+                    if (!thirdSamples) {
+                        s2.passCount++;
+                        total += evalState(s2, (third+1)%3, myRoleId, depth-1);
+                        count++;
+                    } else {
+                        for (let tp of thirdSamples) {
+                            let s3 = JSON.parse(JSON.stringify(s2));
+                            s3.players[third] = s3.players[third].filter(c => !tp.includes(c));
+                            s3.lastPlay = getCardType(tp);
+                            s3.lastPlayerId = third;
+                            s3.passCount = 0;
+                            if (s3.players[third].length === 0) {
+                                let wRole = third === s3.landlord ? 'landlord' : 'farmer';
+                                total += wRole === myRoleId ? 60 : -60;
+                            } else {
+                                total += evalState(s3, (third+1)%3, myRoleId, depth-1);
+                            }
+                            count++;
+                        }
+                    }
+                }
+            }
+            return count > 0 ? total / count : 0;
+        }
+
+        let score = 0;
+        let opponentPlays = getAllValidPlays(newState.players[nextPlayer], lastType);
+        if (!opponentPlays || opponentPlays.length === 0) {
+            let thirdPlayer = (nextPlayer + 1) % 3;
+            if (newState.players[thirdPlayer].length === 0) score = -60;
+            else score = evalState(newState, thirdPlayer, role, 1);
+        } else {
+            let samples = opponentPlays.length <= 3 ? opponentPlays :
+                [opponentPlays[0], opponentPlays[Math.floor(opponentPlays.length/2)], opponentPlays[opponentPlays.length-1]];
+            let weighted = 0, count = 0;
+            for (let sp of samples) {
+                let s2 = JSON.parse(JSON.stringify(newState));
+                s2.players[nextPlayer] = s2.players[nextPlayer].filter(c => !sp.includes(c));
+                s2.lastPlay = getCardType(sp);
+                s2.lastPlayerId = nextPlayer;
+                if (s2.players[nextPlayer].length === 0) {
+                    let wRole = nextPlayer === s2.landlord ? 'landlord' : 'farmer';
+                    weighted += wRole === role ? -60 : 60;
+                } else {
+                    let third = (nextPlayer + 1) % 3;
+                    weighted += evalState(s2, third, role, 1);
+                }
+                count++;
+            }
+            score = count > 0 ? weighted / count : 0;
+        }
+        return score;
     }
 
-    // ======================== 大师级AI ========================
+    // ======================== DP 手牌分解引擎 (D) ========================
+    function decomposeHandDP(hand) {
+        if (!hand || hand.length === 0) return { plays: [], score: 0 };
+        const n = hand.length;
+        const idxToCard = hand;
+        let cardIndex = {};
+        hand.forEach((c, i) => { if (!cardIndex[c.id]) cardIndex[c.id] = []; cardIndex[c.id].push(i); });
+
+        function cardsFromMask(mask) {
+            let result = [];
+            for (let i = 0; i < n; i++) if (mask & (1 << i)) result.push(idxToCard[i]);
+            return result;
+        }
+
+        let allPlays = getAllValidPlays(hand, null);
+        let playEntries = [];
+        for (let play of allPlays) {
+            let mask = 0;
+            let used = {};
+            for (let c of play) {
+                let idx = -1;
+                let arr = cardIndex[c.id] || [];
+                for (let j of arr) {
+                    if (!(mask & (1 << j)) && !used[j]) { idx = j; break; }
+                }
+                if (idx >= 0) { mask |= (1 << idx); used[idx] = true; }
+            }
+            let type = getCardType(play);
+            let pscore = 0;
+            if (type.type === CardType.ROCKET) pscore = 60;
+            else if (type.type === CardType.BOMB) pscore = 50;
+            else if (type.type === CardType.STRAIGHT) pscore = 30 + type.length * 2;
+            else if (type.type === CardType.STRAIGHT_PAIR) pscore = 25 + type.length * 2;
+            else if (type.type === CardType.TRIPLE_WITH_SINGLE || type.type === CardType.TRIPLE_WITH_PAIR) pscore = 20;
+            else if (type.type === CardType.PAIR) pscore = 5;
+            else if (type.type === CardType.TRIPLE) pscore = 8;
+            else pscore = -5;
+            if (play.length === hand.length) pscore += 100;
+            playEntries.push({ mask, score: pscore, play });
+        }
+
+        let totalMasks = 1 << n;
+        let dp = new Array(totalMasks).fill(null);
+        let prev = new Array(totalMasks).fill(null);
+        dp[0] = 0;
+
+        for (let mask = 0; mask < totalMasks; mask++) {
+            if (dp[mask] === null) continue;
+            for (let pe of playEntries) {
+                if (mask & pe.mask) continue;
+                let newMask = mask | pe.mask;
+                let newScore = dp[mask] + pe.score;
+                if (dp[newMask] === null || newScore > dp[newMask]) {
+                    dp[newMask] = newScore;
+                    prev[newMask] = { from: mask, entry: pe };
+                }
+            }
+        }
+
+        let bestMask = 0, bestScore = (dp[totalMasks-1] !== null) ? dp[totalMasks-1] : -999;
+        if (dp[totalMasks-1] !== null) bestMask = totalMasks - 1;
+        else {
+            for (let mask = 0; mask < totalMasks; mask++) {
+                if (dp[mask] !== null && dp[mask] > bestScore) { bestScore = dp[mask]; bestMask = mask; }
+            }
+        }
+
+        let plays = [];
+        let m = bestMask;
+        while (m > 0 && prev[m] !== null) {
+            plays.push(prev[m].entry.play);
+            m = prev[m].from;
+        }
+        let uncovered = cardsFromMask(bestMask ^ (totalMasks - 1));
+        for (let c of uncovered) plays.push([c]);
+
+        plays.reverse();
+        let remaining = hand.filter(c => !plays.flat().includes(c));
+        for (let c of remaining) plays.push([c]);
+
+        return { plays, score: bestScore };
+    }
+
+    // ======================== 残局求解 (I) ========================
+    function solveEndgame(state, playerId) {
+        let hand = state.players[playerId];
+        if (!hand || hand.length > 6) return null;
+        let totalCards = state.players.reduce((s, p) => s + p.length, 0);
+        if (totalCards > 12) return null;
+
+        let bestPlay = null, bestScore = -Infinity;
+        let lastPlay = state.lastPlay;
+        let needBeat = lastPlay && state.lastPlayerId !== playerId;
+        let plays = needBeat ? getAllValidPlays(hand, lastPlay) : getAllValidPlays(hand, null);
+
+        for (let p of plays) {
+            let simState = JSON.parse(JSON.stringify(state));
+            simState.players[playerId] = simState.players[playerId].filter(c => !p.includes(c));
+            if (simState.players[playerId].length === 0) return p;
+            simState.lastPlay = getCardType(p);
+            simState.lastPlayerId = playerId;
+            simState.passCount = 0;
+
+            let win = minimaxEndgame(simState, (playerId + 1) % 3, playerId, 0, 8);
+            if (win > bestScore) { bestScore = win; bestPlay = p; }
+        }
+        return bestPlay;
+    }
+
+    function minimaxEndgame(state, currentPlayer, myId, depth, maxDepth) {
+        if (depth > maxDepth) return 0;
+        if (state.players[myId].length === 0) return 100 - depth;
+        if (state.players.map((p,i)=>i!==myId && p.length===0).some(x=>x)) return -100 + depth;
+
+        if (state.passCount === 2) {
+            state.lastPlay = null;
+            state.lastPlayerId = -1;
+            state.passCount = 0;
+        }
+
+        let hand = state.players[currentPlayer];
+        if (hand.length === 0) {
+            if (currentPlayer === myId) return 100 - depth;
+            return -100 + depth;
+        }
+
+        let needBeat = state.lastPlay && state.lastPlayerId !== currentPlayer;
+        let plays = needBeat ? getAllValidPlays(hand, state.lastPlay) : getAllValidPlays(hand, null);
+
+        if (plays.length === 0 || (!needBeat && state.lastPlay && state.lastPlayerId !== currentPlayer)) {
+            let s2 = JSON.parse(JSON.stringify(state));
+            s2.passCount++;
+            return minimaxEndgame(s2, (currentPlayer + 1) % 3, myId, depth + 1, maxDepth);
+        }
+
+        let isMax = (currentPlayer === myId);
+        let best = isMax ? -999 : 999;
+
+        for (let p of plays) {
+            let s2 = JSON.parse(JSON.stringify(state));
+            s2.players[currentPlayer] = s2.players[currentPlayer].filter(c => !p.includes(c));
+            let bombDepth = (getCardType(p) && (getCardType(p).type === CardType.BOMB || getCardType(p).type === CardType.ROCKET)) ? 1 : 0;
+            s2.lastPlay = getCardType(p);
+            s2.lastPlayerId = currentPlayer;
+            s2.passCount = 0;
+            let val = minimaxEndgame(s2, (currentPlayer + 1) % 3, myId, depth + 1 + bombDepth, maxDepth);
+            if (isMax) best = Math.max(best, val);
+            else best = Math.min(best, val);
+        }
+        return best;
+    }
+
+    // ======================== MCTS 蒙特卡洛搜索 (H) ========================
+    function monteCarloSearch(state, playerId, iterations) {
+        let hand = state.players[playerId];
+        if (!hand || hand.length > 8) return null;
+        let needBeat = state.lastPlay && state.lastPlayerId !== playerId;
+        let allPlays = needBeat ? getAllValidPlays(hand, state.lastPlay) : getAllValidPlays(hand, null);
+        if (allPlays.length <= 1) return null;
+
+        let wins = new Array(allPlays.length).fill(0);
+        let trials = new Array(allPlays.length).fill(0);
+
+        for (let i = 0; i < iterations; i++) {
+            let idx = i % allPlays.length;
+            let simState = JSON.parse(JSON.stringify(state));
+            let play = allPlays[idx];
+            simState.players[playerId] = simState.players[playerId].filter(c => !play.includes(c));
+            if (simState.players[playerId].length === 0) { wins[idx]++; trials[idx]++; continue; }
+            simState.lastPlay = getCardType(play);
+            simState.lastPlayerId = playerId;
+            simState.passCount = 0;
+            let result = randomPlayout(simState, (playerId + 1) % 3, playerId);
+            if (result) wins[idx]++;
+            trials[idx]++;
+        }
+
+        let bestWinRate = -1, bestIdx = 0;
+        for (let i = 0; i < allPlays.length; i++) {
+            if (trials[i] > 0) {
+                let rate = wins[i] / trials[i];
+                if (rate > bestWinRate) { bestWinRate = rate; bestIdx = i; }
+            }
+        }
+        return allPlays[bestIdx];
+    }
+
+    function randomPlayout(state, startPlayer, myId) {
+        let s = JSON.parse(JSON.stringify(state));
+        let cp = startPlayer;
+        for (let step = 0; step < 60; step++) {
+            if (s.players[myId].length === 0) return true;
+            if (s.players.map((p,i)=>i!==myId && p.length===0).some(x=>x)) return false;
+
+            if (s.passCount === 2) { s.lastPlay = null; s.lastPlayerId = -1; s.passCount = 0; }
+
+            let hand = s.players[cp];
+            if (hand.length === 0) { cp = (cp + 1) % 3; continue; }
+
+            let needBeat = s.lastPlay && s.lastPlayerId !== cp;
+            let plays = needBeat ? getAllValidPlays(hand, s.lastPlay) : getAllValidPlays(hand, null);
+
+            if (plays.length === 0 || (!needBeat && s.lastPlay && s.lastPlayerId !== cp)) {
+                s.passCount++;
+                cp = (cp + 1) % 3;
+                continue;
+            }
+
+            let chosenPlay = plays[Math.floor(Math.random() * plays.length)];
+            s.players[cp] = s.players[cp].filter(c => !chosenPlay.includes(c));
+            s.lastPlay = getCardType(chosenPlay);
+            s.lastPlayerId = cp;
+            s.passCount = 0;
+            if (s.players[cp].length === 0 && cp === myId) return true;
+            if (s.players[cp].length === 0 && cp !== myId) return false;
+            cp = (cp + 1) % 3;
+        }
+        return false;
+    }
+
+    // ======================== 增强大师级AI ========================
     class MasterAI {
         constructor(id, difficulty, memory) { this.id = id; this.difficulty = difficulty; this.memory = memory; }
         think(phase, state) {
@@ -609,12 +910,28 @@
             return this.playDecision(state);
         }
         callDecision(state) {
-            let strength = evaluateHandStrength(state.players[this.id], this.memory, false);
-            if (this.difficulty === 'easy') return strength > 25 ? 1 : 0;
-            if (this.difficulty === 'medium') {
-                if (strength > 40) return 3; if (strength > 30) return 2; if (strength > 20) return 1; return 0;
+            if (this.difficulty === 'easy') {
+                let strength = evaluateHandStrength(state.players[this.id], this.memory, false, this.id);
+                return strength > 28 ? 1 : 0;
             }
-            if (strength > 45) return 3; if (strength > 32) return 2; if (strength > 22) return 1; return 0;
+            if (this.difficulty === 'medium') {
+                let strength = evaluateHandStrength(state.players[this.id], this.memory, false, this.id);
+                if (strength > 42) return 3; if (strength > 32) return 2; if (strength > 22) return 1; return 0;
+            }
+            let strength = evaluateHandStrength(state.players[this.id], this.memory, false, this.id);
+            let bombBonus = 0;
+            let values = state.players[this.id].map(c=>c.value);
+            let cnt = countValues(values);
+            for (let v in cnt) if (cnt[v] === 4) bombBonus += 15;
+            if (cnt[13] === 1 && cnt[14] === 1) bombBonus += 20;
+            strength += bombBonus;
+            let singlePenalty = Object.values(cnt).filter(c => c === 1).length * 3;
+            strength -= singlePenalty;
+            if (this.id === 2) strength += 8;
+            if (strength > 42) return 3;
+            if (strength > 30) return 2;
+            if (strength > 20) return 1;
+            return 0;
         }
         playDecision(state) {
             let hand = [...state.players[this.id]];
@@ -622,40 +939,99 @@
             let lastPlay = state.lastPlay;
             let role = (this.id === state.landlord) ? 'landlord' : 'farmer';
             let partnerId = (role === 'farmer') ? (this.id === 1 ? 2 : 1) : null;
-            let partnerHandCount = partnerId !== null ? state.players[partnerId].length : 0;
+
+            let egResult = solveEndgame(state, this.id);
+            if (egResult) return egResult;
+
+            let mctsResult = monteCarloSearch(state, this.id, 200);
+            if (mctsResult) return mctsResult;
+
             let allPlays = getAllValidPlays(hand, null);
-            
+
             if (!lastPlay || state.lastPlayerId === this.id) {
-                return this.selectLead(allPlays, role, hand, state);
+                return this.selectLeadSmart(allPlays, role, hand, state);
             }
-            
+
             let beatable = allPlays.filter(p => canBeat(getCardType(p), lastPlay));
             if (beatable.length === 0) return [];
-            
+
+            let handSize = hand.length;
             let scored = beatable.map(play => {
                 let features = extractPlayFeatures(play, hand, lastPlay, role, this.memory, state);
-                let baseScore = scorePlay(features);
+                let baseScore = scorePlay(features, role, this.memory, state, hand);
                 let simScore = 0;
-                if (this.difficulty === 'hard') simScore = simulateOpponentResponse(play, hand, state, role, this.memory);
+                if (this.difficulty === 'hard') simScore = simulateOpponentResponseV2(play, hand, state, role, this.memory);
                 return { play, score: baseScore + simScore * 0.3 };
             });
             scored.sort((a,b)=>b.score - a.score);
-            
+
             let isCritical = (hand.length <= 3) || (this.memory.getMaxOutside(hand) <= 12 && hand.length <= 5);
             if (!isCritical && Math.random() < 0.2 && scored.length > 1) return scored[1].play;
             return scored[0].play;
         }
-        selectLead(plays, role, hand, state) {
+        selectLeadSmart(plays, role, hand, state) {
             if (plays.length === 0) return [];
+            let partnerId = role === 'farmer' ? (this.id === 1 ? 2 : 1) : null;
+
+            let fullHouse = plays.find(p => p.length === hand.length);
+            if (fullHouse) return fullHouse;
+            let twoPlay = plays.find(p => {
+                if (p.length === hand.length) return true;
+                let rest = hand.filter(c => !p.includes(c));
+                let restPlays = getAllValidPlays(rest, null);
+                return rest.length === 0 || restPlays.some(rp => rp.length === rest.length);
+            });
+            if (twoPlay) return twoPlay;
+
             if (role === 'landlord') {
-                let smallSingle = plays.find(p => p.length === 1 && p[0].value <= 6);
-                if (smallSingle) return smallSingle;
-                let smallPair = plays.find(p => p.length === 2 && getCardType(p).value <= 6);
-                if (smallPair) return smallPair;
+                let plan = decomposeHandDP(hand);
+                if (plan.plays.length > 0) {
+                    let bestLead = null, bestLeadScore = -999;
+                    for (let p of plan.plays) {
+                        let score = -getPlayPower(p);
+                        let type = getCardType(p);
+                        if (type && (type.type === CardType.BOMB || type.type === CardType.ROCKET)) score += 100;
+                        if (p.length <= 2) score -= 10;
+                        if (type && type.type === CardType.STRAIGHT) score -= 10;
+                        if (type && type.type === CardType.STRAIGHT_PAIR) score -= 5;
+                        let val = p[0].value;
+                        if (val <= 6 && p.length <= 2) score -= 20;
+                        if (val >= 12) score += 15;
+                        if (score > bestLeadScore) { bestLeadScore = score; bestLead = p; }
+                    }
+                    if (bestLead) return bestLead;
+                }
+                let smallSingle = plays.filter(p => p.length === 1 && p[0].value <= 6);
+                if (smallSingle.length > 0) {
+                    let worst = smallSingle.reduce((a,b) => a[0].value < b[0].value ? a : b);
+                    return worst;
+                }
+                let smallPair = plays.filter(p => p.length === 2 && getCardType(p).value <= 6);
+                if (smallPair.length > 0) {
+                    let worst = smallPair.reduce((a,b) => getCardType(a).value < getCardType(b).value ? a : b);
+                    return worst;
+                }
                 let straightPlays = plays.filter(p => getCardType(p)?.type === CardType.STRAIGHT);
                 if (straightPlays.length) return straightPlays.sort((a,b)=>a.length-b.length)[0];
                 return plays.sort((a,b)=>getPlayPower(a)-getPlayPower(b))[0];
             } else {
+                let plan = decomposeHandDP(hand);
+                if (plan.plays.length > 0) {
+                    let partnerCount = state.players[partnerId !== null ? partnerId : -1]?.length || 20;
+                    let bestLead = null, bestLeadScore = -999;
+                    for (let p of plan.plays) {
+                        let score = getPlayPower(p);
+                        let type = getCardType(p);
+                        if (type && (type.type === CardType.BOMB || type.type === CardType.ROCKET)) score -= 200;
+                        if (p.length >= 3) score += 10;
+                        if (partnerCount <= 3) score -= 50;
+                        if (type && type.type === CardType.SINGLE && p[0].value >= 10) score += 20;
+                        if (type && type.type === CardType.SINGLE && p[0].value >= 7 && p[0].value <= 10) score += 5;
+                        if (type && (type.type === CardType.PAIR || type.type === CardType.TRIPLE)) score += 10;
+                        if (score > bestLeadScore) { bestLeadScore = score; bestLead = p; }
+                    }
+                    if (bestLead) return bestLead;
+                }
                 let midSingle = plays.find(p => p.length === 1 && p[0].value >= 7 && p[0].value <= 10);
                 if (midSingle) return midSingle;
                 let smallPair = plays.find(p => p.length === 2 && getCardType(p).value <= 8);
@@ -667,11 +1043,14 @@
 
     // ======================== 游戏状态 ========================
     const GameState = {
-        phase: 'idle', deck: [], players: [[],[],[]], lordCards: [], landlord: -1, currentPlayer: 0,
-        lastPlay: null, lastPlayerId: -1, currentScore: 0, selectedCards: new Set(), bombCount: 0,
+        phase: 'idle', mode: 'single',
+        deck: [], players: [[],[],[]], lordCards: [], landlord: -1, currentPlayer: 0,
+        lastPlay: null, lastPlayerId: -1, baseScore: 1, selectedCards: new Set(), bombCount: 0,
         difficulty: 'hard', coins: 1000, stats: { total: 0, win: 0 }, passCount: 0,
         firstPlayMade: false, lordPlayCount: 0, farmerPlayed: false,
-        cardMemory: null, aiList: [], history: [], processing: false
+        cardMemory: null, aiList: [], history: [], processing: false,
+        myRole: null, myIndex: -1, hostPeerId: null,
+        peer: null, connections: [], callScores: [0,0,0], stateSeq: 0
     };
     function addHistory(msg) { GameState.history.unshift(msg); if (GameState.history.length > 5) GameState.history.pop(); document.getElementById('historyLog').innerHTML = '📜 ' + GameState.history.join(' · '); }
 
@@ -684,11 +1063,37 @@
     }
     function shuffle(arr) { for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; } return arr; }
 
+    // ======================== 模式切换 ========================
+    function showOnlinePanel() {
+        document.getElementById('startScreen').classList.add('hidden');
+        document.getElementById('connectPanel').classList.remove('hidden');
+        initPeer();
+    }
+    function hideOnlinePanel() {
+        document.getElementById('connectPanel').classList.add('hidden');
+        document.getElementById('startScreen').classList.remove('hidden');
+        if (GameState.peer) { GameState.peer.destroy(); GameState.peer = null; }
+        GameState.connections = [];
+    }
+    function backToMenu() {
+        document.getElementById('gameOverScreen').classList.add('hidden');
+        document.getElementById('startScreen').classList.remove('hidden');
+        document.getElementById('topRightControls').classList.remove('hidden');
+        document.getElementById('connStatus').classList.add('hidden');
+        document.getElementById('emojiBtn').classList.add('hidden');
+        clearTimer();
+        if (GameState.mode === 'online' && GameState.peer) {
+            GameState.peer.destroy();
+            GameState.peer = null;
+            GameState.connections = [];
+        }
+        GameState.phase = 'idle';
+    }
+
+    // ======================== 游戏初始化 ========================
     function initGame() {
         initAudio();
-        if (voiceEnabled && window.speechSynthesis) { if (!selectedVoice) selectedVoice = getChineseVoice(); }
-        document.getElementById('startScreen').classList.add('hidden');
-        GameState.stats.total++;
+        GameState.selectedCards.clear();
         updateStats();
         GameState.phase = 'dealing';
         GameState.deck = createDeck();
@@ -697,18 +1102,29 @@
         GameState.landlord = -1;
         GameState.currentPlayer = 0;
         GameState.lastPlay = null;
-        GameState.currentScore = 0;
-        GameState.selectedCards.clear();
+        GameState.baseScore = 1;
         GameState.bombCount = 0;
-        GameState.difficulty = document.getElementById('difficulty').value;
         GameState.firstPlayMade = false; GameState.lordPlayCount = 0; GameState.farmerPlayed = false;
         GameState.passCount = 0;
         GameState.processing = false;
+        singleCallCount = 0;
         GameState.history = [];
         addHistory('游戏开始');
         GameState.cardMemory = new MasterMemory();
         GameState.aiList = [null, new MasterAI(1, GameState.difficulty, GameState.cardMemory), new MasterAI(2, GameState.difficulty, GameState.cardMemory)];
         dealCards();
+    }
+
+    function startSingleMode() {
+        if (voiceEnabled && window.speechSynthesis && !selectedVoice) selectedVoice = getChineseVoice();
+        GameState.mode = 'single';
+        GameState.myIndex = 0;
+        document.getElementById('startScreen').classList.add('hidden');
+        document.getElementById('topRightControls').classList.remove('hidden');
+        document.getElementById('connStatus').classList.add('hidden');
+        document.getElementById('emojiBtn').classList.add('hidden');
+        GameState.stats.total++;
+        initGame();
     }
 
     function dealCards() {
@@ -719,20 +1135,27 @@
                 if (idx === 0 && count % 3 === 0) playSound('deal');
                 if (idx === 0) renderPlayerHand(); else updateCount(idx);
                 count++;
-            } else { clearInterval(interval); GameState.lordCards = GameState.deck.slice(0,3); setTimeout(startCall, 500); }
+            } else { clearInterval(interval); GameState.lordCards = GameState.deck.slice(0,3); setTimeout(startCallPhase, 500); }
         }, 30);
     }
 
-    let callTimeout = null;
-    function startCall() { GameState.phase='calling'; GameState.currentPlayer=Math.floor(Math.random()*3); processCall(); }
-    function processCall() {
+    // ======================== 叫分阶段 ========================
+    function startCallPhase() {
+        GameState.phase = 'calling';
+        GameState.currentPlayer = Math.floor(Math.random() * 3);
+        GameState.callScores = [0,0,0];
+        if (GameState.mode === 'single') processSingleCall();
+        else { broadcastFullState(); processOnlineCallTurn(); }
+    }
+
+    function processSingleCall() {
         if (GameState.phase !== 'calling') return;
         let id = GameState.currentPlayer;
-        ['leftStatus','rightStatus','playerStatus'].forEach((el,i)=>{ document.getElementById(el).textContent = (i===id) ? (i===0?'你的回合 (8秒)':'思考...') : ''; });
+        ['leftStatus','rightStatus','playerStatus'].forEach((el,i)=>{ document.getElementById(el).textContent = (i===id) ? (i===0?'你的回合 (10秒)':'思考...') : ''; });
         updateCallBtns();
         if (id === 0) {
             if (callTimeout) clearTimeout(callTimeout);
-            callTimeout = setTimeout(() => { if (GameState.phase === 'calling' && GameState.currentPlayer === 0) callScore(0); }, 8000);
+            callTimeout = setTimeout(() => { if (GameState.phase === 'calling' && GameState.currentPlayer === 0) callScore(0); }, 10000);
             return;
         }
         setTimeout(()=>{
@@ -741,39 +1164,63 @@
             callScore(score);
         }, 600);
     }
+
     function updateCallBtns() {
+        if (GameState.mode === 'online') return;
         let isPlayer = (GameState.currentPlayer === 0);
         ['callBtn','oneBtn','twoBtn','threeBtn'].forEach(id=>{ let btn=document.getElementById(id); if(btn) btn.style.display = isPlayer ? 'flex' : 'none'; });
-        if (isPlayer) { document.getElementById('oneBtn').disabled = (GameState.currentScore >= 1); document.getElementById('twoBtn').disabled = (GameState.currentScore >= 2); }
+        if (isPlayer) {
+            document.getElementById('oneBtn').disabled = (GameState.baseScore >= 1);
+            document.getElementById('twoBtn').disabled = (GameState.baseScore >= 2);
+        }
     }
+
+    let singleCallCount = 0;
     function callScore(score) {
         if (GameState.phase !== 'calling') return;
         if (callTimeout) clearTimeout(callTimeout);
-        let id = GameState.currentPlayer;
-        if (score === 0) showToast((id===0?'你':(id===1?'农民A':'农民B'))+' 不叫');
-        else { GameState.currentScore = score; GameState.landlord = id; document.getElementById('scoreDisplay').textContent = '底分: '+score; showToast((id===0?'你':(id===1?'农民A':'农民B'))+' '+score+'分'); }
-        if (score === 3) setTimeout(confirmLord, 500);
-        else {
-            let next = (id+1)%3;
-            if (next === GameState.landlord && GameState.currentScore > 0) setTimeout(confirmLord, 500);
-            else { GameState.currentPlayer = next; if (GameState.currentScore>0 && next===GameState.landlord) setTimeout(confirmLord,500); else setTimeout(processCall,500); }
+        if (GameState.mode === 'online') {
+            sendAction({ type: 'call', score });
+            return;
         }
+        let id = GameState.currentPlayer;
+        singleCallCount++;
+        GameState.callScores[id] = score;
+        if (score === 0) showToast((id===0?'你':(id===1?'农民A':'农民B'))+' 不叫');
+        else { GameState.baseScore = Math.max(GameState.baseScore, score); GameState.landlord = id; document.getElementById('scoreDisplay').textContent = '底分: '+GameState.baseScore; showToast((id===0?'你':(id===1?'农民A':'农民B'))+' '+score+'分'); }
+        if (score === 3) setTimeout(becomeLandlord, 500);
+        else if (singleCallCount >= 3) {
+            if (GameState.landlord >= 0) setTimeout(becomeLandlord, 500);
+            else { showToast("无人叫地主，重新发牌"); setTimeout(()=>{ initGame(); }, 500); }
+        }
+        else { GameState.currentPlayer = (id+1)%3; setTimeout(processSingleCall, 500); }
     }
-    function confirmLord() {
-        GameState.players[GameState.landlord].push(...GameState.lordCards);
-        GameState.players[GameState.landlord].sort((a,b)=>a.value-b.value);
-        showToast((GameState.landlord===0?'你':(GameState.landlord===1?'农民A':'农民B'))+' 成为地主！');
-        if (GameState.landlord === 0) renderPlayerHand(); else updateCount(GameState.landlord);
-        document.getElementById('controls').innerHTML = `<button id="playBtn" class="pixel-btn bg-green-500 min-w-[80px]" onclick="playCards()">出牌</button><button id="passBtn" class="pixel-btn bg-gray-500 min-w-[80px]" onclick="passTurn()">不出</button><button class="pixel-btn bg-blue-500 text-[10px]" onclick="showHint()">提示</button>`;
+
+    // ======================== 成为地主 ========================
+    function becomeLandlord() {
+        let lordIdx = GameState.landlord;
+        if (lordIdx < 0) { showToast("无人叫地主，重新发牌"); initGame(); return; }
+        GameState.players[lordIdx].push(...GameState.lordCards);
+        GameState.players[lordIdx].sort((a,b)=>a.value-b.value);
+        showToast((lordIdx===0?'你':(lordIdx===1?'农民A':'农民B'))+' 成为地主！');
+        if (lordIdx === 0) renderPlayerHand(); else updateCount(lordIdx);
+        document.getElementById('controls').innerHTML =
+            '<button id="playBtn" class="pixel-btn bg-green-500 min-w-[80px]" onclick="playCards()">出牌</button>' +
+            '<button id="passBtn" class="pixel-btn bg-gray-500 min-w-[80px]" onclick="passTurn()">不出</button>' +
+            '<button class="pixel-btn bg-blue-500 text-[10px]" onclick="showHint()">提示</button>';
         GameState.phase = 'playing';
-        GameState.currentPlayer = GameState.landlord;
+        GameState.currentPlayer = lordIdx;
         GameState.firstPlayMade = false; GameState.lordPlayCount = 0; GameState.farmerPlayed = false;
         GameState.passCount = 0;
         GameState.processing = false;
-        setTimeout(processPlay, 600);
+        if (GameState.mode === 'single') setTimeout(processPlayPhase, 600);
+        else { broadcastFullState(); setTimeout(processPlayPhase, 600); }
     }
+
+    // ======================== 出牌阶段 ========================
     function getAIDelay() { if (aiSpeed === 'fast') return 300; if (aiSpeed === 'slow') return 1200; return 700; }
-    function processPlay() {
+
+    function processPlayPhase() {
         if (GameState.phase !== 'playing') return;
         if (GameState.processing) return;
         let id = GameState.currentPlayer;
@@ -783,6 +1230,14 @@
             document.getElementById('playArea').innerHTML = '<span class="text-gray-500 text-[10px]">自由出牌</span>';
             GameState.passCount = 0;
         }
+        if (GameState.mode === 'online') {
+            processOnlinePlay(id);
+            return;
+        }
+        processSinglePlay(id);
+    }
+
+    function processSinglePlay(id) {
         ['leftStatus','rightStatus','playerStatus'].forEach((el,i)=>{ document.getElementById(el).textContent = (i===id)?(i===0?(GameState.landlord===0?'地主出牌':'出牌'):'出牌...'):''; });
         let playBtn = document.getElementById('playBtn'), passBtn = document.getElementById('passBtn');
         if (id === 0) {
@@ -791,7 +1246,7 @@
         } else {
             if (playBtn) playBtn.disabled = true; if (passBtn) passBtn.disabled = true;
             GameState.processing = true;
-            let timeoutId = setTimeout(() => { showToast((id===1?'农民A':'农民B')+' 思考超时'); playCardsAI(id, []); GameState.processing = false; }, 2000);
+            let timeoutId = setTimeout(() => { showToast((id===1?'农民A':'农民B')+' 思考超时'); executePlayCards(id, []); GameState.processing = false; }, 2000);
             setTimeout(() => {
                 let ai = GameState.aiList[id];
                 let cards = ai.think('play', GameState);
@@ -801,46 +1256,54 @@
                     let typeValid = getCardType(cards) !== null;
                     if (!isValid || !typeValid) cards = [];
                 }
-                playCardsAI(id, cards || []);
+                executePlayCards(id, cards || []);
                 GameState.processing = false;
             }, getAIDelay());
         }
     }
-    function playCardsAI(id, cards) {
+
+    // ======================== 执行出牌/不出 (共用) ========================
+    function executePlayCards(player, cards) {
         let isPlay = (cards && cards.length > 0);
         if (!isPlay) {
-            showToast((id===1?'农民A':id===2?'农民B':'你')+' 不出');
+            showToast((player===1?'农民A':player===2?'农民B':'你')+' 不出');
             GameState.passCount++;
-            addHistory(`${id===1?'农民A':id===2?'农民B':'你'} 不出`);
+            addHistory(`${player===1?'农民A':player===2?'农民B':'你'} 不出`);
         } else {
             let type = getCardType(cards);
-            if (!type) { showToast('牌型非法'); GameState.passCount++; GameState.currentPlayer = (id+1)%3; setTimeout(processPlay, 600); return; }
-            GameState.cardMemory.record(cards);
-            GameState.players[id] = GameState.players[id].filter(c => !cards.includes(c));
+            if (!type) { showToast('牌型非法'); GameState.passCount++; GameState.currentPlayer = (player+1)%3; nextPlayStep(); return; }
+            GameState.players[player] = GameState.players[player].filter(c => !cards.includes(c));
             GameState.lastPlay = type;
-            GameState.lastPlayerId = id;
+            GameState.lastPlayerId = player;
             GameState.passCount = 0;
-            if (!GameState.firstPlayMade) { GameState.firstPlayMade = true; if (id === GameState.landlord) GameState.lordPlayCount++; }
-            else { if (id === GameState.landlord) GameState.lordPlayCount++; else GameState.farmerPlayed = true; }
+            if (!GameState.firstPlayMade) { GameState.firstPlayMade = true; if (player === GameState.landlord) GameState.lordPlayCount++; }
+            else { if (player === GameState.landlord) GameState.lordPlayCount++; else GameState.farmerPlayed = true; }
             if (type.type === CardType.BOMB || type.type === CardType.ROCKET) {
                 GameState.bombCount++;
-                GameState.currentScore *= 2;
-                document.getElementById('scoreDisplay').textContent = '底分: '+GameState.currentScore;
+                GameState.baseScore *= 2;
+                document.getElementById('scoreDisplay').textContent = '底分: '+GameState.baseScore;
                 playSound('bomb');
                 document.getElementById('playArea').classList.add('spring-flash');
                 setTimeout(()=>document.getElementById('playArea').classList.remove('spring-flash'),400);
                 addHistory(`💣 炸弹！倍数x2`);
             }
+            if (GameState.mode === 'single' && GameState.cardMemory) GameState.cardMemory.recordPlayerPlay(player, cards);
             displayPlayed(cards);
-            addHistory(`${id===0?'你':(id===1?'农民A':'农民B')} 出了 ${cards.length}张`);
+            addHistory(`${player===0?'你':(player===1?'农民A':'农民B')} 出了 ${cards.length}张`);
             speakPlay(cards);
-            if (id === 0) renderPlayerHand(); else updateCount(id);
-            if (GameState.players[id].length === 0) { setTimeout(()=>endGame(id), 300); return; }
-            if (GameState.players[id].length <= 3) showToast((id===1?'农民A':id===2?'农民B':'你')+' 剩'+GameState.players[id].length+'张！');
+            if (player === 0) renderPlayerHand(); else updateCount(player);
+            if (GameState.players[player].length === 0) { endGame(player); return; }
+            if (GameState.players[player].length <= 3) showToast((player===1?'农民A':player===2?'农民B':'你')+' 剩'+GameState.players[player].length+'张！');
         }
-        GameState.currentPlayer = (id+1)%3;
-        setTimeout(processPlay, 600);
+        GameState.currentPlayer = (player+1)%3;
+        nextPlayStep();
     }
+
+    function nextPlayStep() {
+        if (GameState.mode === 'online') broadcastFullState();
+        setTimeout(processPlayPhase, 600);
+    }
+
     function displayPlayed(cards) {
         const area = document.getElementById('playArea'); area.innerHTML = '';
         cards.forEach(card => {
@@ -853,8 +1316,11 @@
         let name = GameState.lastPlayerId===0?'你':(GameState.lastPlayerId===1?'农民A':'农民B');
         document.getElementById('lastPlayer').textContent = name+' 出了'+cards.length+'张';
     }
+
+    // ======================== UI ========================
     let dragIndex = null;
     function enableDragSort() {
+        if (GameState.mode === 'online') return;
         const cards = document.querySelectorAll('#playerHand .card');
         cards.forEach((card, idx) => {
             card.setAttribute('draggable', 'true');
@@ -865,7 +1331,7 @@
                 e.preventDefault();
                 let targetIdx = idx;
                 if (dragIndex !== null && dragIndex !== targetIdx) {
-                    let hand = GameState.players[0];
+                    let hand = GameState.players[GameState.myIndex];
                     let [removed] = hand.splice(dragIndex, 1);
                     hand.splice(targetIdx, 0, removed);
                     renderPlayerHand();
@@ -876,8 +1342,10 @@
     }
     function renderPlayerHand() {
         const container = document.getElementById('playerHand'); container.innerHTML = '';
-        GameState.players[0].sort((a,b)=>a.value-b.value);
-        let cards = GameState.players[0], total = cards.length, row1Count = Math.ceil(total/2);
+        let hand = GameState.players[GameState.myIndex] || [];
+        if (hand.length === 0) return;
+        hand.sort((a,b)=>a.value-b.value);
+        let cards = hand, total = cards.length, row1Count = Math.ceil(total/2);
         let row1 = document.createElement('div'); row1.className = 'card-row';
         cards.slice(0,row1Count).forEach((card,idx)=>{ row1.appendChild(createCardElement(card,idx)); });
         container.appendChild(row1);
@@ -904,44 +1372,387 @@
         return div;
     }
     function toggleCard(cardId) {
-        if (GameState.phase !== 'playing' || GameState.currentPlayer !== 0) return;
-        let card = GameState.players[0].find(c=>c.id===cardId);
+        if (GameState.phase !== 'playing' || GameState.currentPlayer !== GameState.myIndex) return;
+        let card = GameState.players[GameState.myIndex].find(c=>c.id===cardId);
         if (!card) return;
         if (GameState.selectedCards.has(card)) GameState.selectedCards.delete(card);
         else GameState.selectedCards.add(card);
         renderPlayerHand();
         let playBtn = document.getElementById('playBtn'); if (playBtn) playBtn.disabled = (GameState.selectedCards.size === 0);
+        updateOnlinePreview();
     }
+    function updateOnlinePreview() {
+        if (GameState.mode !== 'online') return;
+        let cards = Array.from(GameState.selectedCards);
+        if (cards.length===0) { document.getElementById('previewPanel').innerText=''; return; }
+        let type = getCardType(cards);
+        document.getElementById('previewPanel').innerText = type ? `牌型: ${type.type}` : '无效牌型';
+    }
+    function opponentPos(pos) {
+        if (GameState.mode === 'single' || GameState.myIndex === 0) return pos;
+        if (GameState.myIndex === 1) return pos === 1 ? 0 : 2;
+        return pos === 1 ? 0 : 1;
+    }
+    function updateCount(pos) { let idx = opponentPos(pos); document.getElementById(pos===1?'leftCount':'rightCount').textContent = GameState.players[idx]?.length || 0; }
+    function updateStats() { document.getElementById('coins').textContent = GameState.coins; }
+    function showToast(msg) { let existing = document.querySelector('.toast'); if(existing) existing.remove(); let div = document.createElement('div'); div.className = 'toast'; div.textContent = msg; document.body.appendChild(div); setTimeout(()=>div.remove(),2000); }
+    function toggleRules() { document.getElementById('rulesModal').classList.toggle('hidden'); }
+    function changeDifficulty(val) { GameState.difficulty = val; if(GameState.aiList[1]) { GameState.aiList[1].difficulty = val; GameState.aiList[2].difficulty = val; } }
+
     function playCards() {
-        if (GameState.phase !== 'playing' || GameState.currentPlayer !== 0) return;
+        if (GameState.phase !== 'playing' || GameState.currentPlayer !== GameState.myIndex) return;
         let cards = Array.from(GameState.selectedCards);
         if (cards.length === 0) { showToast('请选择牌'); return; }
         let type = getCardType(cards);
-        if (!type) { showToast('无效的牌型'); shakeHand(); return; }
-        if (!canBeat(type, GameState.lastPlay)) { showToast('需要大过上一手'); shakeHand(); return; }
-        playCardsAI(0, cards);
-        GameState.selectedCards.clear();
-        renderPlayerHand();
+        if (!type) { showToast('无效的牌型'); document.getElementById('handContainer').classList.add('ani-shake'); setTimeout(()=>document.getElementById('handContainer').classList.remove('ani-shake'),300); return; }
+        if (!canBeat(type, GameState.lastPlay)) { showToast('需要大过上一手'); document.getElementById('handContainer').classList.add('ani-shake'); setTimeout(()=>document.getElementById('handContainer').classList.remove('ani-shake'),300); return; }
+        if (GameState.mode === 'online') {
+            sendAction({ type: 'play', cards });
+            GameState.selectedCards.clear();
+            renderPlayerHand();
+        } else {
+            executePlayCards(0, cards);
+            GameState.selectedCards.clear();
+            renderPlayerHand();
+        }
     }
     function passTurn() {
-        if (GameState.phase !== 'playing' || GameState.currentPlayer !== 0) return;
-        if (!GameState.lastPlay || GameState.lastPlayerId === 0) { showToast('你必须出牌'); return; }
-        playCardsAI(0, []);
+        if (GameState.phase !== 'playing' || GameState.currentPlayer !== GameState.myIndex) return;
+        if (!GameState.lastPlay || GameState.lastPlayerId === GameState.myIndex) { showToast('你必须出牌'); return; }
+        if (GameState.mode === 'online') sendAction({ type: 'pass' });
+        else executePlayCards(0, []);
     }
     function resetSelection() { GameState.selectedCards.clear(); renderPlayerHand(); let btn = document.getElementById('playBtn'); if(btn) btn.disabled = true; }
     function showHint() {
-        if (GameState.phase !== 'playing' || GameState.currentPlayer !== 0) return;
-        let plays = getAllValidPlays(GameState.players[0], GameState.lastPlay);
+        if (GameState.phase !== 'playing' || GameState.currentPlayer !== GameState.myIndex) return;
+        if (GameState.mode === 'online') { showToast("联机模式无AI提示"); return; }
+        let plays = getAllValidPlays(GameState.players[GameState.myIndex], GameState.lastPlay);
         if (plays.length > 0) { GameState.selectedCards = new Set(plays[0]); renderPlayerHand(); showToast('已选推荐牌'); document.getElementById('playBtn').disabled = false; }
         else { if (GameState.lastPlay) showToast('建议：不出'); else showToast('请自由出牌'); }
     }
-    function shakeHand() { let c = document.getElementById('handContainer'); c.classList.add('ani-shake'); setTimeout(()=>c.classList.remove('ani-shake'),300); }
+
+    // ======================== 联机模式 ========================
+    function initPeer() {
+        GameState.peer = new Peer();
+        let peerConnected = false;
+        let peerTimeout = setTimeout(() => {
+            if (!peerConnected) {
+                showToast('连接超时，请检查网络');
+                if (GameState.peer) { GameState.peer.destroy(); GameState.peer = null; }
+            }
+        }, 10000);
+        GameState.peer.on('open', id => {
+            peerConnected = true;
+            clearTimeout(peerTimeout);
+            document.getElementById('myPeerId').innerText = id;
+            document.getElementById('connStatus').classList.remove('hidden');
+            document.getElementById('connStatus').innerHTML = `📡 房间码:${id}`;
+        });
+        GameState.peer.on('connection', conn => {
+            let idx = GameState.connections.length + 1;
+            conn.playerIdx = idx;
+            GameState.connections.push(conn);
+            conn.on('data', d => onConnectionData(conn, d));
+            conn.on('close', () => {
+                let dcIdx = conn.playerIdx;
+                GameState.connections = GameState.connections.filter(c => c !== conn);
+                handleDisconnect(dcIdx);
+            });
+            if (GameState.connections.length === 2 && (!GameState.phase || GameState.phase === 'waiting')) startOnlineGame();
+        });
+        GameState.peer.on('error', e => console.warn(e));
+    }
+    function joinGame() {
+        let target = document.getElementById('targetPeerId').value.trim();
+        if (!target) return;
+        let conn = GameState.peer.connect(target);
+        conn.on('open', () => {
+            GameState.connections.push(conn);
+            conn.on('data', d => onConnectionData(conn, d));
+            GameState.myRole = 'client';
+            GameState.hostPeerId = target;
+            document.getElementById('connectPanel').style.display = 'none';
+            document.getElementById('connStatus').innerHTML = '🔗 已连接房主';
+            showToast("加入成功，等待房主开局");
+        });
+        conn.on('error', () => showToast("连接失败"));
+    }
+    function startOnlineGame() {
+        initAudio();
+        GameState.mode = 'online';
+        GameState.myRole = 'host';
+        GameState.myIndex = 0;
+        document.getElementById('topRightControls').classList.add('hidden');
+        document.getElementById('connStatus').classList.remove('hidden');
+        document.getElementById('connStatus').innerHTML = '👑 房主';
+        document.getElementById('emojiBtn').classList.remove('hidden');
+        document.getElementById('connectPanel').style.display = 'none';
+        document.getElementById('startScreen').classList.add('hidden');
+        showToast("两人已满，游戏开始");
+        GameState.stats.total++;
+        initGame();
+    }
+    function copyPeerId() {
+        let id = document.getElementById('myPeerId').innerText;
+        if (id && id !== '生成中...') { navigator.clipboard.writeText(id); showToast('已复制房间码'); }
+    }
+    function sendEmoji(emoji) {
+        let msg = { type:'emoji', from:GameState.myIndex, emoji };
+        if (GameState.myRole === 'host') {
+            for (let c of GameState.connections) c.send(msg);
+        } else if (GameState.connections[0]) {
+            GameState.connections[0].send(msg);
+        }
+        showToast(`你: ${emoji}`);
+    }
+    function onConnectionData(conn, data) {
+        if (data.type === 'action') handleAction({ ...data.action, from: data.from });
+        else if (data.type === 'sync' && GameState.myRole !== 'host') handleSync(data.state);
+        else if (data.type === 'emoji') {
+            showToast(`${getPlayerName(data.from)}: ${data.emoji}`);
+            if (GameState.myRole === 'host') {
+                GameState.connections.forEach(c => { if (c !== conn) c.send(data); });
+            }
+        }
+    }
+    function getPlayerName(idx) {
+        if (idx === GameState.myIndex) return '你';
+        if (idx === GameState.landlord) return '地主';
+        if (idx === 1) return '左农';
+        if (idx === 2) return '右农';
+        return '玩家'+idx;
+    }
+
+    // ---- 状态同步 ----
+    function broadcastFullState() {
+        if (GameState.myRole !== 'host') return;
+        let base = {
+            phase: GameState.phase, players: GameState.players.map(p=>[...p]),
+            landlord: GameState.landlord, currentPlayer: GameState.currentPlayer,
+            lastPlay: GameState.lastPlay, lastPlayerId: GameState.lastPlayerId,
+            baseScore: GameState.baseScore, bombCount: GameState.bombCount,
+            passCount: GameState.passCount, firstPlayMade: GameState.firstPlayMade,
+            lordPlayCount: GameState.lordPlayCount, farmerPlayed: GameState.farmerPlayed,
+            callScores: GameState.callScores, lordCards: GameState.lordCards,
+            seq: ++GameState.stateSeq
+        };
+        GameState.connections.forEach((conn, i) => {
+            conn.send({ type: 'sync', state: { ...base, myIndex: i + 1 } });
+        });
+    }
+    function handleSync(state) {
+        GameState.phase = state.phase;
+        GameState.players = state.players.map(p=>[...p]);
+        GameState.landlord = state.landlord;
+        GameState.currentPlayer = state.currentPlayer;
+        GameState.lastPlay = state.lastPlay;
+        GameState.lastPlayerId = state.lastPlayerId;
+        GameState.baseScore = state.baseScore;
+        GameState.bombCount = state.bombCount;
+        GameState.passCount = state.passCount;
+        GameState.firstPlayMade = state.firstPlayMade;
+        GameState.lordPlayCount = state.lordPlayCount;
+        GameState.farmerPlayed = state.farmerPlayed;
+        GameState.callScores = state.callScores || [0,0,0];
+        GameState.lordCards = state.lordCards || [];
+        GameState.myIndex = state.myIndex;
+        GameState.selectedCards.clear();
+        renderUI();
+        if (GameState.phase === 'calling') processOnlineCallTurn();
+        else if (GameState.phase === 'playing') processOnlinePlay(GameState.currentPlayer);
+        else if (GameState.phase === 'gameover') {
+            clearTimer();
+            let isWin = false;
+            if (GameState.landlord === GameState.myIndex) isWin = GameState.lastPlayerId === GameState.myIndex;
+            else isWin = GameState.lastPlayerId !== GameState.landlord;
+            let screen = document.getElementById('gameOverScreen'), title = document.getElementById('resultTitle'), content = document.getElementById('resultContent');
+            if (isWin) {
+                title.textContent = '🎉 胜利！'; title.className = 'text-xl retro-text mb-4 text-yellow-400 text-center';
+                content.innerHTML = `对局结束`;
+            } else {
+                title.textContent = '💔 失败'; title.className = 'text-xl retro-text mb-4 text-gray-400 text-center';
+                content.innerHTML = `对局结束`;
+            }
+            screen.classList.remove('hidden');
+        }
+    }
+
+    // ---- 动作路由 ----
+    function sendAction(action) {
+        if (GameState.myRole === 'host') handleAction(action);
+        else if (GameState.connections[0]) GameState.connections[0].send({ type: 'action', action, from: GameState.myIndex });
+    }
+    function handleAction(action) {
+        let player = action.from !== undefined ? action.from : GameState.myIndex;
+        if (action.type === 'call') executeCall(player, action.score);
+        else if (action.type === 'play') executePlayCards(player, action.cards);
+        else if (action.type === 'pass') executePlayCards(player, []);
+    }
+
+    // ---- 联机叫分 ----
+    function processOnlineCallTurn() {
+        if (GameState.phase !== 'calling') return;
+        let id = GameState.currentPlayer;
+        updateOnlineCallStatus(id);
+        if (id === GameState.myIndex) {
+                renderOnlineCallButtons();
+                startOnlineTimer(10, () => { if (GameState.phase === 'calling' && GameState.currentPlayer === GameState.myIndex) makeCall(0); });
+        } else {
+            document.getElementById('controls').innerHTML = '<button class="pixel-btn bg-gray-600" disabled>等待叫分</button>';
+            showOnlineTimer(id);
+        }
+    }
+    function renderOnlineCallButtons() {
+        let btns = '<button class="pixel-btn bg-gray-500" onclick="makeCall(0)">不叫</button>';
+        btns += (GameState.baseScore < 1) ? '<button class="pixel-btn bg-blue-500" onclick="makeCall(1)">1分</button>' : '<button class="pixel-btn bg-gray-600" disabled>1分</button>';
+        btns += (GameState.baseScore < 2) ? '<button class="pixel-btn bg-yellow-500" onclick="makeCall(2)">2分</button>' : '<button class="pixel-btn bg-gray-600" disabled>2分</button>';
+        btns += (GameState.baseScore < 3) ? '<button class="pixel-btn bg-red-500" onclick="makeCall(3)">3分</button>' : '<button class="pixel-btn bg-gray-600" disabled>3分</button>';
+        document.getElementById('controls').innerHTML = btns;
+    }
+    function makeCall(score) {
+        if (GameState.phase !== 'calling' || GameState.currentPlayer !== GameState.myIndex) return;
+        clearTimer();
+        sendAction({ type: 'call', score });
+    }
+    function executeCall(player, score) {
+        if (score === 0) GameState.callScores[player] = -1;
+        else { GameState.callScores[player] = score; GameState.baseScore = Math.max(GameState.baseScore, score); GameState.landlord = player; }
+        let allFinished = GameState.callScores.every(s => s !== 0);
+        if (score === 3 || allFinished) {
+            if (GameState.landlord < 0) { showToast("无人叫地主，重新发牌"); initGame(); return; }
+            setTimeout(becomeLandlord, 500);
+        } else {
+            GameState.currentPlayer = (GameState.currentPlayer + 1) % 3;
+            broadcastFullState();
+            processOnlineCallTurn();
+        }
+    }
+    function updateOnlineCallStatus(id) {
+        ['leftStatus','rightStatus','playerStatus'].forEach((el,i)=>{
+            let label = i===0?'你':(i===1?'农民A':'农民B');
+            document.getElementById(el).textContent = (i===id) ? (label+'叫分中...') : '';
+        });
+    }
+
+    // ---- 联机出牌 ----
+    function processOnlinePlay(id) {
+        if (GameState.phase !== 'playing') return;
+        ['leftStatus','rightStatus','playerStatus'].forEach((el,i)=>{
+            let label = i===0?'你':(i===1?'农民A':'农民B');
+            document.getElementById(el).textContent = (i===id) ? (label+'出牌') : '';
+        });
+        if (id === GameState.myIndex) {
+            document.getElementById('controls').innerHTML =
+                '<button id="playBtn" class="pixel-btn bg-green-500 min-w-[80px]" onclick="playCards()">出牌</button>' +
+                '<button id="passBtn" class="pixel-btn bg-gray-500 min-w-[80px]" onclick="passTurn()">不出</button>';
+            let playBtn = document.getElementById('playBtn'), passBtn = document.getElementById('passBtn');
+            if (playBtn) playBtn.disabled = (GameState.selectedCards.size === 0);
+            if (passBtn) passBtn.disabled = (!GameState.lastPlay || GameState.lastPlayerId === GameState.myIndex);
+            startOnlineTimer(10, () => {
+                if (GameState.phase === 'playing' && GameState.currentPlayer === GameState.myIndex) {
+                    if (GameState.lastPlay && GameState.lastPlayerId !== GameState.myIndex) sendAction({ type: 'pass' });
+                    else {
+                        let hand = GameState.players[GameState.myIndex];
+                        if (hand && hand.length > 0) sendAction({ type: 'play', cards: [hand[0]] });
+                    }
+                }
+            });
+        } else {
+            document.getElementById('controls').innerHTML = '<button class="pixel-btn bg-gray-600" disabled>等待出牌</button>';
+            showOnlineTimer(id);
+        }
+    }
+    function renderUI() {
+        renderPlayerHand();
+        updateCount(1);
+        updateCount(2);
+        document.getElementById('scoreDisplay').innerHTML = `底分: ${GameState.baseScore}${GameState.bombCount>0?` ×${Math.pow(2,GameState.bombCount)}`:''}`;
+        document.getElementById('lastPlayer').textContent = GameState.lastPlayerId>=0 ? `上次:${getPlayerName(GameState.lastPlayerId)}` : '';
+        let area = document.getElementById('playArea');
+        if (GameState.lastPlay) {
+            area.innerHTML = '';
+            GameState.lastPlay.cards.forEach(c=>{
+                let d=document.createElement('div'); d.className=`card w-10 h-14 text-[8px] flex flex-col items-center justify-center bg-white border ${c.suit==='♥'||c.suit==='♦'?'text-red-500':'text-black'}`;
+                d.innerHTML=`<div>${c.suit}</div><div>${c.rank}</div>`; area.appendChild(d);
+            });
+        } else area.innerHTML = '<span class="text-gray-500 text-[10px]">等待出牌...</span>';
+        document.getElementById('coins').textContent = GameState.coins;
+    }
+
+    // ---- 倒计时 ----
+    let timerTarget = null;
+    function startOnlineTimer(seconds, onTimeout) {
+        clearTimer();
+        remainingSeconds = seconds;
+        timerTarget = onTimeout;
+        timerInterval = setInterval(() => {
+            if (remainingSeconds <= 0) { clearTimer(); if (timerTarget) timerTarget(); }
+            else { remainingSeconds--; updateTimerBars(); }
+        }, 1000);
+        updateTimerBars();
+    }
+    function clearTimer() {
+        if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+        timerTarget = null;
+        document.getElementById('playerTimerBar').style.display = 'none';
+        document.getElementById('playerTimerFill').style.width = '0';
+        document.getElementById('leftTimerFill').style.width = '0';
+        document.getElementById('rightTimerFill').style.width = '0';
+    }
+    function updateTimerBars() {
+        let pct = (remainingSeconds / 10) * 100;
+        if (GameState.currentPlayer === GameState.myIndex) {
+            document.getElementById('playerTimerBar').style.display = 'block';
+            document.getElementById('playerTimerFill').style.width = pct + '%';
+        } else {
+            document.getElementById('playerTimerBar').style.display = 'none';
+        }
+        if (GameState.currentPlayer === 1) document.getElementById('leftTimerFill').style.width = pct + '%';
+        else document.getElementById('leftTimerFill').style.width = '0';
+        if (GameState.currentPlayer === 2) document.getElementById('rightTimerFill').style.width = pct + '%';
+        else document.getElementById('rightTimerFill').style.width = '0';
+    }
+    function showOnlineTimer(id) {
+        if (id === 1) document.getElementById('leftTimerFill').style.width = '100%';
+        else if (id === 2) document.getElementById('rightTimerFill').style.width = '100%';
+        document.getElementById('playerTimerBar').style.display = 'none';
+    }
+
+    // ---- 断线处理 ----
+    function handleDisconnect(dcIdx) {
+        if (GameState.phase === 'gameover') return;
+        showToast(`${getPlayerName(dcIdx)}掉线，AI将自动接管`);
+        let disconnectedPlayer = dcIdx;
+        if (GameState.myRole === 'host' && (GameState.phase === 'calling' || GameState.phase === 'playing')) {
+            let ai = new MasterAI(disconnectedPlayer, 'easy', GameState.cardMemory || new MasterMemory());
+            if (GameState.phase === 'calling') {
+                let score = ai.think('call', GameState);
+                executeCall(disconnectedPlayer, score);
+                broadcastFullState();
+            } else if (GameState.phase === 'playing' && GameState.currentPlayer === disconnectedPlayer) {
+                let cards = ai.think('play', GameState);
+                if (cards && cards.length > 0) {
+                    let isValid = cards.every(c => GameState.players[disconnectedPlayer].includes(c));
+                    let typeValid = getCardType(cards) !== null;
+                    if (isValid && typeValid) { executePlayCards(disconnectedPlayer, cards); return; }
+                }
+                executePlayCards(disconnectedPlayer, []);
+            } else if (GameState.phase === 'playing') {
+                broadcastFullState();
+            }
+        }
+    }
+
+    // ======================== 结算 ========================
     function endGame(winner) {
-        if (GameState.phase === 'gameover') return; // 防止重复调用
+        if (GameState.phase === 'gameover') return;
         GameState.phase = 'gameover';
-        let isPlayerWin = (winner===0) || (winner!==0 && GameState.landlord!==0 && winner!==GameState.landlord);
+        clearTimer();
+        let isPlayerWin = (GameState.mode === 'single')
+            ? ((winner===0) || (winner!==0 && GameState.landlord!==0 && winner!==GameState.landlord))
+            : (winner === GameState.myIndex);
         let isLordWin = (winner === GameState.landlord);
-        let multiplier = GameState.currentScore * Math.pow(2, GameState.bombCount);
+        let multiplier = GameState.baseScore * Math.pow(2, GameState.bombCount);
         let isSpring = false, isAntiSpring = false;
         if (isLordWin && !GameState.farmerPlayed && GameState.firstPlayMade) isSpring = true;
         if (!isLordWin && GameState.lordPlayCount === 1 && GameState.firstPlayMade) isAntiSpring = true;
@@ -964,36 +1775,36 @@
             content.innerHTML = `失去 ${amount} 筹码<br>余额：${GameState.coins}`;
         }
         addHistory(isPlayerWin ? '🎉胜利！' : '💔失败');
-        // 清理 processing 标志，避免卡死
         GameState.processing = false;
-        // 禁用出牌按钮，防止游戏结束后还能操作
         const playBtn = document.getElementById('playBtn');
         const passBtn = document.getElementById('passBtn');
         if (playBtn) playBtn.disabled = true;
         if (passBtn) passBtn.disabled = true;
+        if (GameState.mode === 'online' && GameState.myRole === 'host') broadcastFullState();
     }
     function resetGame() {
-        // 清理所有计时器
         if (callTimeout) clearTimeout(callTimeout);
+        clearTimer();
         document.getElementById('gameOverScreen').classList.add('hidden');
         document.getElementById('playArea').innerHTML = '<span class="text-gray-500 text-[10px]">等待出牌...</span>';
         document.getElementById('lastPlayer').textContent = '';
         GameState.selectedCards.clear();
-        document.getElementById('controls').innerHTML = `<button id="callBtn" class="pixel-btn bg-green-500 text-[10px]" onclick="callScore(0)">不叫</button><button id="oneBtn" class="pixel-btn bg-blue-500 text-[10px]" onclick="callScore(1)">1分</button><button id="twoBtn" class="pixel-btn bg-yellow-500 text-[10px]" onclick="callScore(2)">2分</button><button id="threeBtn" class="pixel-btn bg-red-500 text-[10px]" onclick="callScore(3)">3分</button>`;
-        initGame();
+        if (GameState.mode === 'online' && GameState.myRole !== 'host') {
+            document.getElementById('controls').innerHTML = '<p class="text-gray-400 text-[10px]">等待房主开始新对局…</p>';
+            showToast("等待房主开始新游戏");
+        } else {
+            document.getElementById('controls').innerHTML =
+                '<button id="callBtn" class="pixel-btn bg-green-500 text-[10px]" onclick="callScore(0)">不叫</button>' +
+                '<button id="oneBtn" class="pixel-btn bg-blue-500 text-[10px]" onclick="callScore(1)">1分</button>' +
+                '<button id="twoBtn" class="pixel-btn bg-yellow-500 text-[10px]" onclick="callScore(2)">2分</button>' +
+                '<button id="threeBtn" class="pixel-btn bg-red-500 text-[10px]" onclick="callScore(3)">3分</button>';
+            initGame();
+        }
     }
-    function showToast(msg) { let existing = document.querySelector('.toast'); if(existing) existing.remove(); let div = document.createElement('div'); div.className = 'toast'; div.textContent = msg; document.body.appendChild(div); setTimeout(()=>div.remove(),2000); }
-    function toggleRules() { document.getElementById('rulesModal').classList.toggle('hidden'); }
-    function changeDifficulty(val) { GameState.difficulty = val; if(GameState.aiList[1]) { GameState.aiList[1].difficulty = val; GameState.aiList[2].difficulty = val; } }
-    function updateStats() { document.getElementById('coins').textContent = GameState.coins; }
-    function updateCount(idx) { document.getElementById(idx===1?'leftCount':'rightCount').textContent = GameState.players[idx].length; }
-    window.addEventListener('resize', ()=>{ if(GameState.players[0].length) renderPlayerHand(); });
+    window.addEventListener('resize', ()=>{ if(GameState.players[GameState.myIndex]?.length) renderPlayerHand(); });
     window.onload = () => {
         loadHistory();
         if (window.speechSynthesis) { window.speechSynthesis.getVoices(); selectedVoice = getChineseVoice(); }
-        // 确保战绩按钮能正常关闭模态框（防止某些情况下点击关闭无效）
-        const closeBtn = document.querySelector('#statsModal .modal-content button:last-child');
-        if (closeBtn) closeBtn.onclick = closeStatsModal;
     };
     window.onbeforeunload = () => { saveHistory(); };
 </script>
