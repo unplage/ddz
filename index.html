@@ -87,6 +87,7 @@
                 <option value="medium">中等</option>
                 <option value="hard" selected>大师级</option>
                 <option value="grandmaster">宗师级</option>
+                <option value="legendary">传奇级</option>
             </select>
             <select id="aiSpeed" class="speed-select" onchange="changeSpeed(this.value)"><option value="fast">快速</option><option value="normal" selected>中等</option><option value="slow">慢速</option></select>
             <div id="voiceToggle" class="voice-btn pixel-btn" style="background:#333; padding:4px 8px;" onclick="toggleVoice()">🔊 开</div>
@@ -306,7 +307,10 @@
 
     function initAudio() { if (!audioCtx && audioEnabled) { audioCtx = new AudioContext(); if (audioCtx.state === 'suspended') audioCtx.resume(); } }
     function playSound(type) {
-        if (!audioEnabled || !audioCtx) return;
+        if (!audioEnabled) return;
+        if (!audioCtx) initAudio();
+        if (!audioCtx) return;
+        if (audioCtx.state === 'suspended') audioCtx.resume();
         const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
         osc.connect(gain); gain.connect(audioCtx.destination);
         const now = audioCtx.currentTime;
@@ -362,7 +366,7 @@
     class MasterMemory {
         constructor() {
             this.remain = new Array(15).fill(4);
-            this.remain[13] = 2; this.remain[14] = 2;
+            this.remain[13] = 1; this.remain[14] = 1;
             this.seen = new Set();
             this.history = [];
             this.playerHistory = [[], [], []];
@@ -633,7 +637,7 @@
         return score;
     }
 
-    function simulateOpponentResponseV2(play, hand, state, role, memory) {
+    function simulateOpponentResponseV2(play, hand, state, role, memory, depth = 1) {
         let newHand = hand.filter(c => !play.includes(c));
         let newState = JSON.parse(JSON.stringify(state));
         newState.players[state.currentPlayer] = newHand;
@@ -644,8 +648,12 @@
         function sampleOpponentPlays(oppHand, targetPlay) {
             let plays = getAllValidPlays(oppHand, targetPlay);
             if (!plays || plays.length === 0) return null;
-            if (plays.length <= 3) return plays;
-            return [plays[0], plays[Math.floor(plays.length/2)], plays[plays.length-1]];
+            let n = depth >= 2 ? 5 : 3;
+            if (plays.length <= n) return plays;
+            let step = Math.floor(plays.length / n);
+            let result = [];
+            for (let i = 0; i < n; i++) result.push(plays[Math.min(i * step, plays.length - 1)]);
+            return result;
         }
 
         function evalState(s, pid, myRoleId, depth) {
@@ -713,10 +721,11 @@
         if (!opponentPlays || opponentPlays.length === 0) {
             let thirdPlayer = (nextPlayer + 1) % 3;
             if (newState.players[thirdPlayer].length === 0) score = -60;
-            else score = evalState(newState, thirdPlayer, role, 1);
+            else score = evalState(newState, thirdPlayer, role, depth);
         } else {
-            let samples = opponentPlays.length <= 3 ? opponentPlays :
-                [opponentPlays[0], opponentPlays[Math.floor(opponentPlays.length/2)], opponentPlays[opponentPlays.length-1]];
+            let n = depth >= 2 ? 5 : 3;
+            let samples = opponentPlays.length <= n ? opponentPlays :
+                (() => { let step = Math.floor(opponentPlays.length / n); let r = []; for (let i = 0; i < n; i++) r.push(opponentPlays[Math.min(i * step, opponentPlays.length - 1)]); return r; })();
             let weighted = 0, count = 0;
             for (let sp of samples) {
                 let s2 = JSON.parse(JSON.stringify(newState));
@@ -728,7 +737,7 @@
                     weighted += wRole === role ? -60 : 60;
                 } else {
                     let third = (nextPlayer + 1) % 3;
-                    weighted += evalState(s2, third, role, 1);
+                    weighted += evalState(s2, third, role, depth);
                 }
                 count++;
             }
@@ -977,6 +986,25 @@
                 if (strength > 22 && curr < 1) return 1; 
                 return 0;
             }
+            if (this.difficulty === 'legendary') {
+                let strength = evaluateHandStrength(state.players[this.id], this.memory, false, this.id);
+                let bestBid = 0, bestEV = -999;
+                for (let bid = 1; bid <= 3; bid++) {
+                    if (bid <= curr) continue;
+                    let sim = JSON.parse(JSON.stringify(state));
+                    sim.players[this.id] = [...sim.players[this.id], ...sim.lordCards];
+                    sim.landlord = this.id;
+                    let wins = 0, trials = 200;
+                    for (let i = 0; i < trials; i++) {
+                        let rs = JSON.parse(JSON.stringify(sim));
+                        if (randomPlayout(rs, (this.id + 1) % 3, this.id)) wins++;
+                    }
+                    let winRate = wins / trials;
+                    let ev = winRate * bid - (1 - winRate) * bid * 2;
+                    if (ev > bestEV) { bestEV = ev; bestBid = bid; }
+                }
+                return bestBid;
+            }
             let strength = evaluateHandStrength(state.players[this.id], this.memory, false, this.id);
             let bombBonus = 0;
             let values = state.players[this.id].map(c=>c.value);
@@ -1009,15 +1037,15 @@
                 }
             }
 
-            let endgameLimit = this.difficulty === 'grandmaster' ? 10 : 8;
+            let endgameLimit = this.difficulty === 'legendary' ? 13 : (this.difficulty === 'grandmaster' ? 10 : 8);
             if (hand.length <= endgameLimit) {
                 let egResult = solveEndgame(state, this.id);
                 if (egResult) return egResult;
             }
 
-            let mctsLimit = this.difficulty === 'grandmaster' ? 12 : 10;
-            let mctsIters = this.difficulty === 'grandmaster' ? 500 : 300;
-            if ((this.difficulty === 'hard' || this.difficulty === 'grandmaster') && hand.length <= mctsLimit) {
+            let mctsLimit = this.difficulty === 'legendary' ? 15 : (this.difficulty === 'grandmaster' ? 12 : 10);
+            let mctsIters = this.difficulty === 'legendary' ? 2000 : (this.difficulty === 'grandmaster' ? 500 : 300);
+            if ((this.difficulty === 'hard' || this.difficulty === 'grandmaster' || this.difficulty === 'legendary') && hand.length <= mctsLimit) {
                 let mctsResult = monteCarloSearch(state, this.id, mctsIters);
                 if (mctsResult) return mctsResult;
             }
@@ -1038,12 +1066,18 @@
                 if ((this.difficulty === 'hard' || this.difficulty === 'grandmaster') && hand.length <= 12) {
                     simScore = simulateOpponentResponseV2(play, hand, state, role, this.memory);
                 }
+                if (this.difficulty === 'legendary' && hand.length <= 15) {
+                    simScore = simulateOpponentResponseV2(play, hand, state, role, this.memory, 2);
+                    let newHand = hand.filter(c => !play.includes(c));
+                    let dpPlan = decomposeHandDP(newHand);
+                    simScore += dpPlan.score * 0.3;
+                }
                 return { play, score: baseScore + simScore * 0.4 };
             });
             scored.sort((a,b)=>b.score - a.score);
 
             let isCritical = (hand.length <= 3) || (this.memory.getMaxOutside(hand) <= 12 && hand.length <= 5);
-            let randomFactor = this.difficulty === 'grandmaster' ? 0.05 : (this.difficulty === 'hard' ? 0.1 : (this.difficulty === 'medium' ? 0.3 : 0.6));
+            let randomFactor = this.difficulty === 'legendary' ? 0 : (this.difficulty === 'grandmaster' ? 0.05 : (this.difficulty === 'hard' ? 0.1 : (this.difficulty === 'medium' ? 0.3 : 0.6)));
             if (!isCritical && Math.random() < randomFactor && scored.length > 1) return scored[1].play;
             return scored[0].play;
         }
@@ -1069,7 +1103,7 @@
             if (twoPlay) return twoPlay;
 
             if (role === 'landlord') {
-                let dpLimit = 10; 
+                let dpLimit = this.difficulty === 'legendary' ? 15 : 10; 
                 if (hand.length <= dpLimit) {
                     let plan = decomposeHandDP(hand);
                     if (plan.plays.length > 0) {
@@ -1117,7 +1151,7 @@
                     if (bigSingle) return bigSingle;
                 }
 
-                let dpLimit = 10;
+                let dpLimit = this.difficulty === 'legendary' ? 15 : 10;
                 if (hand.length <= dpLimit) {
                     let plan = decomposeHandDP(hand);
                     if (plan.plays.length > 0) {
@@ -1327,8 +1361,8 @@
         
         showLordCards();
         
-        if (GameState.mode === 'single') setTimeout(processPlayPhase, 600);
-        else { broadcastFullState(); setTimeout(processPlayPhase, 600); }
+        if (GameState.mode === 'single') setTimeout(processPlayPhase, 3000);
+        else { broadcastFullState(); setTimeout(processPlayPhase, 3000); }
     }
 
     function showLordCards() {
@@ -1473,6 +1507,7 @@
             area.appendChild(div);
         });
         bottomCardsShown = false;
+        document.getElementById('lastPlayer').textContent = '';
     }
 
     // ======================== UI ========================
@@ -1932,7 +1967,7 @@
         showToast(`${getPlayerName(dcIdx)}掉线，AI将自动接管`);
         let disconnectedPlayer = dcIdx;
         if (GameState.myRole === 'host' && (GameState.phase === 'calling' || GameState.phase === 'playing')) {
-            let ai = new MasterAI(disconnectedPlayer, 'medium', GameState.cardMemory || new MasterMemory());
+            let ai = new MasterAI(disconnectedPlayer, GameState.difficulty, GameState.cardMemory || new MasterMemory());
             if (GameState.phase === 'calling' && GameState.currentPlayer === disconnectedPlayer) {
                 let score = ai.think('call', GameState);
                 executeCall(disconnectedPlayer, score);
