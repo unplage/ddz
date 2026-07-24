@@ -1257,11 +1257,7 @@
     }
 
     function startSingleMode() {
-        if (voiceEnabled && window.speechSynthesis) {
-            if (!selectedVoice) selectedVoice = getChineseVoice();
-            let unlockUtt = new SpeechSynthesisUtterance(' ');
-            window.speechSynthesis.speak(unlockUtt);
-        }
+        if (voiceEnabled && window.speechSynthesis && !selectedVoice) selectedVoice = getChineseVoice();
         GameState.mode = 'single';
         GameState.myIndex = 0;
         document.getElementById('startScreen').classList.add('hidden');
@@ -1478,6 +1474,8 @@
                 playSound('bomb');
                 triggerBombFlash(); 
                 addHistory(`💣 炸弹！倍数x2`);
+            } else {
+                playSound('play');
             }
             if (GameState.mode === 'single' && GameState.cardMemory) GameState.cardMemory.recordPlayerPlay(player, cards);
             displayPlayed(cards);
@@ -1576,9 +1574,6 @@
         if (audioEnabled) {
             if (!audioCtx) initAudio();
             else if (audioCtx.state === 'suspended') audioCtx.resume();
-        }
-        if (voiceEnabled && window.speechSynthesis) {
-            window.speechSynthesis.cancel();
         }
         if (GameState.phase !== 'playing' || GameState.currentPlayer !== GameState.myIndex || GameState.processing) return;
         let card = GameState.players[GameState.myIndex].find(c=>c.id===cardId);
