@@ -18,7 +18,7 @@ python3 -m http.server 8080
 - **AI 引擎** — 增强大师级 AI，含 DP 手牌分解、MCTS 蒙特卡洛搜索、残局极小化搜索、两轮预测
 - **记牌器** — 跟踪剩余牌分布、炸弹可能性、对手手牌推测
 - **牌型识别** — 全牌型：单张、对子、三带一/对、顺子(5+)、连对(3+)、四带二、炸弹、王炸
-- **语音播报** — Web Speech API 中文语音（仅单机模式）
+- **语音播报** — Web Speech API 中文语音（单机 / 联机双模式）
 - **音效** — Web Audio API 合成，无需音频文件
 - **PWA 离线缓存** — Service Worker 自动缓存，断网可玩
 - **战绩持久化** — localStorage 存储金币、胜负统计、历史记录
@@ -28,7 +28,7 @@ python3 -m http.server 8080
 
 | 文件 | 说明 |
 |------|------|
-| `index.html` | 完整应用（HTML + CSS + JS，约 1800 行） |
+| `index.html` | 完整应用（HTML + CSS + JS，约 2100 行） |
 | `sw.js` | Service Worker，离线缓存 |
 | `manifest.json` | PWA 清单 |
 

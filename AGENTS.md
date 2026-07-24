@@ -6,7 +6,7 @@
 
 | 文件 | 内容 |
 |---|---|
-| `index.html` | 完整应用，含单机 vs AI + P2P联机（1382行） |
+| `index.html` | 完整应用，含单机 vs AI + P2P联机（约2100行） |
 | `sw.js` | Service Worker，离线缓存 |
 | `manifest.json` | PWA 清单 |
 
@@ -50,3 +50,4 @@
 - 牌型枚举定义在 `CardType` 常量对象
 - 联机叫分/出牌均 10 秒超时，超时自动弃权
 - 掉线玩家由 easy 难度 AI 自动托管，对局继续
+- **提交到 GitHub 时需同时 commit index.html 和 sw.js**（sw.js 变更虽少但需同步）
