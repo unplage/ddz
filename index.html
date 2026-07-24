@@ -195,12 +195,14 @@
         if (!voiceEnabled) return false;
         if (!window.speechSynthesis) return false;
         window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = 'zh-CN';
-        utterance.rate = 0.9;
-        if (selectedVoice) utterance.voice = selectedVoice;
-        utterance.onerror = (e) => console.error("语音错误", e);
-        setTimeout(() => window.speechSynthesis.speak(utterance), 50);
+        setTimeout(() => {
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'zh-CN';
+            utterance.rate = 0.9;
+            if (selectedVoice) utterance.voice = selectedVoice;
+            utterance.onerror = (e) => console.error("语音错误", e);
+            window.speechSynthesis.speak(utterance);
+        }, 50);
         return true;
     }
 
@@ -208,7 +210,12 @@
         voiceEnabled = !voiceEnabled;
         document.getElementById('voiceToggle').innerHTML = voiceEnabled ? '🔊 开' : '🔇 关';
         showToast(voiceEnabled ? '语音播报开' : '语音播报关');
-        if (!voiceEnabled) window.speechSynthesis && window.speechSynthesis.cancel();
+        if (voiceEnabled && window.speechSynthesis) {
+            let unlockUtt = new SpeechSynthesisUtterance(' ');
+            window.speechSynthesis.speak(unlockUtt);
+        } else if (!voiceEnabled) {
+            window.speechSynthesis && window.speechSynthesis.cancel();
+        }
     }
 
     function speakPlay(cards) {
@@ -1253,7 +1260,11 @@
     }
 
     function startSingleMode() {
-        if (voiceEnabled && window.speechSynthesis && !selectedVoice) selectedVoice = getChineseVoice();
+        if (voiceEnabled && window.speechSynthesis) {
+            if (!selectedVoice) selectedVoice = getChineseVoice();
+            let unlockUtt = new SpeechSynthesisUtterance(' ');
+            window.speechSynthesis.speak(unlockUtt);
+        }
         GameState.mode = 'single';
         GameState.myIndex = 0;
         document.getElementById('startScreen').classList.add('hidden');
