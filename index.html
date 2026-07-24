@@ -1480,7 +1480,6 @@
             
             if (GameState.players[player].length === 0) { endGame(player); return; }
             if (GameState.players[player].length <= 3) showToast(getPlayerName(player)+' 剩'+GameState.players[player].length+'张！');
-            playSound('play');
         }
         GameState.currentPlayer = (player+1)%3;
         nextPlayStep();
