@@ -194,15 +194,12 @@
     function speakNow(text) {
         if (!voiceEnabled) return false;
         if (!window.speechSynthesis) return false;
-        window.speechSynthesis.cancel();
-        setTimeout(() => {
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = 'zh-CN';
-            utterance.rate = 0.9;
-            if (selectedVoice) utterance.voice = selectedVoice;
-            utterance.onerror = (e) => console.error("语音错误", e);
-            window.speechSynthesis.speak(utterance);
-        }, 50);
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'zh-CN';
+        utterance.rate = 0.9;
+        if (selectedVoice) utterance.voice = selectedVoice;
+        utterance.onerror = (e) => console.error("语音错误", e);
+        window.speechSynthesis.speak(utterance);
         return true;
     }
 
@@ -1581,6 +1578,9 @@
         if (audioEnabled) {
             if (!audioCtx) initAudio();
             else if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+        if (voiceEnabled && window.speechSynthesis) {
+            window.speechSynthesis.cancel();
         }
         if (GameState.phase !== 'playing' || GameState.currentPlayer !== GameState.myIndex || GameState.processing) return;
         let card = GameState.players[GameState.myIndex].find(c=>c.id===cardId);
