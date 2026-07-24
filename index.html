@@ -70,6 +70,7 @@
         .peer-id { background: #1e1e2e; border: 1px solid #555; border-radius: 4px; padding: 8px; font-size: 10px; word-break: break-all; margin: 8px 0; }
         .badge { background: rgba(0,0,0,0.6); border-radius: 12px; padding: 2px 8px; font-size: 9px; }
         .status-online { color: #4ade80; }
+        .lord-card { background: #ffd700 !important; border-color: #b8860b !important; box-shadow: 0 0 20px rgba(255,215,0,0.6); transform: scale(1.05); }
     </style>
 </head>
 <body class="text-white safe-area-top safe-area-bottom">
@@ -98,7 +99,7 @@
         <div class="play-area"><div id="playTable" class="flex flex-col items-center gap-2 w-full"><div class="text-[10px] text-yellow-400 mb-1" id="scoreDisplay">底分: 1</div><div class="flex gap-1 justify-center min-h-[50px] items-center bg-black/20 rounded-lg p-2 w-full" id="playArea"><span class="text-gray-500 text-[10px]">等待出牌...</span></div><div class="text-[10px] text-white/70" id="lastPlayer"></div></div></div>
         <div class="history-log" id="historyLog">📜 出牌记录</div>
         <div class="player-area safe-area-bottom">
-            <div class="text-yellow-400 text-[11px] retro-text text-center mb-1 h-5" id="playerStatus">点击选牌，长按拖动排序</div>
+            <div class="text-yellow-400 text-[11px] retro-text text-center mb-1 h-5" id="playerStatus">点击选牌，拖动排序（桌面端）</div>
             <div class="quick-actions">
                 <div class="icon-btn" onclick="showHint()" title="提示">💡</div>
                 <div class="icon-btn" onclick="resetSelection()" title="重置">🔄</div>
@@ -162,11 +163,13 @@
     let timerInterval = null;
     let remainingSeconds = 0;
     let timerPlayerId = -1;
+    let timerTotalSeconds = 15; // 修复: 动态记录总时间
     let matchHistory = [];
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     let audioCtx = null;
-    let prevLastPlayId = -1; // 用于防重复触发炸弹动画
+    let prevLastPlayId = -1;
     let prevLastPlayType = null;
+    let bottomCardsShown = false;
 
     function changeSpeed(val) { aiSpeed = val; }
     function toggleSound() { 
@@ -444,7 +447,7 @@
     function evaluateHandStrength(hand, memory, isLandlord, callPosition) {
         let score = 0, values = hand.map(c=>c.value), cnt = countValues(values);
         for (let v in cnt) {
-            if (cnt[v] === 4) score += 35;
+            if (cnt[v] === 4) score += 50; // 提高炸弹评分
             else if (cnt[v] === 3) score += 10;
             else if (cnt[v] === 2) score += 3;
         }
@@ -557,6 +560,18 @@
         let playPower = getPlayPower(play);
         let isBomb = [CardType.BOMB, CardType.ROCKET].includes(playType.type);
         let needBeat = (lastPlay && state.lastPlayerId !== state.currentPlayer);
+        
+        // 修复: 动态计算队友ID
+        let partnerId = -1;
+        if (role === 'farmer') {
+            for (let i = 0; i < 3; i++) {
+                if (i !== state.currentPlayer && i !== state.landlord) {
+                    partnerId = i;
+                    break;
+                }
+            }
+        }
+        
         return {
             playLength: play.length, playPower, isBomb: isBomb ? 1 : 0, isRocket: (playType.type === CardType.ROCKET) ? 1 : 0,
             remainTotal: newHand.length, remainSingle: handFeatures.single, remainPair: handFeatures.pair,
@@ -564,7 +579,7 @@
             remainBigCards: handFeatures.bigCards, hasRocket: handFeatures.hasRocket,
             isLandlord: (role === 'landlord') ? 1 : 0, isFarmer: (role === 'farmer') ? 1 : 0,
             opponentHandCount: state.lastPlayerId !== -1 ? state.players[state.lastPlayerId].length : 0,
-            partnerHandCount: (role === 'farmer') ? (state.players[role === 'farmer' ? (state.landlord === 1 ? 2 : 1) : 0]?.length || 0) : 0,
+            partnerHandCount: (role === 'farmer' && partnerId !== -1) ? (state.players[partnerId]?.length || 0) : 0,
             outsideBombCount: memory.getOutsideBombCount(), isCritical: (newHand.length <= 3) ? 1 : 0,
             needBeat: needBeat ? 1 : 0, lastPlayType: lastPlay ? lastPlay.type : 'none', lastPlayPower: lastPlay ? lastPlay.value : 0
         };
@@ -575,10 +590,27 @@
     function scorePlay(features, role, memory, state, playerHand) {
         let score = 0;
         for (let key in WEIGHTS) if (features[key] !== undefined) score += features[key] * WEIGHTS[key];
+        
+        // 修复: 判断是否是队友出的牌
+        let isPartnerPlay = role === 'farmer' && state.lastPlayerId !== -1 && state.lastPlayerId !== state.currentPlayer && state.lastPlayerId !== state.landlord;
+        if (isPartnerPlay) {
+            // 队友出的牌
+            if (features.partnerHandCount <= 3) score -= 150; // 队友快赢了，坚决不接
+            if (features.lastPlayPower >= 40) score -= 50;    // 队友出的大牌，不接
+        }
+
         if (features.isFarmer && features.partnerHandCount <= 2 && features.playLength <= 2) score += 40;
         if (features.isFarmer && features.needBeat && features.lastPlayType === 'single' && features.lastPlayPower <= 10 && features.playPower > features.lastPlayPower && features.playPower - features.lastPlayPower <= 3) score += 30;
         if (features.needBeat && features.lastPlayPower >= 12 && features.remainTotal > 3 && features.playPower > features.lastPlayPower && features.playPower < 14) score -= 40;
         if (features.isLandlord && !features.needBeat && features.playLength === 1 && features.playPower <= 6) score += 20;
+
+        if (!features.needBeat && features.isLandlord && features.playLength <= 2) {
+            if (features.playPower <= 6) score += 30;   
+            if (features.playPower >= 12) score -= 40;  
+        }
+        if (!features.needBeat && features.isFarmer && features.playLength === 1) {
+            if (features.playPower >= 12) score -= 30;  
+        }
 
         let oppAboutToWin = state.lastPlayerId >= 0 && state.players[state.lastPlayerId] && state.players[state.lastPlayerId].length <= 3;
         let farmerWinPossible = role === 'farmer' && oppAboutToWin && features.needBeat;
@@ -589,6 +621,11 @@
         if ((features.isBomb || features.isRocket) && features.remainTotal <= 2) score += 150;
         if (features.isBomb && memory.getOutsideBombCount() <= 1 && !memory.getOutsideRocketPossible()) score += 30;
         if (features.isRocket) score += 20;
+        
+        // 优化: 抑制早期出炸弹
+        if ((features.isBomb || features.isRocket) && features.needBeat && features.remainTotal > 5) {
+            if (features.lastPlayPower < 40) score -= 100; // 对方出小牌坚决不炸
+        }
         if ((features.isBomb || features.isRocket) && features.needBeat && features.remainTotal > 6 && !oppAboutToWin) score -= 60;
 
         if (features.needBeat && features.remainTotal <= 3 && features.remainTotal + features.playLength <= (playerHand ? playerHand.length : 20)) score += 80;
@@ -944,7 +981,7 @@
             let bombBonus = 0;
             let values = state.players[this.id].map(c=>c.value);
             let cnt = countValues(values);
-            for (let v in cnt) if (cnt[v] === 4) bombBonus += 15;
+            for (let v in cnt) if (cnt[v] === 4) bombBonus += 20; // 提高炸弹叫分权重
             if (cnt[13] === 1 && cnt[14] === 1) bombBonus += 20;
             strength += bombBonus;
             let singlePenalty = Object.values(cnt).filter(c => c === 1).length * 3;
@@ -960,7 +997,17 @@
             if (hand.length === 0) return [];
             let lastPlay = state.lastPlay;
             let role = (this.id === state.landlord) ? 'landlord' : 'farmer';
-            let partnerId = (role === 'farmer') ? (this.id === 1 ? 2 : 1) : null;
+            
+            // 修复: 动态计算队友ID
+            let partnerId = null;
+            if (role === 'farmer') {
+                for (let i = 0; i < 3; i++) {
+                    if (i !== this.id && i !== state.landlord) {
+                        partnerId = i;
+                        break;
+                    }
+                }
+            }
 
             let endgameLimit = this.difficulty === 'grandmaster' ? 10 : 8;
             if (hand.length <= endgameLimit) {
@@ -978,7 +1025,7 @@
             let allPlays = getAllValidPlays(hand, null);
 
             if (!lastPlay || state.lastPlayerId === this.id) {
-                return this.selectLeadSmart(allPlays, role, hand, state);
+                return this.selectLeadSmart(allPlays, role, hand, state, partnerId);
             }
 
             let beatable = allPlays.filter(p => canBeat(getCardType(p), lastPlay));
@@ -1000,12 +1047,19 @@
             if (!isCritical && Math.random() < randomFactor && scored.length > 1) return scored[1].play;
             return scored[0].play;
         }
-        selectLeadSmart(plays, role, hand, state) {
+        selectLeadSmart(plays, role, hand, state, partnerId) {
             if (plays.length === 0) return [];
-            let partnerId = role === 'farmer' ? (this.id === 1 ? 2 : 1) : null;
 
             let fullHouse = plays.find(p => p.length === hand.length);
             if (fullHouse) return fullHouse;
+
+            if (role === 'landlord') {
+                let smallSingle = plays.filter(p => p.length === 1 && p[0].value <= 6);
+                if (smallSingle.length > 0) return smallSingle.reduce((a,b) => a[0].value < b[0].value ? a : b);
+                let smallPair = plays.filter(p => p.length === 2 && getCardType(p).value <= 6);
+                if (smallPair.length > 0) return smallPair.reduce((a,b) => getCardType(a).value < getCardType(b).value ? a : b);
+            }
+
             let twoPlay = plays.find(p => {
                 if (p.length === hand.length) return true;
                 let rest = hand.filter(c => !p.includes(c));
@@ -1035,35 +1089,45 @@
                         if (bestLead) return bestLead;
                     }
                 }
-                let smallSingle = plays.filter(p => p.length === 1 && p[0].value <= 6);
-                if (smallSingle.length > 0) {
-                    let worst = smallSingle.reduce((a,b) => a[0].value < b[0].value ? a : b);
-                    return worst;
-                }
-                let smallPair = plays.filter(p => p.length === 2 && getCardType(p).value <= 6);
-                if (smallPair.length > 0) {
-                    let worst = smallPair.reduce((a,b) => getCardType(a).value < getCardType(b).value ? a : b);
-                    return worst;
-                }
+                let smallSingle2 = plays.filter(p => p.length === 1 && p[0].value <= 6);
+                if (smallSingle2.length > 0) return smallSingle2.reduce((a,b) => a[0].value < b[0].value ? a : b);
+                let smallPair2 = plays.filter(p => p.length === 2 && getCardType(p).value <= 6);
+                if (smallPair2.length > 0) return smallPair2.reduce((a,b) => getCardType(a).value < getCardType(b).value ? a : b);
                 let straightPlays = plays.filter(p => getCardType(p)?.type === CardType.STRAIGHT);
-                if (straightPlays.length) return straightPlays.sort((a,b)=>a.length-b.length)[0];
+                if (straightPlays.length) return straightPlays.sort((a,b)=>b.length-a.length)[0]; // 出最长顺子
                 return plays.sort((a,b)=>getPlayPower(a)-getPlayPower(b))[0];
             } else {
+                // 修复: 农民配合逻辑
+                let isLordNext = (state.landlord + 1) % 3 === this.id;
+                let partnerCount = state.players[partnerId !== null ? partnerId : -1]?.length || 20;
+                
+                if (partnerCount <= 3) {
+                    // 队友快赢了，出小牌让他走
+                    let smallSingle = plays.find(p => p.length === 1 && p[0].value <= 10);
+                    if (smallSingle) return smallSingle;
+                }
+                
+                if (isLordNext) {
+                    // 地主下家，出小牌过牌
+                    let smallSingle = plays.find(p => p.length === 1 && p[0].value <= 10);
+                    if (smallSingle) return smallSingle;
+                } else {
+                    // 地主上家，出大牌顶地主
+                    let bigSingle = plays.find(p => p.length === 1 && p[0].value >= 11);
+                    if (bigSingle) return bigSingle;
+                }
+
                 let dpLimit = 10;
                 if (hand.length <= dpLimit) {
                     let plan = decomposeHandDP(hand);
                     if (plan.plays.length > 0) {
-                        let partnerCount = state.players[partnerId !== null ? partnerId : -1]?.length || 20;
                         let bestLead = null, bestLeadScore = -999;
                         for (let p of plan.plays) {
-                            let score = getPlayPower(p);
+                            let score = -getPlayPower(p); // 修复: 农民也倾向于出小牌
                             let type = getCardType(p);
                             if (type && (type.type === CardType.BOMB || type.type === CardType.ROCKET)) score -= 200;
                             if (p.length >= 3) score += 10;
-                            if (partnerCount <= 3) score -= 50;
-                            if (type && type.type === CardType.SINGLE && p[0].value >= 10) score += 20;
-                            if (type && type.type === CardType.SINGLE && p[0].value >= 7 && p[0].value <= 10) score += 5;
-                            if (type && (type.type === CardType.PAIR || type.type === CardType.TRIPLE)) score += 10;
+                            if (partnerCount <= 3) score += 50; // 队友快赢了，更倾向于出小牌
                             if (score > bestLeadScore) { bestLeadScore = score; bestLead = p; }
                         }
                         if (bestLead) return bestLead;
@@ -1125,6 +1189,7 @@
             GameState.connections = [];
         }
         GameState.phase = 'idle';
+        bottomCardsShown = false;
     }
 
     // ======================== 游戏初始化 ========================
@@ -1146,6 +1211,7 @@
         GameState.processing = false;
         singleCallCount = 0;
         GameState.history = [];
+        bottomCardsShown = false;
         addHistory('游戏开始');
         GameState.cardMemory = new MasterMemory();
         GameState.aiList = [null, new MasterAI(1, GameState.difficulty, GameState.cardMemory), new MasterAI(2, GameState.difficulty, GameState.cardMemory)];
@@ -1258,8 +1324,29 @@
         GameState.firstPlayMade = false; GameState.lordPlayCount = 0; GameState.farmerPlayed = false;
         GameState.passCount = 0;
         GameState.processing = false;
+        
+        showLordCards();
+        
         if (GameState.mode === 'single') setTimeout(processPlayPhase, 600);
         else { broadcastFullState(); setTimeout(processPlayPhase, 600); }
+    }
+
+    function showLordCards() {
+        if (!GameState.lordCards || GameState.lordCards.length === 0) return;
+        const area = document.getElementById('playArea');
+        area.innerHTML = '';
+        GameState.lordCards.forEach(card => {
+            let div = document.createElement('div');
+            div.className = `card lord-card w-8 h-11 bg-yellow-100 border-2 border-red-600 rounded flex flex-col items-center justify-center text-[8px] ${card.suit==='♥'||card.suit==='♦'||card.suit==='JOKER'?'text-red-500':'text-black'}`;
+            if (card.suit === 'JOKER') {
+                div.innerHTML = `<span>${card.rank[0]}</span>`;
+            } else {
+                div.innerHTML = `<span>${card.suit}</span><span>${card.rank}</span>`;
+            }
+            area.appendChild(div);
+        });
+        document.getElementById('lastPlayer').textContent = '底牌揭晓！';
+        bottomCardsShown = true;
     }
 
     // ======================== 出牌阶段 ========================
@@ -1274,6 +1361,7 @@
             GameState.lastPlay = null; GameState.lastPlayerId = -1;
             document.getElementById('playArea').innerHTML = '<span class="text-gray-500 text-[10px]">自由出牌</span>';
             GameState.passCount = 0;
+            bottomCardsShown = false;
         }
         if (GameState.mode === 'online') {
             processOnlinePlay(id);
@@ -1324,7 +1412,6 @@
         }
     }
 
-    // ======================== 执行出牌/不出 (共用) ========================
     function executePlayCards(player, cards) {
         clearTimer();
         let isPlay = (cards && cards.length > 0);
@@ -1389,6 +1476,7 @@
             area.appendChild(div);
         });
         document.getElementById('lastPlayer').textContent = getPlayerName(GameState.lastPlayerId) + ' 出了' + cards.length + '张';
+        bottomCardsShown = false;
     }
 
     // ======================== UI ========================
@@ -1397,7 +1485,6 @@
     function enableDragSort() {
         if (GameState.mode === 'online') return;
         const cards = document.querySelectorAll('#playerHand .card');
-        // 仅保留桌面端拖拽，移除移动端 Touch 拖拽以防 DOM 重建导致事件丢失
         cards.forEach((card, idx) => {
             card.setAttribute('draggable', 'true');
             card.ondragstart = (e) => { dragIndex = idx; e.dataTransfer.setData('text/plain', idx); e.target.classList.add('dragging'); };
@@ -1465,7 +1552,6 @@
         document.getElementById('previewPanel').innerText = type ? `牌型: ${type.type}` : '无效牌型';
     }
     
-    // 彻底修复联机左右映射：统一基于 myIndex 计算绝对位置
     function updateOpponentCount(player) {
         if (player === GameState.myIndex) return;
         let leftIdx = (GameState.myIndex + 1) % 3;
@@ -1524,6 +1610,8 @@
         if (GameState.mode === 'online') {
             sendAction({ type: 'play', cards });
             let playBtn = document.getElementById('playBtn'); if (playBtn) playBtn.disabled = true;
+            GameState.selectedCards.clear();
+            renderPlayerHand();
         } else {
             executePlayCards(GameState.myIndex, cards);
             GameState.selectedCards.clear();
@@ -1659,6 +1747,7 @@
         });
     }
     function handleSync(state) {
+        let prevPhase = GameState.phase;
         GameState.phase = state.phase;
         GameState.players = state.players.map(p=>[...p]);
         GameState.landlord = state.landlord;
@@ -1677,8 +1766,12 @@
         GameState.selectedCards.clear();
         renderUI();
         if (GameState.phase === 'calling') processOnlineCallTurn();
-        else if (GameState.phase === 'playing') processOnlinePlay(GameState.currentPlayer);
-        else if (GameState.phase === 'gameover') {
+        else if (GameState.phase === 'playing') {
+            if (prevPhase !== 'playing') {
+                showLordCards(); // 修复: 进入出牌阶段时显示底牌
+            }
+            processOnlinePlay(GameState.currentPlayer);
+        } else if (GameState.phase === 'gameover') {
             clearTimer();
             let isWin = false;
             if (GameState.landlord === GameState.myIndex) isWin = GameState.lastPlayerId === GameState.myIndex;
@@ -1775,28 +1868,32 @@
         document.getElementById('scoreDisplay').innerHTML = `底分: ${GameState.baseScore}${GameState.bombCount>0?` ×${Math.pow(2,GameState.bombCount)}`:''}`;
         document.getElementById('lastPlayer').textContent = GameState.lastPlayerId>=0 ? `上次:${getPlayerName(GameState.lastPlayerId)}` : '';
         let area = document.getElementById('playArea');
-        if (GameState.lastPlay && GameState.lastPlay.cards && GameState.lastPlay.cards.length > 0) {
+        if (bottomCardsShown && GameState.lordCards && GameState.lordCards.length > 0) {
+            // 保持底牌显示
+        } else if (GameState.lastPlay && GameState.lastPlay.cards && GameState.lastPlay.cards.length > 0) {
             area.innerHTML = '';
             GameState.lastPlay.cards.forEach(c=>{
                 let d=document.createElement('div'); d.className=`card w-10 h-14 text-[8px] flex flex-col items-center justify-center bg-white border ${c.suit==='♥'||c.suit==='♦'?'text-red-500':'text-black'}`;
                 d.innerHTML=`<div>${c.suit}</div><div>${c.rank}</div>`; area.appendChild(d);
             });
-            // 修复: 防止动画重复触发
             if ((GameState.lastPlay.type === CardType.BOMB || GameState.lastPlay.type === CardType.ROCKET) && (prevLastPlayId !== GameState.lastPlayerId || prevLastPlayType !== GameState.lastPlay.type)) {
                 triggerBombFlash();
             }
             prevLastPlayId = GameState.lastPlayerId;
             prevLastPlayType = GameState.lastPlay.type;
+            bottomCardsShown = false;
         } else {
             area.innerHTML = '<span class="text-gray-500 text-[10px]">等待出牌...</span>';
             prevLastPlayId = -1;
             prevLastPlayType = null;
+            bottomCardsShown = false;
         }
         document.getElementById('coins').textContent = GameState.coins;
     }
 
     function startOnlineTimer(seconds, onTimeout, playerId) {
         clearTimer();
+        timerTotalSeconds = seconds; // 记录总时间
         remainingSeconds = seconds;
         timerTarget = onTimeout;
         timerPlayerId = playerId !== undefined ? playerId : GameState.currentPlayer;
@@ -1815,7 +1912,7 @@
         document.getElementById('rightTimerFill').style.width = '0';
     }
     function updateTimerBars() {
-        let pct = (remainingSeconds / 15) * 100;
+        let pct = (remainingSeconds / timerTotalSeconds) * 100; // 动态计算百分比
         if (pct > 100) pct = 100; 
         let myIdx = GameState.myIndex;
         let leftIdx = (myIdx + 1) % 3;
@@ -1896,6 +1993,7 @@
         if (playBtn) playBtn.disabled = true;
         if (passBtn) passBtn.disabled = true;
         if (GameState.mode === 'online' && GameState.myRole === 'host') broadcastFullState();
+        bottomCardsShown = false;
     }
     function resetGame() {
         if (callTimeout) clearTimeout(callTimeout);
@@ -1904,6 +2002,7 @@
         document.getElementById('playArea').innerHTML = '<span class="text-gray-500 text-[10px]">等待出牌...</span>';
         document.getElementById('lastPlayer').textContent = '';
         GameState.selectedCards.clear();
+        bottomCardsShown = false;
         if (GameState.mode === 'online' && GameState.myRole !== 'host') {
             document.getElementById('controls').innerHTML = '<p class="text-gray-400 text-[10px]">等待房主开始新对局…</p>';
             showToast("等待房主开始新游戏");
