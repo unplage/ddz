@@ -200,7 +200,7 @@
         utterance.rate = 0.9;
         if (selectedVoice) utterance.voice = selectedVoice;
         utterance.onerror = (e) => console.error("语音错误", e);
-        window.speechSynthesis.speak(utterance);
+        setTimeout(() => window.speechSynthesis.speak(utterance), 50);
         return true;
     }
 
