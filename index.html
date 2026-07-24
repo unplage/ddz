@@ -1478,8 +1478,6 @@
                 playSound('bomb');
                 triggerBombFlash(); 
                 addHistory(`💣 炸弹！倍数x2`);
-            } else {
-                playSound('play');
             }
             if (GameState.mode === 'single' && GameState.cardMemory) GameState.cardMemory.recordPlayerPlay(player, cards);
             displayPlayed(cards);
