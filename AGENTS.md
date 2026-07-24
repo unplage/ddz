@@ -50,4 +50,6 @@
 - 牌型枚举定义在 `CardType` 常量对象
 - 联机叫分/出牌均 10 秒超时，超时自动弃权
 - 掉线玩家由 easy 难度 AI 自动托管，对局继续
-- **提交到 GitHub 时需同时 commit index.html 和 sw.js**（sw.js 变更虽少但需同步）
+- **提交到 GitHub 规则**：
+  - `index.html` 每次变更提交时，必须同时升版 `sw.js` 中的 `CACHE_NAME` 版本号（如 `v7→v8`）并一起提交
+  - `sw.js` 永远与 `index.html` 成对提交，不可单独提交一方
