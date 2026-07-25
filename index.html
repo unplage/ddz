@@ -324,8 +324,8 @@
             matchHistory = [];
             GameState.stats = {total:0, win:0};
             saveHistory();
-            showStatsModal();
             updateStats();
+            if (typeof ParamExporter !== 'undefined') ParamExporter._refreshUI();
             showToast('历史记录已清空');
         }
     }
@@ -619,6 +619,7 @@
             let kv = Object.keys(cnt).find(k => cnt[k] === target && parseInt(k) !== playType.value);
             if (kv !== undefined) kickerValue = parseInt(kv);
         }
+        let nextPlayerId = (state.currentPlayer + 1) % 3;
         return {
             playLength: play.length, playPower, isBomb: isBomb ? 1 : 0, isRocket: (playType.type === CardType.ROCKET) ? 1 : 0,
             remainTotal: newHand.length, remainSingle: handFeatures.single, remainPair: handFeatures.pair,
@@ -626,6 +627,7 @@
             remainBigCards: handFeatures.bigCards, hasRocket: handFeatures.hasRocket,
             isLandlord: (role === 'landlord') ? 1 : 0, isFarmer: (role === 'farmer') ? 1 : 0,
             opponentHandCount: state.lastPlayerId !== -1 ? state.players[state.lastPlayerId].length : 0,
+            nextPlayerHandCount: state.players[nextPlayerId] ? state.players[nextPlayerId].length : 17,
             partnerHandCount: (role === 'farmer' && partnerId !== -1) ? (state.players[partnerId]?.length || 0) : 0,
             outsideBombCount: memory.getOutsideBombCount(), isCritical: (newHand.length <= 3) ? 1 : 0,
             needBeat: needBeat ? 1 : 0, lastPlayType: lastPlay ? lastPlay.type : 'none', lastPlayPower: lastPlay ? lastPlay.value : 0,
@@ -687,6 +689,11 @@
             else if (features.lastPlayPower <= 11) score += ph.farmerVsLord.lastPowerLe11;
         }
 
+        // 下家紧迫：下家只剩 <=2 张牌时，避免出能被轻易压住的小牌
+        if (features.needBeat && features.nextPlayerHandCount <= 2 && !features.isBomb && !features.isRocket) {
+            if (features.playPower <= 12) score -= 200;
+        }
+
         if (!features.needBeat && features.isLandlord && features.playLength <= 2) {
             if (features.playPower <= 6) score += ph.landlordLeadLowPower.powerLe6;
             if (features.playPower >= 12) score += ph.landlordLeadLowPower.powerGe12;
@@ -697,7 +704,9 @@
         }
 
         let landlordAboutToWin = state.landlord >= 0 && state.players[state.landlord] && state.players[state.landlord].length <= 2;
-        let oppAboutToWin = (state.lastPlayerId >= 0 && state.players[state.lastPlayerId] && state.players[state.lastPlayerId].length <= 3) || landlordAboutToWin;
+        let nextPlayerIdx = (state.currentPlayer + 1) % 3;
+        let nextPlayerAboutToWin = nextPlayerIdx >= 0 && state.players[nextPlayerIdx] && state.players[nextPlayerIdx].length <= 2;
+        let oppAboutToWin = (state.lastPlayerId >= 0 && state.players[state.lastPlayerId] && state.players[state.lastPlayerId].length <= 3) || landlordAboutToWin || nextPlayerAboutToWin;
         let farmerWinPossible = role === 'farmer' && oppAboutToWin && features.needBeat;
         let lordWinPossible = role === 'landlord' && oppAboutToWin;
 
@@ -768,6 +777,7 @@
     }
     function computePassScore(role, state) {
         let score = 0;
+        let ps = ParamConfig.get('passScores');
         let lordCards = state.players[state.landlord] ? state.players[state.landlord].length : 17;
         if (role === 'farmer') {
             let isPartner = state.lastPlayerId !== -1 && state.lastPlayerId !== state.landlord;
@@ -786,6 +796,12 @@
                 let farmerCards = state.players[state.lastPlayerId] ? state.players[state.lastPlayerId].length : 17;
                 if (farmerCards <= 3) score += ps.landlordFarmerHandLe3;
             }
+        }
+        // 下家快赢了，不应放过
+        let nextP = (state.currentPlayer + 1) % 3;
+        let nextCards = state.players[nextP] ? state.players[nextP].length : 17;
+        if (nextCards <= 2 && state.lastPlayerId !== -1 && state.lastPlayerId !== state.currentPlayer) {
+            score -= 300;
         }
         if (state.passCount >= 1) score += ps.passCountGe1;
         return score;
@@ -1338,7 +1354,9 @@
             if (scored[0].play.length === 0) return [];
 
             let isCritical = (hand.length <= 3) || (this.memory.getMaxOutside(hand) <= 12 && hand.length <= 5);
-            let oppCloseToWin = state.lastPlayerId >= 0 && state.players[state.lastPlayerId] && state.players[state.lastPlayerId].length <= 3;
+            let nextP2 = (state.currentPlayer + 1) % 3;
+            let nextCloseToWin = nextP2 >= 0 && state.players[nextP2] && state.players[nextP2].length <= 2;
+            let oppCloseToWin = (state.lastPlayerId >= 0 && state.players[state.lastPlayerId] && state.players[state.lastPlayerId].length <= 3) || nextCloseToWin;
             let noRandom = isCritical || oppCloseToWin;
             let rf = ParamConfig.get('randomFactors');
             let randomFactor = rf[this.difficulty] !== undefined ? rf[this.difficulty] : 0.6;

@@ -480,7 +480,7 @@ const GameRecorder = {
     recordLandlord(player) {
         if (!this.currentGame) return;
         this.currentGame.calling.landlord = player;
-        let gs = window.GameState;
+        let gs = GameState;
         if (gs && gs.lordCards) {
             this.currentGame.initialDeal.lordCards = gs.lordCards.map(c => ({ id: c.id, suit: c.suit, rank: c.rank, value: c.value }));
         }
@@ -508,7 +508,7 @@ const GameRecorder = {
 
     endGameResult(winner) {
         if (!this.currentGame) return;
-        let gs = window.GameState;
+        let gs = GameState;
         if (!gs) return;
         let isPlayerWin = (gs.mode === 'single')
             ? ((winner === gs.myIndex) || (winner !== gs.myIndex && gs.landlord !== gs.myIndex && winner !== gs.landlord))
