@@ -204,7 +204,6 @@
     function speakNow(text) {
         if (!voiceEnabled) return false;
         if (!window.speechSynthesis) return false;
-        window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'zh-CN';
         utterance.rate = 0.9;
@@ -229,11 +228,12 @@
         if (!voiceEnabled) { showToast("请先打开语音开关"); return; }
         if (!window.speechSynthesis) { showToast("浏览器不支持语音"); return; }
         selectedVoice = getChineseVoice();
-        window.speechSynthesis.cancel();
         let utter = new SpeechSynthesisUtterance("测试语音");
         utter.lang = 'zh-CN';
         utter.rate = 0.9;
         if (selectedVoice) utter.voice = selectedVoice;
+        utter.onerror = (e) => { console.error("语音错误:", e); showToast("语音播放失败: " + e.error); };
+        utter.onend = () => { console.log("语音播放完成"); };
         window.speechSynthesis.speak(utter);
         showToast("正在播放测试语音...");
     }
@@ -2353,6 +2353,7 @@
                 selectedVoice = getChineseVoice();
             };
             setTimeout(() => { if (!selectedVoice) selectedVoice = getChineseVoice(); }, 500);
+            setTimeout(() => { if (!selectedVoice) selectedVoice = getChineseVoice(); }, 2000);
         }
     };
     window.onbeforeunload = () => { saveHistory(); };
