@@ -203,6 +203,13 @@
     function speakNow(text) {
         if (!voiceEnabled) return false;
         if (!window.speechSynthesis) return false;
+        if (!selectedVoice) {
+            selectedVoice = getChineseVoice();
+            if (!selectedVoice) {
+                window.speechSynthesis.getVoices();
+                selectedVoice = getChineseVoice();
+            }
+        }
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'zh-CN';
@@ -1693,6 +1700,8 @@
                 playSound('bomb');
                 triggerBombFlash(); 
                 addHistory(`💣 炸弹！倍数x2`);
+            } else {
+                playSound('play');
             }
             if (GameState.mode === 'single' && GameState.cardMemory) GameState.cardMemory.recordPlayerPlay(player, cards);
             displayPlayed(cards);
