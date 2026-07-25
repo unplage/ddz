@@ -70,7 +70,7 @@
         .peer-id { background: #1e1e2e; border: 1px solid #555; border-radius: 4px; padding: 8px; font-size: 10px; word-break: break-all; margin: 8px 0; }
         .badge { background: rgba(0,0,0,0.6); border-radius: 12px; padding: 2px 8px; font-size: 9px; }
         .status-online { color: #4ade80; }
-        .lord-card { background: #ffd700 !important; border-color: #b8860b !important; box-shadow: 0 0 20px rgba(255,215,0,0.6); transform: scale(1.05); }
+        .lord-card { background: #ffd700 !important; border-color: #b8860b !important; box-shadow: 0 0 20px rgba(255,215,0,0.6); transform: scale(1.05); margin-left: 0 !important; }
     </style>
 </head>
 <body class="text-white safe-area-top safe-area-bottom">
@@ -115,7 +115,7 @@
                 <button id="twoBtn" class="pixel-btn bg-yellow-500 text-[10px]" onclick="callScore(2)">2分</button>
                 <button id="threeBtn" class="pixel-btn bg-red-500 text-[10px]" onclick="callScore(3)">3分</button>
             </div>
-            <div class="preview-panel" id="previewPanel"></div>
+            <div class="preview-panel" id="previewPanel" style="display:none"></div>
             <div class="timer-bar w-full max-w-[200px] mx-auto mt-1" id="playerTimerBar" style="display:none"><div id="playerTimerFill" class="timer-fill" style="width:0"></div></div>
         </div>
         <div id="startScreen" class="fixed inset-0 bg-black/95 flex flex-col items-center justify-center z-[60] safe-area-top safe-area-bottom">
@@ -1194,7 +1194,7 @@
             }
 
             let mctsLimit = this.difficulty === 'legendary' ? 17 : (this.difficulty === 'grandmaster' ? 14 : 12);
-            let mctsIters = this.difficulty === 'legendary' ? 5000 : (this.difficulty === 'grandmaster' ? 3000 : 1000);
+            let mctsIters = this.difficulty === 'legendary' ? 10000 : (this.difficulty === 'grandmaster' ? 3000 : 1000);
             if ((this.difficulty === 'hard' || this.difficulty === 'grandmaster' || this.difficulty === 'legendary') && hand.length <= mctsLimit) {
                 let mctsResult = mctsSearch(state, this.id, mctsIters, this.memory);
                 if (mctsResult && mctsResult.length > 0) return mctsResult;
@@ -1807,10 +1807,12 @@
     }
     function updateOnlinePreview() {
         if (GameState.mode !== 'online') return;
+        let panel = document.getElementById('previewPanel');
         let cards = Array.from(GameState.selectedCards);
-        if (cards.length===0) { document.getElementById('previewPanel').innerText=''; return; }
+        if (cards.length===0) { panel.innerText=''; panel.style.display='none'; return; }
         let type = getCardType(cards);
-        document.getElementById('previewPanel').innerText = type ? `牌型: ${type.type}` : '无效牌型';
+        panel.innerText = type ? `牌型: ${type.type}` : '无效牌型';
+        panel.style.display = '';
     }
     
     function updateOpponentCount(player) {
