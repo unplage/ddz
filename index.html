@@ -15,9 +15,9 @@
         .game-container { position: fixed; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden; }
         .pixel-border { box-shadow: -3px 0 0 0 #000, 3px 0 0 0 #000, 0 -3px 0 0 #000, 0 3px 0 0 #000, inset -3px -3px 0 0 rgba(0,0,0,0.2), inset 3px 3px 0 0 rgba(255,255,255,0.2); }
         .card { background: #fff; border: 2px solid #000; border-radius: 4px; position: relative; cursor: pointer; transition: all 0.15s ease; box-shadow: 2px 2px 0 rgba(0,0,0,0.3); flex-shrink: 0; user-select: none; -webkit-user-drag: element; }
-        @media (max-width: 380px) { .card { width: 38px; height: 53px; font-size: 9px; margin-left: -16px; } }
-        @media (min-width: 381px) and (max-width: 768px) { .card { width: 44px; height: 61px; font-size: 11px; margin-left: -18px; } }
-        @media (min-width: 769px) { .card { width: 60px; height: 84px; font-size: 14px; margin-left: -20px; } }
+        @media (max-width: 380px) { .card { width: 44px; height: 62px; font-size: 10px; margin-left: -18px; } }
+        @media (min-width: 381px) and (max-width: 768px) { .card { width: 50px; height: 70px; font-size: 12px; margin-left: -20px; } }
+        @media (min-width: 769px) { .card { width: 64px; height: 90px; font-size: 14px; margin-left: -22px; } }
         .card:first-child { margin-left: 0 !important; }
         .card:active { transform: scale(0.95); }
         .card.selected { transform: translateY(-12px) scale(1.05); box-shadow: 0 4px 8px rgba(0,0,0,0.4), 0 0 10px #ffd700; z-index: 20; border-color: #ffd700; background: #fffacd; }
@@ -40,11 +40,11 @@
         .card-row.second { margin-top: -10px; }
         .status-bar { background: rgba(0,0,0,0.8); backdrop-filter: blur(10px); border-bottom: 2px solid #333; padding: 8px 12px; height: 50px; }
         .player-area { position: fixed; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.8) 60%, transparent 100%); padding-bottom: env(safe-area-inset-bottom, 10px); z-index: 40; padding-top: 10px; }
-        .opponent-top { position: fixed; top: 60px; display: flex; flex-direction: column; align-items: center; gap: 5px; z-index: 30; }
+        .opponent-top { position: fixed; top: 70px; display: flex; flex-direction: column; align-items: center; gap: 5px; z-index: 30; }
         .opponent-left { left: 10px; } .opponent-right { right: 10px; }
         .opponent-avatar { width: 48px; height: 48px; border-radius: 50%; border: 3px solid #fff; display: flex; align-items: center; justify-content: center; font-size: 24px; position: relative; background: #2c3e50; }
         .card-count { position: absolute; top: -5px; right: -5px; background: #e74c3c; color: white; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #fff; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; }
-        .play-area { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 90%; max-width: 400px; height: 120px; display: flex; align-items: center; justify-content: center; z-index: 20; }
+        .play-area { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 92%; max-width: 450px; height: 160px; display: flex; align-items: center; justify-content: center; z-index: 20; }
         .toast { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.9); color: #fff; padding: 12px 24px; border: 3px solid #fff; border-radius: 8px; font-size: 12px; z-index: 100; pointer-events: none; white-space: nowrap; }
         .start-btn { font-size: 16px; padding: 16px 32px; min-height: 56px; }
         .difficulty-select, .speed-select { background: #2a2a3e; color: #fff; border: 2px solid #fff; padding: 8px; font-size: 10px; border-radius: 4px; min-height: 40px; margin-left: 5px; }
@@ -81,13 +81,14 @@
             <div class="text-yellow-400 text-[10px] retro-text">💰<span id="coins">1000</span></div>
             <div id="connStatus" class="hidden text-[8px] bg-green-700 px-2 py-1 rounded">未连接</div>
         </div>
+        <div id="actionLog" class="flex-1 text-center text-[9px] text-white/70 truncate px-2" title="">等待开始...</div>
         <div class="flex items-center gap-2" id="topRightControls">
             <select id="difficulty" class="difficulty-select" onchange="changeDifficulty(this.value)">
                 <option value="easy">简单</option>
                 <option value="medium">中等</option>
-                <option value="hard">大师级</option>
+                <option value="hard" selected>大师级</option>
                 <option value="grandmaster">宗师级</option>
-                <option value="legendary" selected>传奇级</option>
+                <option value="legendary">传奇级</option>
             </select>
             <select id="aiSpeed" class="speed-select" onchange="changeSpeed(this.value)"><option value="fast">快速</option><option value="normal" selected>中等</option><option value="slow">慢速</option></select>
             <div id="voiceToggle" class="voice-btn pixel-btn" style="background:#333; padding:4px 8px;" onclick="toggleVoice()">🔊 开</div>
@@ -162,6 +163,7 @@
     let selectedVoice = null;
     let callTimeout = null;
     let timerInterval = null;
+    let playLog = [];
     let remainingSeconds = 0;
     let timerPlayerId = -1;
     let timerTotalSeconds = 15; // 修复: 动态记录总时间
@@ -238,8 +240,18 @@
             case CardType.SINGLE: text = valueToChinese(type.value); break;
             case CardType.PAIR: text = "对" + valueToChinese(type.value); break;
             case CardType.TRIPLE: text = "三张" + valueToChinese(type.value); break;
-            case CardType.TRIPLE_WITH_SINGLE: text = "三带一 " + valueToChinese(type.value); break;
-            case CardType.TRIPLE_WITH_PAIR: text = "三带对 " + valueToChinese(type.value); break;
+            case CardType.TRIPLE_WITH_SINGLE: {
+                let cnt = countValues(cards.map(c=>c.value));
+                let singleVal = parseInt(Object.keys(cnt).find(k=>cnt[k]===1));
+                text = "三个" + valueToChinese(type.value) + "带一个" + valueToChinese(singleVal);
+                break;
+            }
+            case CardType.TRIPLE_WITH_PAIR: {
+                let cnt = countValues(cards.map(c=>c.value));
+                let pairVal = parseInt(Object.keys(cnt).find(k=>cnt[k]===2));
+                text = "三个" + valueToChinese(type.value) + "带一对" + valueToChinese(pairVal);
+                break;
+            }
             case CardType.STRAIGHT: text = "顺子"; break;
             case CardType.STRAIGHT_PAIR: text = "连对"; break;
             case CardType.FOUR_WITH_TWO_SINGLE: text = "四带二"; break;
@@ -376,6 +388,7 @@
             this.seen = new Set();
             this.history = [];
             this.playerHistory = [[], [], []];
+            this.totalCardsPlayed = [0, 0, 0];
         }
         record(cards) {
             cards.forEach(c => {
@@ -389,6 +402,7 @@
         recordPlayerPlay(playerId, cards) {
             if (this.playerHistory[playerId]) {
                 this.playerHistory[playerId].push(cards.map(c=>c.id));
+                this.totalCardsPlayed[playerId] += cards.length;
                 this.record(cards);
             }
         }
@@ -422,12 +436,17 @@
             let myCount = myHand.filter(c=>c.value===value).length;
             let totalOutside = outside - myCount;
             if (totalOutside <= 0) return 0;
-            let oppTotal = opponentId >= 0 ? 17 - (this.playerHistory[opponentId]?.length || 0) : 10;
-            if (oppTotal <= 0) return 0.5;
-            return Math.min(1, totalOutside / (totalOutside + 1)) * Math.min(1, oppTotal / 10);
+            let oppTotal = opponentId >= 0 ? Math.max(1, 17 - (this.totalCardsPlayed[opponentId] || 0)) : 10;
+            let totalOppCards = 0;
+            for (let i = 0; i < 3; i++) {
+                if (i !== opponentId) totalOppCards += this.totalCardsPlayed[i] || 0;
+            }
+            let otherPlayersRemaining = Math.max(1, 34 - totalOppCards);
+            let shareRatio = Math.min(1, oppTotal / otherPlayersRemaining);
+            return Math.min(1, totalOutside / (totalOutside + 1)) * shareRatio;
         }
         getOpponentHandSize(playerId) {
-            return 17 - (this.playerHistory[playerId]?.length || 0);
+            return Math.max(0, 17 - (this.totalCardsPlayed[playerId] || 0));
         }
     }
 
@@ -457,20 +476,24 @@
     function evaluateHandStrength(hand, memory, isLandlord, callPosition) {
         let score = 0, values = hand.map(c=>c.value), cnt = countValues(values);
         for (let v in cnt) {
-            if (cnt[v] === 4) score += 50; // 提高炸弹评分
+            if (cnt[v] === 4) score += 50;
             else if (cnt[v] === 3) score += 10;
             else if (cnt[v] === 2) score += 3;
         }
         if (hand.some(c=>c.value===14) && hand.some(c=>c.value===13)) score += 50;
         else { if (hand.some(c=>c.value===14)) score += 18; if (hand.some(c=>c.value===13)) score += 10; }
-        score += (cnt[12]||0)*6 + (cnt[11]||0)*7 + (cnt[10]||0)*9;
+        score += (cnt[12]||0)*9 + (cnt[11]||0)*7 + (cnt[10]||0)*5;
         let sortedUnique = [...new Set(values.filter(v=>v<13))].sort((a,b)=>a-b);
         let maxLen = 1, cur = 1;
         for (let i=1;i<sortedUnique.length;i++) { if (sortedUnique[i] === sortedUnique[i-1]+1) cur++; else { maxLen = Math.max(maxLen, cur); cur=1; } }
         maxLen = Math.max(maxLen, cur);
-        score += maxLen * 4 + (20 - hand.length) * 5;
+        score += maxLen * 4;
         let singleCount = Object.values(cnt).filter(c => c === 1).length;
         score -= singleCount * 3;
+        let pairCount = Object.values(cnt).filter(c => c === 2).length;
+        score += pairCount * 2;
+        let tripleCount = Object.values(cnt).filter(c => c === 3).length;
+        score += tripleCount * 3;
         if (memory && memory.isBombPossible()) score += 8;
         if (callPosition === 2) score += 8;
         if (isLandlord) score += 20;
@@ -595,7 +618,7 @@
         };
     }
 
-    const WEIGHTS = { playPower:0.8, isBomb:-30, isRocket:-50, remainTotal:-2, remainSingle:1.5, remainPair:2, remainTriple:4, remainBomb:15, remainMaxStraight:3, remainBigCards:1, hasRocket:10, isLandlord:5, isFarmer:0, opponentHandCount:-1, partnerHandCount:3, outsideBombCount:-5, isCritical:30, needBeat:10 };
+    const WEIGHTS = { playPower:1.0, isBomb:-30, isRocket:-50, remainTotal:-2, remainSingle:1.5, remainPair:2, remainTriple:4, remainBomb:15, remainMaxStraight:3, remainBigCards:1, hasRocket:10, isLandlord:5, isFarmer:0, opponentHandCount:-1, partnerHandCount:3, outsideBombCount:-5, isCritical:40, needBeat:25 };
 
     function scorePlay(features, role, memory, state, playerHand) {
         let score = 0;
@@ -619,8 +642,32 @@
 
         if (features.isFarmer && features.partnerHandCount <= 2 && features.playLength <= 2) score += 60;
         if (features.isFarmer && features.needBeat && features.lastPlayType === 'single' && features.lastPlayPower <= 10 && features.playPower > features.lastPlayPower && features.playPower - features.lastPlayPower <= 3) score += 40;
-        if (features.needBeat && features.lastPlayPower >= 12 && features.remainTotal > 3 && features.playPower > features.lastPlayPower && features.playPower < 14) score -= 40;
+        if (features.needBeat && features.lastPlayPower >= 13 && features.remainTotal > 3 && features.playPower > features.lastPlayPower && features.playPower < 14) score -= 40;
         if (features.isLandlord && !features.needBeat && features.playLength === 1 && features.playPower <= 6) score += 20;
+
+        // 压制小牌：对手出小牌时积极压制
+        if (features.needBeat && features.lastPlayType === 'single' && features.lastPlayPower <= 8 && features.playPower > features.lastPlayPower) {
+            let efficiency = features.playPower - features.lastPlayPower;
+            if (efficiency <= 4) score += 80;
+            else if (efficiency <= 7) score += 50;
+            else score += 20;
+        }
+        if (features.needBeat && features.lastPlayType === 'pair' && features.lastPlayPower <= 8 && features.playPower > features.lastPlayPower) {
+            let efficiency = features.playPower - features.lastPlayPower;
+            if (efficiency <= 4) score += 60;
+            else if (efficiency <= 7) score += 35;
+            else score += 15;
+        }
+        // 地主剩少量牌出小牌，农民必须压制
+        let lastPlayerCards = state.lastPlayerId >= 0 && state.players[state.lastPlayerId] ? state.players[state.lastPlayerId].length : 20;
+        if (features.needBeat && role === 'farmer' && lastPlayerCards <= 6 && features.lastPlayPower <= 10 && features.playPower > features.lastPlayPower) {
+            score += 100;
+        }
+        // 农民对地主的压制加分
+        if (features.needBeat && role === 'farmer' && state.lastPlayerId === state.landlord && features.playPower > features.lastPlayPower) {
+            if (features.lastPlayPower <= 8) score += 40;
+            else if (features.lastPlayPower <= 11) score += 20;
+        }
 
         if (!features.needBeat && features.isLandlord && features.playLength <= 2) {
             if (features.playPower <= 6) score += 30;
@@ -657,7 +704,7 @@
         let newState = JSON.parse(JSON.stringify(state));
         newState.players[state.currentPlayer] = newHand;
         let nextPlayer = (state.currentPlayer + 1) % 3;
-        if (newState.players[nextPlayer].length === 0) return 50;
+        if (newState.players[nextPlayer].length === 0) return -100;
         let lastType = getCardType(play);
 
         function sampleOpponentPlays(oppHand, targetPlay) {
@@ -674,7 +721,7 @@
         function evalState(s, pid, myRoleId, depth) {
             if (s.players[pid].length === 0) {
                 let winnerRole = pid === s.landlord ? 'landlord' : 'farmer';
-                return winnerRole === myRoleId ? 60 : -60;
+                return winnerRole === myRoleId ? 100 : -100;
             }
             if (depth <= 0) {
                 let str = evaluateHandStrength(s.players[pid], memory, pid === s.landlord);
@@ -684,7 +731,7 @@
             let next = (pid + 1) % 3;
             if (s.players[next].length === 0) {
                 let wRole = next === s.landlord ? 'landlord' : 'farmer';
-                return wRole === myRoleId ? 60 : -60;
+                return wRole === myRoleId ? 100 : -100;
             }
             let samples = sampleOpponentPlays(s.players[next], s.lastPlay);
             if (!samples) {
@@ -695,13 +742,14 @@
             let total = 0, count = 0;
             for (let sp of samples) {
                 let s2 = JSON.parse(JSON.stringify(s));
-                s2.players[next] = s2.players[next].filter(c => !sp.includes(c));
+                let spIds = new Set(sp.map(c => c.id));
+                s2.players[next] = s2.players[next].filter(c => !spIds.has(c.id));
                 s2.lastPlay = getCardType(sp);
                 s2.lastPlayerId = next;
                 s2.passCount = 0;
                 if (s2.players[next].length === 0) {
                     let wRole = next === s2.landlord ? 'landlord' : 'farmer';
-                    total += wRole === myRoleId ? 60 : -60;
+                    total += wRole === myRoleId ? 100 : -100;
                     count++;
                 } else {
                     let third = (next+1)%3;
@@ -713,13 +761,14 @@
                     } else {
                         for (let tp of thirdSamples) {
                             let s3 = JSON.parse(JSON.stringify(s2));
-                            s3.players[third] = s3.players[third].filter(c => !tp.includes(c));
+                            let tpIds = new Set(tp.map(c => c.id));
+                            s3.players[third] = s3.players[third].filter(c => !tpIds.has(c.id));
                             s3.lastPlay = getCardType(tp);
                             s3.lastPlayerId = third;
                             s3.passCount = 0;
                             if (s3.players[third].length === 0) {
                                 let wRole = third === s3.landlord ? 'landlord' : 'farmer';
-                                total += wRole === myRoleId ? 60 : -60;
+                                total += wRole === myRoleId ? 100 : -100;
                             } else {
                                 total += evalState(s3, (third+1)%3, myRoleId, depth-1);
                             }
@@ -735,7 +784,7 @@
         let opponentPlays = getAllValidPlays(newState.players[nextPlayer], lastType);
         if (!opponentPlays || opponentPlays.length === 0) {
             let thirdPlayer = (nextPlayer + 1) % 3;
-            if (newState.players[thirdPlayer].length === 0) score = -60;
+            if (newState.players[thirdPlayer].length === 0) score = -100;
             else score = evalState(newState, thirdPlayer, role, depth);
         } else {
             let n = depth >= 2 ? 15 : 8;
@@ -744,12 +793,13 @@
             let weighted = 0, count = 0;
             for (let sp of samples) {
                 let s2 = JSON.parse(JSON.stringify(newState));
-                s2.players[nextPlayer] = s2.players[nextPlayer].filter(c => !sp.includes(c));
+                let spIds = new Set(sp.map(c => c.id));
+                s2.players[nextPlayer] = s2.players[nextPlayer].filter(c => !spIds.has(c.id));
                 s2.lastPlay = getCardType(sp);
                 s2.lastPlayerId = nextPlayer;
                 if (s2.players[nextPlayer].length === 0) {
                     let wRole = nextPlayer === s2.landlord ? 'landlord' : 'farmer';
-                    weighted += wRole === role ? -60 : 60;
+                    weighted += wRole === role ? -100 : 100;
                 } else {
                     let third = (nextPlayer + 1) % 3;
                     weighted += evalState(s2, third, role, depth);
@@ -858,7 +908,8 @@
 
         for (let p of plays) {
             let simState = JSON.parse(JSON.stringify(state));
-            simState.players[playerId] = simState.players[playerId].filter(c => !p.includes(c));
+            let pIds = new Set(p.map(c => c.id));
+            simState.players[playerId] = simState.players[playerId].filter(c => !pIds.has(c.id));
             if (simState.players[playerId].length === 0) return p;
             simState.lastPlay = getCardType(p);
             simState.lastPlayerId = playerId;
@@ -908,7 +959,8 @@
 
         for (let p of plays) {
             let s2 = JSON.parse(JSON.stringify(state));
-            s2.players[currentPlayer] = s2.players[currentPlayer].filter(c => !p.includes(c));
+            let pIds = new Set(p.map(c => c.id));
+            s2.players[currentPlayer] = s2.players[currentPlayer].filter(c => !pIds.has(c.id));
             let bombDepth = (getCardType(p) && (getCardType(p).type === CardType.BOMB || getCardType(p).type === CardType.ROCKET)) ? 1 : 0;
             s2.lastPlay = getCardType(p);
             s2.lastPlayerId = currentPlayer;
@@ -974,7 +1026,8 @@
             if (!play || play.length === 0) {
                 newState.passCount = (newState.passCount || 0) + 1;
             } else {
-                newState.players[this.playerToMove] = newState.players[this.playerToMove].filter(c => !play.includes(c));
+                let playIds = new Set(play.map(c => c.id));
+                newState.players[this.playerToMove] = newState.players[this.playerToMove].filter(c => !playIds.has(c.id));
                 newState.lastPlay = getCardType(play);
                 newState.lastPlayerId = this.playerToMove;
                 newState.passCount = 0;
@@ -1006,7 +1059,7 @@
             if (hand.length === 0) { cp = (cp + 1) % 3; continue; }
             let needBeat = s.lastPlay && s.lastPlayerId !== cp;
             let plays = needBeat ? getAllValidPlays(hand, s.lastPlay) : getAllValidPlays(hand, null);
-            if (plays.length === 0 || (!needBeat && s.lastPlay && s.lastPlayerId !== cp)) {
+            if (plays.length === 0) {
                 s.passCount++;
                 cp = (cp + 1) % 3;
                 continue;
@@ -1032,11 +1085,13 @@
         return false;
     }
 
-    function mctsSearch(state, playerId, iterations, memory) {
+    function mctsSearch(state, playerId, iterations, memory, timeLimit = 3000) {
         let hand = state.players[playerId];
         if (!hand || hand.length === 0) return null;
         let root = new MCTSNode(JSON.parse(JSON.stringify(state)), null, state.currentPlayer, playerId);
+        let startTime = Date.now();
         for (let i = 0; i < iterations; i++) {
+            if (Date.now() - startTime > timeLimit) break;
             let node = root;
             while (!node.isTerminal && node.children.length > 0 && node.isFullyExpanded) node = node.selectChild();
             if (!node.isTerminal && !node.isFullyExpanded) node = node.expand();
@@ -1050,7 +1105,11 @@
             while (node) { node.visits++; if (result) node.wins++; node = node.parent; }
         }
         let best = root.bestChild();
-        return best ? best.play : null;
+        if (best && best.play && best.play.length > 0) return best.play;
+        let needBeat = state.lastPlay && state.lastPlayerId !== playerId;
+        let fallbackPlays = needBeat ? getAllValidPlays(hand, state.lastPlay) : getAllValidPlays(hand, null);
+        if (fallbackPlays.length > 0) return fallbackPlays[fallbackPlays.length - 1];
+        return null;
     }
 
     // ======================== 增强大师级AI ========================
@@ -1131,10 +1190,10 @@
             }
 
             let mctsLimit = this.difficulty === 'legendary' ? 17 : (this.difficulty === 'grandmaster' ? 14 : 12);
-            let mctsIters = this.difficulty === 'legendary' ? 10000 : (this.difficulty === 'grandmaster' ? 3000 : 1000);
+            let mctsIters = this.difficulty === 'legendary' ? 5000 : (this.difficulty === 'grandmaster' ? 3000 : 1000);
             if ((this.difficulty === 'hard' || this.difficulty === 'grandmaster' || this.difficulty === 'legendary') && hand.length <= mctsLimit) {
                 let mctsResult = mctsSearch(state, this.id, mctsIters, this.memory);
-                if (mctsResult) return mctsResult;
+                if (mctsResult && mctsResult.length > 0) return mctsResult;
             }
 
             let allPlays = getAllValidPlays(hand, null);
@@ -1164,8 +1223,10 @@
             scored.sort((a,b)=>b.score - a.score);
 
             let isCritical = (hand.length <= 3) || (this.memory.getMaxOutside(hand) <= 12 && hand.length <= 5);
+            let oppCloseToWin = state.lastPlayerId >= 0 && state.players[state.lastPlayerId] && state.players[state.lastPlayerId].length <= 3;
+            let noRandom = isCritical || oppCloseToWin;
             let randomFactor = this.difficulty === 'legendary' ? 0 : (this.difficulty === 'grandmaster' ? 0.05 : (this.difficulty === 'hard' ? 0.1 : (this.difficulty === 'medium' ? 0.3 : 0.6)));
-            if (!isCritical && Math.random() < randomFactor && scored.length > 1) return scored[1].play;
+            if (!noRandom && Math.random() < randomFactor && scored.length > 1) return scored[1].play;
             return scored[0].play;
         }
         selectLeadSmart(plays, role, hand, state, partnerId) {
@@ -1175,7 +1236,7 @@
             if (fullHouse) return fullHouse;
 
             if (role === 'landlord') {
-                // C2: 地主首攻：先看DP计划，从小牌开始打
+                // C2: 地主首攻：先看DP计划，优先出多牌型清牌
                 let dpLimit = this.difficulty === 'legendary' ? 17 : (this.difficulty === 'grandmaster' ? 14 : 12);
                 if (hand.length <= dpLimit) {
                     let plan = decomposeHandDP(hand);
@@ -1185,12 +1246,16 @@
                             let score = -getPlayPower(p);
                             let type = getCardType(p);
                             if (type && (type.type === CardType.BOMB || type.type === CardType.ROCKET)) score += 100;
-                            if (p.length <= 2) score -= 10;
-                            if (type && type.type === CardType.STRAIGHT) score -= 10;
-                            if (type && type.type === CardType.STRAIGHT_PAIR) score -= 5;
+                            // 优先出多牌型（顺子、连对、三带）
+                            if (p.length >= 5) score += 20;
+                            else if (p.length >= 3) score += 10;
+                            else if (p.length === 2) score += 5;
+                            if (type && type.type === CardType.STRAIGHT) score += 15;
+                            if (type && type.type === CardType.STRAIGHT_PAIR) score += 10;
+                            if (type && (type.type === CardType.TRIPLE_WITH_SINGLE || type.type === CardType.TRIPLE_WITH_PAIR)) score += 8;
                             let val = p[0].value;
-                            if (val <= 6 && p.length <= 2) score -= 25;
-                            if (val >= 12) score += 15;
+                            // 小牌优先出（清掉小牌）
+                            if (val <= 6) score += 15;
                             // 保留控制牌型（2/A/王）不先出
                             if (val >= 12 && p.length <= 2) score += 30;
                             if (score > bestLeadScore) { bestLeadScore = score; bestLead = p; }
@@ -1198,11 +1263,19 @@
                         if (bestLead) return bestLead;
                     }
                 }
-                // 出最小单张（有多个小单张时出最小的，引诱对手拆牌）
-                let smallSingles = plays.filter(p => p.length === 1 && p[0].value <= 6);
-                if (smallSingles.length > 0) return smallSingles.reduce((a,b) => a[0].value < b[0].value ? a : b);
+                // 优先出顺子（清掉多张牌）
+                let straightPlays = plays.filter(p => getCardType(p)?.type === CardType.STRAIGHT);
+                if (straightPlays.length) return straightPlays.sort((a,b)=>b.length-a.length)[0];
+                // 优先出三带（清掉多张牌）
+                let triplePlays = plays.filter(p => {
+                    let t = getCardType(p);
+                    return t && (t.type === CardType.TRIPLE_WITH_SINGLE || t.type === CardType.TRIPLE_WITH_PAIR);
+                });
+                if (triplePlays.length > 0) return triplePlays.reduce((a,b) => getCardType(a).value < getCardType(b).value ? a : b);
+                // 出最小对子
                 let smallPairs = plays.filter(p => p.length === 2 && getCardType(p).value <= 6);
                 if (smallPairs.length > 0) return smallPairs.reduce((a,b) => getCardType(a).value < getCardType(b).value ? a : b);
+                // 两步清牌检测
                 let twoPlay = plays.find(p => {
                     if (p.length === hand.length) return true;
                     let rest = hand.filter(c => !p.includes(c));
@@ -1210,12 +1283,9 @@
                     return rest.length === 0 || restPlays.some(rp => rp.length === rest.length);
                 });
                 if (twoPlay) return twoPlay;
-                let smallSingle2 = plays.filter(p => p.length === 1 && p[0].value <= 6);
-                if (smallSingle2.length > 0) return smallSingle2.reduce((a,b) => a[0].value < b[0].value ? a : b);
-                let smallPair2 = plays.filter(p => p.length === 2 && getCardType(p).value <= 6);
-                if (smallPair2.length > 0) return smallPair2.reduce((a,b) => getCardType(a).value < getCardType(b).value ? a : b);
-                let straightPlays = plays.filter(p => getCardType(p)?.type === CardType.STRAIGHT);
-                if (straightPlays.length) return straightPlays.sort((a,b)=>b.length-a.length)[0];
+                // 出最小单张
+                let smallSingles = plays.filter(p => p.length === 1 && p[0].value <= 6);
+                if (smallSingles.length > 0) return smallSingles.reduce((a,b) => a[0].value < b[0].value ? a : b);
                 return plays.sort((a,b)=>getPlayPower(a)-getPlayPower(b))[0];
             } else {
                 // C1: 农民首攻 — 位置感知 + 主动配合
@@ -1228,10 +1298,13 @@
                     return anyPlay;
                 }
 
-                // 地主下家农民：出小牌过牌，尽量保留控制牌
+                // 地主下家农民：出中等牌给地主压力，不让地主轻松过牌
                 if (isLordNext) {
-                    // 有小单张（≤10）就出
-                    let smallSingle = plays.find(p => p.length === 1 && p[0].value <= 10);
+                    // 有中等单张（7-10）先出，制造压力
+                    let midSingle = plays.find(p => p.length === 1 && p[0].value >= 7 && p[0].value <= 10);
+                    if (midSingle) return midSingle;
+                    // 有小单张（≤6）就出
+                    let smallSingle = plays.find(p => p.length === 1 && p[0].value <= 6);
                     if (smallSingle) return smallSingle;
                     // 有小对子就出
                     let smallPair = plays.find(p => p.length === 2 && getCardType(p).value <= 10);
@@ -1240,9 +1313,13 @@
                     let midPlay = plays.find(p => p.length >= 3 && getPlayPower(p) <= 60);
                     if (midPlay) return midPlay;
                 } else {
-                    // 地主上家：出大牌顶（J/Q/K/A/2，不出王和炸弹）
-                    let bigSingle = plays.find(p => p.length === 1 && p[0].value >= 11 && p[0].value <= 14);
-                    if (bigSingle) return bigSingle;
+                    // 地主上家：出刚好大过地主的最小大牌（节省牌力）
+                    let bigSingles = plays.filter(p => p.length === 1 && p[0].value >= 11 && p[0].value <= 14)
+                        .sort((a,b) => a[0].value - b[0].value);
+                    if (bigSingles.length > 0) return bigSingles[0];
+                    // 没有大单则出中等单张
+                    let midSingle = plays.find(p => p.length === 1 && p[0].value >= 7 && p[0].value <= 10);
+                    if (midSingle) return midSingle;
                 }
 
                 // DP 计划：出结构好的小牌
@@ -1277,7 +1354,7 @@
         phase: 'idle', mode: 'single',
         deck: [], players: [[],[],[]], lordCards: [], landlord: -1, currentPlayer: 0,
         lastPlay: null, lastPlayerId: -1, baseScore: 1, selectedCards: new Set(), bombCount: 0,
-        difficulty: 'legendary', coins: 1000, stats: { total: 0, win: 0 }, passCount: 0,
+        difficulty: 'hard', coins: 1000, stats: { total: 0, win: 0 }, passCount: 0,
         firstPlayMade: false, lordPlayCount: 0, farmerPlayed: false,
         cardMemory: null, aiList: [], history: [], processing: false,
         myRole: null, myIndex: -1, hostPeerId: null,
@@ -1526,7 +1603,10 @@
             if (playBtn) playBtn.disabled = true; if (passBtn) passBtn.disabled = true;
             GameState.processing = true;
             let delay = getAIDelay();
-            startOnlineTimer(Math.ceil(delay / 1000) + 1, () => {
+            let thinkingTime = GameState.difficulty === 'legendary' ? 8 :
+                GameState.difficulty === 'grandmaster' ? 6 :
+                GameState.difficulty === 'hard' ? 5 : 3;
+            startOnlineTimer(thinkingTime, () => {
                 if (GameState.processing && GameState.currentPlayer === id) {
                     showToast(getPlayerName(id)+' 思考超时');
                     executePlayCards(id, []);
@@ -1539,7 +1619,7 @@
                 let ai = GameState.aiList[id];
                 let cards = ai.think('play', GameState);
                 if (cards && cards.length > 0) {
-                    let isValid = cards.every(c => GameState.players[id].includes(c));
+                    let isValid = cards.every(c => GameState.players[id].some(hc => hc.id === c.id));
                     let typeValid = getCardType(cards) !== null;
                     if (!isValid || !typeValid) cards = [];
                 }
@@ -1549,15 +1629,55 @@
         }
     }
 
+    function describePlay(cards) {
+        if (!cards || cards.length === 0) return '不出';
+        let type = getCardType(cards);
+        if (!type) return '不出';
+        const vn = (v) => { if (v<=7) return (v+3); if (v===8) return 'J'; if (v===9) return 'Q'; if (v===10) return 'K'; if (v===11) return 'A'; if (v===12) return '2'; if (v===13) return '小王'; if (v===14) return '大王'; return '?'; };
+        switch (type.type) {
+            case 'single': return '单张'+vn(type.value);
+            case 'pair': return '对'+vn(type.value);
+            case 'triple': return '三张'+vn(type.value);
+            case 'triple_single': {
+                let cnt = countValues(cards.map(c=>c.value));
+                let singleVal = parseInt(Object.keys(cnt).find(k=>cnt[k]===1));
+                return '三带一'+vn(singleVal);
+            }
+            case 'triple_pair': {
+                let cnt = countValues(cards.map(c=>c.value));
+                let pairVal = parseInt(Object.keys(cnt).find(k=>cnt[k]===2));
+                return '三带对'+vn(pairVal);
+            }
+            case 'straight': return '顺子';
+            case 'straight_pair': return '连对';
+            case 'four_two_single': return '四带二';
+            case 'four_two_pair': return '四带两对';
+            case 'bomb': return '💣炸弹';
+            case 'rocket': return '🚀王炸';
+            default: return '出牌';
+        }
+    }
+    function updateActionLog(playerId, cards) {
+        let name = getPlayerName(playerId);
+        let desc = describePlay(cards);
+        playLog.unshift({ player: name, action: desc });
+        if (playLog.length > 3) playLog.pop();
+        let el = document.getElementById('actionLog');
+        if (el) el.textContent = playLog.map(a => a.player+': '+a.action).join(' | ');
+    }
+
     function executePlayCards(player, cards) {
         clearTimer();
+        updateActionLog(player, cards);
         let isPlay = (cards && cards.length > 0);
         if (!isPlay) {
             GameState.passCount++;
+            if (GameState.mode === 'single') speakNow("过");
         } else {
             let type = getCardType(cards);
             if (!type) { showToast('牌型非法'); GameState.passCount++; GameState.currentPlayer = (player+1)%3; nextPlayStep(); return; }
-            GameState.players[player] = GameState.players[player].filter(c => !cards.includes(c));
+            let playedIds = new Set(cards.map(c => c.id));
+            GameState.players[player] = GameState.players[player].filter(c => !playedIds.has(c.id));
             GameState.lastPlay = type;
             GameState.lastPlayerId = player;
             GameState.passCount = 0;
@@ -1658,10 +1778,10 @@
         let div = document.createElement('div');
         div.className = `card ${GameState.selectedCards.has(card)?'selected':''}`;
         let isSmall = window.innerWidth <= 380;
-        div.style.width = isSmall?'38px':(window.innerWidth<=768?'44px':'60px');
-        div.style.height = isSmall?'53px':(window.innerWidth<=768?'61px':'84px');
-        div.style.fontSize = isSmall?'9px':(window.innerWidth<=768?'11px':'14px');
-        if (index > 0) div.style.marginLeft = isSmall?'-16px':(window.innerWidth<=768?'-18px':'-20px');
+        div.style.width = isSmall?'44px':(window.innerWidth<=768?'50px':'64px');
+        div.style.height = isSmall?'62px':(window.innerWidth<=768?'70px':'90px');
+        div.style.fontSize = isSmall?'10px':(window.innerWidth<=768?'12px':'14px');
+        if (index > 0) div.style.marginLeft = isSmall?'-18px':(window.innerWidth<=768?'-20px':'-22px');
         let isRed = card.suit==='♥'||card.suit==='♦'||card.suit==='JOKER';
         div.className += isRed ? ' suit-red' : ' suit-black';
         if (card.suit === 'JOKER') { div.innerHTML = `<div class="font-bold text-center leading-tight" style="font-size:0.8em;">${card.rank}</div>`; if (card.rank==='大王') div.style.background = '#ffebee'; }
@@ -1723,6 +1843,17 @@
         document.getElementById('playerStatus').textContent = currentPlayerId === myIdx ? '你的回合 (10秒)' : '';
         document.getElementById('leftStatus').textContent = currentPlayerId === leftIdx ? '思考...' : '';
         document.getElementById('rightStatus').textContent = currentPlayerId === rightIdx ? '思考...' : '';
+    }
+
+    function formatRemainingCards(playerIdx) {
+        let cards = GameState.players[playerIdx];
+        if (!cards || cards.length === 0) return '已出完';
+        let cnt = countValues(cards.map(c => c.value));
+        let sorted = Object.keys(cnt).map(Number).sort((a, b) => a - b);
+        return sorted.map(v => {
+            let name = v <= 7 ? (v + 3).toString() : v === 8 ? 'J' : v === 9 ? 'Q' : v === 10 ? 'K' : v === 11 ? 'A' : v === 12 ? '2' : v === 13 ? '小王' : '大王';
+            return cnt[v] > 1 ? name + 'x' + cnt[v] : name;
+        }).join(' ');
     }
 
     function getPlayerName(idx) {
@@ -1928,12 +2059,20 @@
             if (GameState.landlord === GameState.myIndex) isWin = GameState.lastPlayerId === GameState.myIndex;
             else isWin = GameState.lastPlayerId !== GameState.landlord;
             let screen = document.getElementById('gameOverScreen'), title = document.getElementById('resultTitle'), content = document.getElementById('resultContent');
+            let remainingHtml = '<div style="margin-top:8px;border-top:1px solid #555;padding-top:6px;font-size:10px;color:#aaa;text-align:left;">';
+            for (let i = 0; i < 3; i++) {
+                let name = getPlayerName(i);
+                let role = i === GameState.landlord ? '(地主)' : '(农民)';
+                let cards = formatRemainingCards(i);
+                remainingHtml += name + role + ': ' + cards + '<br>';
+            }
+            remainingHtml += '</div>';
             if (isWin) {
                 title.textContent = '🎉 胜利！'; title.className = 'text-xl retro-text mb-4 text-yellow-400 text-center';
-                content.innerHTML = `对局结束`;
+                content.innerHTML = `对局结束${remainingHtml}`;
             } else {
                 title.textContent = '💔 失败'; title.className = 'text-xl retro-text mb-4 text-gray-400 text-center';
-                content.innerHTML = `对局结束`;
+                content.innerHTML = `对局结束${remainingHtml}`;
             }
             screen.classList.remove('hidden');
         }
@@ -2129,12 +2268,20 @@
         updateStats();
         let screen = document.getElementById('gameOverScreen'), title = document.getElementById('resultTitle'), content = document.getElementById('resultContent');
         screen.classList.remove('hidden');
+        let remainingHtml = '<div style="margin-top:8px;border-top:1px solid #555;padding-top:6px;font-size:10px;color:#aaa;text-align:left;">';
+        for (let i = 0; i < 3; i++) {
+            let name = getPlayerName(i);
+            let role = i === GameState.landlord ? '(地主)' : '(农民)';
+            let cards = formatRemainingCards(i);
+            remainingHtml += name + role + ': ' + cards + '<br>';
+        }
+        remainingHtml += '</div>';
         if (isPlayerWin) {
             title.textContent = '🎉 胜利！'; title.className = 'text-xl retro-text mb-4 text-yellow-400 text-center';
-            content.innerHTML = `赢得 ${amount} 筹码<br>余额：${GameState.coins}${isSpring?'<br>🌸春天加成':''}${isAntiSpring?'<br>⚡反春天加成':''}`;
+            content.innerHTML = `赢得 ${amount} 筹码<br>余额：${GameState.coins}${isSpring?'<br>🌸春天加成':''}${isAntiSpring?'<br>⚡反春天加成':''}${remainingHtml}`;
         } else {
             title.textContent = '💔 失败'; title.className = 'text-xl retro-text mb-4 text-gray-400 text-center';
-            content.innerHTML = `失去 ${amount} 筹码<br>余额：${GameState.coins}`;
+            content.innerHTML = `失去 ${amount} 筹码<br>余额：${GameState.coins}${remainingHtml}`;
         }
         addHistory(isPlayerWin ? '🎉胜利！' : '💔失败');
         GameState.processing = false;
