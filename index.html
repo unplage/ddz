@@ -214,7 +214,7 @@
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'zh-CN';
         utterance.rate = 0.9;
-        if (selectedVoice) utterance.voice = selectedVoice;
+        //if (selectedVoice) utterance.voice = selectedVoice;
         utterance.onerror = (e) => console.error("语音错误", e);
         window.speechSynthesis.speak(utterance);
         return true;
