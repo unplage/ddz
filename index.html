@@ -91,7 +91,6 @@
             </select>
             <select id="aiSpeed" class="speed-select" onchange="changeSpeed(this.value)"><option value="fast">快速</option><option value="normal" selected>中等</option><option value="slow">慢速</option></select>
             <div id="voiceToggle" class="voice-btn pixel-btn" style="background:#333; padding:4px 8px;" onclick="toggleVoice()">🔊 开</div>
-            <div id="testVoiceBtn" class="voice-btn pixel-btn" style="background:#333; padding:4px 8px;" onclick="testVoice()">🔊 测试</div>
             <div id="statsBtn" class="stats-btn pixel-btn" style="background:#333; padding:4px 8px;" onclick="showStatsModal()">📊 战绩</div>
         </div>
     </div>
@@ -204,6 +203,7 @@
     function speakNow(text) {
         if (!voiceEnabled) return false;
         if (!window.speechSynthesis) return false;
+        window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'zh-CN';
         utterance.rate = 0.9;
@@ -217,25 +217,7 @@
         voiceEnabled = !voiceEnabled;
         document.getElementById('voiceToggle').innerHTML = voiceEnabled ? '🔊 开' : '🔇 关';
         showToast(voiceEnabled ? '语音播报开' : '语音播报关');
-        if (voiceEnabled && window.speechSynthesis) {
-            testVoice();
-        } else if (!voiceEnabled) {
-            window.speechSynthesis && window.speechSynthesis.cancel();
-        }
-    }
-
-    function testVoice() {
-        if (!voiceEnabled) { showToast("请先打开语音开关"); return; }
-        if (!window.speechSynthesis) { showToast("浏览器不支持语音"); return; }
-        selectedVoice = getChineseVoice();
-        let utter = new SpeechSynthesisUtterance("测试语音");
-        utter.lang = 'zh-CN';
-        utter.rate = 0.9;
-        if (selectedVoice) utter.voice = selectedVoice;
-        utter.onerror = (e) => { console.error("语音错误:", e); showToast("语音播放失败: " + e.error); };
-        utter.onend = () => { console.log("语音播放完成"); };
-        window.speechSynthesis.speak(utter);
-        showToast("正在播放测试语音...");
+        if (!voiceEnabled) window.speechSynthesis && window.speechSynthesis.cancel();
     }
 
     function speakPlay(cards) {
@@ -1448,10 +1430,6 @@
     function startSingleMode() {
         if (voiceEnabled && window.speechSynthesis) {
             if (!selectedVoice) selectedVoice = getChineseVoice();
-            let unlockUtt = new SpeechSynthesisUtterance('开始');
-            unlockUtt.lang = 'zh-CN';
-            if (selectedVoice) unlockUtt.voice = selectedVoice;
-            window.speechSynthesis.speak(unlockUtt);
         }
         GameState.mode = 'single';
         GameState.myIndex = 0;
@@ -2348,12 +2326,8 @@
     window.onload = () => {
         loadHistory();
         if (window.speechSynthesis) {
+            window.speechSynthesis.getVoices();
             selectedVoice = getChineseVoice();
-            window.speechSynthesis.onvoiceschanged = () => {
-                selectedVoice = getChineseVoice();
-            };
-            setTimeout(() => { if (!selectedVoice) selectedVoice = getChineseVoice(); }, 500);
-            setTimeout(() => { if (!selectedVoice) selectedVoice = getChineseVoice(); }, 2000);
         }
     };
     window.onbeforeunload = () => { saveHistory(); };
