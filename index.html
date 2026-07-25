@@ -333,7 +333,6 @@
         if (!audioEnabled) return;
         if (!audioCtx) initAudio();
         if (!audioCtx) return;
-        if (audioCtx.state === 'suspended') audioCtx.resume();
         const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
         osc.connect(gain); gain.connect(audioCtx.destination);
         const now = audioCtx.currentTime;
