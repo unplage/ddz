@@ -3,7 +3,7 @@
 
 // ======================== 1. PARAM CONFIG ========================
 const DEFAULT_PARAMS = {
-    version: 2,
+    version: 3,
     weights: {
         playPower: 1.0, isBomb: -30, isRocket: -50,
         remainTotal: -2, remainSingle: -1.5, remainPair: -2,
@@ -57,7 +57,8 @@ const DEFAULT_PARAMS = {
         bombStrategic: { fewOutside: 40, rocketBonus: 30 },
         bombWasted: { lowLastPower: -120, highLastPower: -60, notCritical: -80 },
         nearWin: { remainLe3: 100 },
-        kickerPenalty: { ge11: -40, ge13: -60 }
+        kickerPenalty: { ge11: -60, ge13: -100, hasSmallerAlternative: -120 },
+        overkill: { singleLe12: -250, pairLe10: -200 }
     },
     passScores: {
         farmerPartnerBase: 200, farmerPartnerHandLe3: -50,
@@ -89,6 +90,11 @@ const DEFAULT_PARAMS = {
     aiTiming: {
         thinkingSeconds: { legendary: 8, grandmaster: 6, hard: 5, medium: 3, easy: 3 },
         delayMs: { fast: 300, normal: 700, slow: 1200 }
+    },
+    analysis: {
+        maxGames: -1,
+        deterministic: true,
+        minGameInterval: 2000
     }
 };
 
@@ -176,9 +182,9 @@ const ParamConfig = {
 const GameDatabase = {
     db: null,
     DB_NAME: 'ddz_ai_db',
-    DB_VERSION: 1,
+    DB_VERSION: 3,
     STORE_NAME: 'games',
-    MAX_RECORDS: 5000,
+    ANALYSIS_STORE: 'analysis',
     _initPromise: null,
 
     open() {
@@ -191,6 +197,13 @@ const GameDatabase = {
                 if (!db.objectStoreNames.contains(this.STORE_NAME)) {
                     let store = db.createObjectStore(this.STORE_NAME, { keyPath: 'id', autoIncrement: true });
                     store.createIndex('timestamp', 'timestamp', { unique: false });
+                    store.createIndex('difficulty', 'difficulty', { unique: false });
+                    store.createIndex('result', 'result.isPlayerWin', { unique: false });
+                }
+                if (!db.objectStoreNames.contains(this.ANALYSIS_STORE)) {
+                    let analysisStore = db.createObjectStore(this.ANALYSIS_STORE, { keyPath: 'gameId' });
+                    analysisStore.createIndex('timestamp', 'timestamp', { unique: false });
+                    analysisStore.createIndex('mistakeCount', 'mistakeCount', { unique: false });
                 }
             };
             req.onsuccess = (e) => { this.db = e.target.result; resolve(this.db); };
@@ -214,6 +227,75 @@ const GameDatabase = {
         });
     },
 
+    saveAnalysis(gameId, analysis) {
+        return this.open().then(db => {
+            if (!db) return false;
+            return new Promise((resolve) => {
+                try {
+                    let tx = db.transaction(this.ANALYSIS_STORE, 'readwrite');
+                    let store = tx.objectStore(this.ANALYSIS_STORE);
+                    store.put({ gameId, ...analysis });
+                    tx.oncomplete = () => resolve(true);
+                    tx.onerror = () => resolve(false);
+                } catch (e) { resolve(false); }
+            });
+        });
+    },
+
+    getAnalysis(gameId) {
+        return this.open().then(db => {
+            if (!db) return null;
+            return new Promise((resolve) => {
+                try {
+                    let tx = db.transaction(this.ANALYSIS_STORE, 'readonly');
+                    let store = tx.objectStore(this.ANALYSIS_STORE);
+                    let req = store.get(gameId);
+                    req.onsuccess = () => resolve(req.result || null);
+                    req.onerror = () => resolve(null);
+                } catch (e) { resolve(null); }
+            });
+        });
+    },
+
+    getAllAnalysis() {
+        return this.open().then(db => {
+            if (!db) return [];
+            return new Promise((resolve) => {
+                try {
+                    let tx = db.transaction(this.ANALYSIS_STORE, 'readonly');
+                    let store = tx.objectStore(this.ANALYSIS_STORE);
+                    let req = store.getAll();
+                    req.onsuccess = () => resolve(req.result || []);
+                    req.onerror = () => resolve([]);
+                } catch (e) { resolve([]); }
+            });
+        });
+    },
+
+    getRecent(limit = 50, offset = 0) {
+        return this.open().then(db => {
+            if (!db) return [];
+            return new Promise((resolve) => {
+                try {
+                    let tx = db.transaction(this.STORE_NAME, 'readonly');
+                    let store = tx.objectStore(this.STORE_NAME);
+                    let idx = store.index('timestamp');
+                    let req = idx.openCursor(null, 'prev');
+                    let results = [], pos = 0;
+                    req.onsuccess = (e) => {
+                        let cursor = e.target.result;
+                        if (cursor && results.length < limit) {
+                            if (pos >= offset) results.push(cursor.value);
+                            pos++;
+                            cursor.continue();
+                        } else { resolve(results); }
+                    };
+                    req.onerror = () => resolve([]);
+                } catch (e) { resolve([]); }
+            });
+        });
+    },
+
     getAll() {
         return this.open().then(db => {
             if (!db) return [];
@@ -225,6 +307,21 @@ const GameDatabase = {
                     req.onsuccess = () => resolve(req.result || []);
                     req.onerror = () => resolve([]);
                 } catch (e) { resolve([]); }
+            });
+        });
+    },
+
+    get(id) {
+        return this.open().then(db => {
+            if (!db) return null;
+            return new Promise((resolve) => {
+                try {
+                    let tx = db.transaction(this.STORE_NAME, 'readonly');
+                    let store = tx.objectStore(this.STORE_NAME);
+                    let req = store.get(id);
+                    req.onsuccess = () => resolve(req.result || null);
+                    req.onerror = () => resolve(null);
+                } catch (e) { resolve(null); }
             });
         });
     },
@@ -260,9 +357,7 @@ const GameDatabase = {
                             store.delete(cursor.primaryKey);
                             deleted++;
                             cursor.continue();
-                        } else {
-                            resolve();
-                        }
+                        } else { resolve(); }
                     };
                     req.onerror = () => resolve();
                 } catch (e) { resolve(); }
@@ -270,11 +365,18 @@ const GameDatabase = {
         });
     },
 
-    cleanup() {
-        this.getAll().then(records => {
-            if (records.length > this.MAX_RECORDS) {
-                this.deleteOldest(records.length - this.MAX_RECORDS);
-            }
+    deleteAll() {
+        return this.open().then(db => {
+            if (!db) return;
+            return new Promise((resolve) => {
+                try {
+                    let tx = db.transaction([this.STORE_NAME, this.ANALYSIS_STORE], 'readwrite');
+                    tx.objectStore(this.STORE_NAME).clear();
+                    tx.objectStore(this.ANALYSIS_STORE).clear();
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = () => resolve();
+                } catch (e) { resolve(); }
+            });
         });
     }
 };
@@ -283,13 +385,13 @@ const GameDatabase = {
 const GameRecorder = {
     currentGame: null,
     _hooksInstalled: false,
+    _callReasoning: null,
 
     installHooks() {
         if (this._hooksInstalled) return;
         this._hooksInstalled = true;
         let self = this;
 
-        // Hook startCallPhase — at this point all cards are dealt and hands are ready
         let origStartCallPhase = window.startCallPhase;
         if (origStartCallPhase) {
             window._origStartCallPhase = origStartCallPhase;
@@ -299,7 +401,6 @@ const GameRecorder = {
             };
         }
 
-        // Hook callScore
         let origCallScore = window.callScore;
         if (origCallScore) {
             window._origCallScore = origCallScore;
@@ -311,7 +412,6 @@ const GameRecorder = {
             };
         }
 
-        // Hook becomeLandlord
         let origBecomeLandlord = window.becomeLandlord;
         if (origBecomeLandlord) {
             window._origBecomeLandlord = origBecomeLandlord;
@@ -323,7 +423,6 @@ const GameRecorder = {
             };
         }
 
-        // Hook executePlayCards
         let origExecutePlayCards = window.executePlayCards;
         if (origExecutePlayCards) {
             window._origExecutePlayCards = origExecutePlayCards;
@@ -335,7 +434,6 @@ const GameRecorder = {
             };
         }
 
-        // Hook endGame
         let origEndGame = window.endGame;
         if (origEndGame) {
             window._origEndGame = origEndGame;
@@ -348,42 +446,64 @@ const GameRecorder = {
 
     startGame(state) {
         if (!state || state.mode !== 'single') return;
+        let safePlayers = state.players.map(p =>
+            p.map(c => ({ id: c.id, suit: c.suit, rank: c.rank, value: c.value }))
+        );
         this.currentGame = {
+            id: 'game_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
             timestamp: Date.now(),
             mode: state.mode,
             difficulty: state.difficulty,
             paramVersion: ParamConfig.get('version'),
-            players: state.players.map(p => p.map(c => c.value)),
-            lordCards: [],
-            calls: [],
-            landlord: -1,
+            initialDeal: {
+                players: safePlayers,
+                lordCards: []
+            },
+            calling: { order: [], scores: {}, landlord: -1 },
             actions: [],
-            result: null
+            result: null,
+            analysed: false
         };
     },
 
     recordCall(player, score) {
         if (!this.currentGame) return;
-        this.currentGame.calls[player] = score;
+        this.currentGame.calling.order.push(player);
+        this.currentGame.calling.scores[player] = score;
+        let reasoning = window.__lastAICallReasoning;
+        if (reasoning && reasoning.player === player) {
+            if (!this.currentGame.calling.reasoning) this.currentGame.calling.reasoning = {};
+            this.currentGame.calling.reasoning[player] = { strength: reasoning.strength, decision: reasoning.decision };
+        }
     },
 
     recordLandlord(player) {
         if (!this.currentGame) return;
-        this.currentGame.landlord = player;
+        this.currentGame.calling.landlord = player;
         let gs = window.GameState;
         if (gs && gs.lordCards) {
-            this.currentGame.lordCards = gs.lordCards.map(c => c.value);
+            this.currentGame.initialDeal.lordCards = gs.lordCards.map(c => ({ id: c.id, suit: c.suit, rank: c.rank, value: c.value }));
         }
     },
 
     recordAction(player, cards) {
         if (!this.currentGame) return;
         let isPlay = cards && cards.length > 0;
-        this.currentGame.actions.push({
+        let action = {
             p: player,
-            c: isPlay ? cards.map(c => c.value) : [],
+            t: Date.now(),
+            c: isPlay ? cards.map(c => ({ id: c.id, suit: c.suit, rank: c.rank, value: c.value })) : [],
             pass: !isPlay
-        });
+        };
+        let reasoning = window.__lastAIPlayReasoning;
+        if (reasoning && reasoning.player === player && reasoning.turn === this.currentGame.actions.length) {
+            action.reasoning = {
+                chosenScore: reasoning.chosenScore,
+                candidates: reasoning.candidates
+            };
+            window.__lastAIPlayReasoning = null;
+        }
+        this.currentGame.actions.push(action);
     },
 
     endGameResult(winner) {
@@ -409,10 +529,11 @@ const GameRecorder = {
             isAntiSpring
         };
 
-        // Save to DB
         let game = this.currentGame;
         this.currentGame = null;
-        GameDatabase.save(game).then(() => GameDatabase.cleanup());
+        GameDatabase.save(game).then(() => {
+            GameAnalyzer.analyze(game);
+        });
         ParameterOptimizer._onGameEnd(game);
     }
 };
@@ -425,7 +546,6 @@ const ParameterOptimizer = {
     _INCREMENTAL_INTERVAL: 10,
     _running: false,
 
-    // Called after each game ends
     _onGameEnd(game) {
         if (!game || !game.result) return;
         this._pendingGames.push(game);
@@ -446,20 +566,14 @@ const ParameterOptimizer = {
     _runIncremental() {
         if (this._running || this._pendingGames.length < this._INCREMENTAL_INTERVAL) return;
         this._running = true;
-
-        // Take a batch of games for analysis
         let games = this._pendingGames.splice(0, this._INCREMENTAL_INTERVAL);
         let currentWinRate = games.filter(g => g.result && g.result.isPlayerWin).length / games.length;
-
-        // Generate candidate: small mutation of current params
         let candidate = this._mutate(ParamConfig._overrides || DEFAULT_PARAMS, 0.15);
         let candidateWins = 0, candidateTotal = Math.min(10, this._INCREMENTAL_INTERVAL);
-
         for (let i = 0; i < candidateTotal; i++) {
             if (this._simulateGame(candidate)) candidateWins++;
         }
         let candidateWinRate = candidateWins / candidateTotal;
-
         if (candidateWinRate > currentWinRate || (candidateWinRate >= currentWinRate && Math.random() < 0.3)) {
             ParamConfig._overrides = candidate;
             ParamConfig._persist();
@@ -470,17 +584,13 @@ const ParameterOptimizer = {
     runDeepOptimization(onProgress, onComplete) {
         if (this._running) { if (onComplete) onComplete(false); return; }
         this._running = true;
-
-        // Run asynchronously to keep UI responsive
         setTimeout(() => {
             let N_CANDIDATES = 15, N_SIMS = 20, N_ELITE = 5;
             let candidates = [];
             let baseParams = ParamConfig._overrides || DEFAULT_PARAMS;
-
             for (let i = 0; i < N_CANDIDATES; i++) {
                 candidates.push(this._mutate(JSON.parse(JSON.stringify(baseParams)), 0.25));
             }
-
             let results = [];
             for (let i = 0; i < candidates.length; i++) {
                 let wins = 0;
@@ -490,11 +600,8 @@ const ParameterOptimizer = {
                 }
                 results.push({ params: candidates[i], winRate: wins / N_SIMS });
             }
-
             results.sort((a, b) => b.winRate - a.winRate);
             let elite = results.slice(0, N_ELITE);
-
-            // Weighted average of elite params
             let avg = JSON.parse(JSON.stringify(baseParams));
             let totalWeight = 0;
             for (let e of elite) {
@@ -509,7 +616,6 @@ const ParameterOptimizer = {
                     }
                 }
             }
-
             avg.version = DEFAULT_PARAMS.version;
             ParamConfig._overrides = avg;
             ParamConfig._persist();
@@ -521,8 +627,6 @@ const ParameterOptimizer = {
     _mutate(params, strength) {
         let p = JSON.parse(JSON.stringify(params));
         let r = () => 1 + (Math.random() - 0.5) * strength * 2;
-
-        // Mutate weights
         if (p.weights) {
             for (let k in p.weights) {
                 if (typeof p.weights[k] === 'number' && Math.random() < 0.5) {
@@ -531,8 +635,6 @@ const ParameterOptimizer = {
                 }
             }
         }
-
-        // Mutate call thresholds
         if (p.callThresholds) {
             for (let diff in p.callThresholds) {
                 let ct = p.callThresholds[diff];
@@ -547,13 +649,7 @@ const ParameterOptimizer = {
                 }
             }
         }
-
-        // Mutate playHeuristics
-        if (p.playHeuristics) {
-            this._mutateNested(p.playHeuristics, strength, 0.3);
-        }
-
-        // Mutate passScores
+        if (p.playHeuristics) this._mutateNested(p.playHeuristics, strength, 0.3);
         if (p.passScores) {
             for (let k in p.passScores) {
                 if (typeof p.passScores[k] === 'number' && Math.random() < 0.3) {
@@ -562,8 +658,6 @@ const ParameterOptimizer = {
                 }
             }
         }
-
-        // Mutate evalCoeffs
         if (p.evalCoeffs) {
             for (let k in p.evalCoeffs) {
                 if (typeof p.evalCoeffs[k] === 'number' && Math.random() < 0.4) {
@@ -572,7 +666,6 @@ const ParameterOptimizer = {
                 }
             }
         }
-
         return p;
     },
 
@@ -599,7 +692,7 @@ const ParameterOptimizer = {
     },
 
     _simulateGame(params) {
-        if (typeof heuristicPlayout !== 'function' || typeof GameState === 'undefined') return Math.random() < 0.4;
+        if (typeof heuristicPlayoutDeterministic !== 'function' || typeof GameState === 'undefined') return Math.random() < 0.4;
         let savedOverrides = ParamConfig._overrides;
         ParamConfig._overrides = params;
         try {
@@ -608,8 +701,7 @@ const ParameterOptimizer = {
             let myId = 0;
             let cp = sim.currentPlayer !== undefined ? sim.currentPlayer : 0;
             let mem = new MasterMemory();
-            let result = heuristicPlayout(sim, cp, myId, mem);
-            return result;
+            return heuristicPlayoutDeterministic(sim, cp, myId, mem);
         } catch (e) {
             return Math.random() < 0.4;
         } finally {
@@ -626,52 +718,597 @@ const ParameterOptimizer = {
     }
 };
 
-// ======================== 5. PARAM EXPORTER ========================
-const ParamExporter = {
-    showUI() {
-        let modal = document.getElementById('aiParamModal');
-        if (modal) { modal.classList.remove('hidden'); this._refreshUI(); return; }
+// ======================== 5. GAME ANALYZER ========================
+const GameAnalyzer = {
+    _running: false,
+    _queue: [],
 
-        modal = document.createElement('div');
-        modal.id = 'aiParamModal';
-        modal.className = 'modal hidden';
-        GameDatabase.count().then(count => {
-            modal.innerHTML = `
-                <div class="modal-content" style="max-width:420px;">
-                    <h2 class="text-lg text-yellow-400 mb-4 retro-text text-center">🤖 AI 参数管理</h2>
-                    <div id="aiParamInfo" class="text-[10px] text-gray-300 mb-4 space-y-1"></div>
-                    <div class="flex flex-col gap-2">
-                        <button onclick="ParamExporter.copyToClipboard()" class="pixel-btn bg-blue-500 text-[10px] w-full">📋 复制参数 JSON</button>
-                        <button onclick="ParamExporter.downloadFile()" class="pixel-btn bg-green-500 text-[10px] w-full">💾 下载参数文件</button>
-                        <button onclick="ParamExporter.importFromClipboard()" class="pixel-btn bg-yellow-500 text-[10px] w-full">📂 从剪贴板导入</button>
-                        <button onclick="document.getElementById('aiParamFileInput').click()" class="pixel-btn bg-purple-500 text-[10px] w-full">📁 从文件导入</button>
-                        <input type="file" id="aiParamFileInput" accept=".json" style="display:none" onchange="ParamExporter.importFromFile(event)">
-                        <button onclick="ParamExporter.runDeepOptimization()" class="pixel-btn bg-red-500 text-[10px] w-full">⚡ 开始深度优化</button>
-                        <button onclick="ParamExporter.resetParams()" class="pixel-btn bg-gray-600 text-[10px] w-full">↩ 恢复默认参数</button>
-                        <button onclick="document.getElementById('aiParamModal').classList.add('hidden')" class="pixel-btn bg-gray-500 text-[10px] w-full mt-2">关闭</button>
-                    </div>
-                    <div id="aiParamProgress" class="hidden mt-3 text-[10px] text-center text-yellow-400"></div>
-                    <textarea id="aiParamTextArea" class="hidden" style="width:100%;height:100px;background:#1e1e2e;color:#aaa;border:1px solid #555;border-radius:4px;font-size:8px;margin-top:8px;padding:4px;"></textarea>
-                </div>
-            `;
-            document.body.appendChild(modal);
-            this._refreshUI();
+    analyze(game) {
+        if (!game || !game.initialDeal || !game.actions || game.actions.length === 0) return;
+        if (this._running) { this._queue.push(game); return; }
+        this._running = true;
+        setTimeout(() => this._runAnalysis(game), 500);
+    },
+
+    _runAnalysis(game) {
+        try {
+            let analysis = this._analyzeGame(game);
+            GameDatabase.saveAnalysis(game.id, analysis).then(() => {
+                CorrectionRules._learnFromAnalysis(game.id, analysis);
+                this._running = false;
+                if (this._queue.length > 0) this.analyze(this._queue.shift());
+            });
+        } catch (e) {
+            console.warn('GameAnalyzer error:', e);
+            this._running = false;
+            if (this._queue.length > 0) this.analyze(this._queue.shift());
+        }
+    },
+
+    _analyzeGame(game) {
+        let initialDeal = game.initialDeal;
+        let lordIdx = game.calling.landlord;
+        if (lordIdx < 0) return { gameId: game.id, timestamp: game.timestamp, mistakeCount: 0, mistakes: [], wouldWinIfOptimal: false };
+
+        // Rebuild initial hands
+        let players = initialDeal.players.map(p => p.map(c => ({ ...c })));
+        let lordCards = initialDeal.lordCards.map(c => ({ ...c }));
+        players[lordIdx].push(...lordCards);
+        players.forEach(p => p.sort((a, b) => a.value - b.value));
+
+        let mistakes = [];
+        let state = {
+            players: players.map(p => [...p]),
+            landlord: lordIdx,
+            currentPlayer: 0,
+            lastPlay: null,
+            lastPlayerId: -1,
+            passCount: 0,
+            phase: 'playing',
+            baseScore: game.result?.baseScore || 1,
+            bombCount: game.result?.bombCount || 0
+        };
+
+        // Determine play order from calling
+        let order = game.calling.order;
+        state.currentPlayer = order.length > 0 ? order[0] : 0;
+
+        // Replay and analyze each action
+        for (let i = 0; i < game.actions.length; i++) {
+            let action = game.actions[i];
+            if (state.phase !== 'playing') break;
+            if (state.players.some(p => p.length === 0)) break;
+
+            // Only check AI decisions (players 1 and 2)
+            if (action.p === 1 || action.p === 2) {
+                let playerHand = state.players[action.p];
+                if (playerHand && playerHand.length > 0) {
+                    let m = this._checkDecision(state, action, playerHand, game.difficulty);
+                    if (m) {
+                        m.turnIndex = i;
+                        m.player = action.p;
+                        mistakes.push(m);
+                    }
+                }
+            }
+
+            // Apply the actual action to advance state
+            this._applyAction(state, action);
+        }
+
+        let wouldWinIfOptimal = false;
+        if (mistakes.length > 0) {
+            wouldWinIfOptimal = this._simulateOptimal(game, mistakes);
+        }
+
+        return {
+            gameId: game.id,
+            timestamp: game.timestamp,
+            difficulty: game.difficulty,
+            mistakeCount: mistakes.length,
+            mistakes: mistakes.slice(0, 20),
+            wouldWinIfOptimal,
+            totalActions: game.actions.length
+        };
+    },
+
+    _checkDecision(state, action, hand, difficulty) {
+        let lastPlay = state.lastPlay;
+        let needBeat = lastPlay && state.lastPlayerId !== action.p;
+        let role = action.p === state.landlord ? 'landlord' : 'farmer';
+        let chosenCards = action.pass ? [] : action.c;
+
+        if (!needBeat) return null;
+
+        let memory = new MasterMemory();
+        let allPlays = getAllValidPlays(hand, lastPlay);
+        let beatable = allPlays.filter(p => canBeat(getCardType(p), lastPlay));
+
+        if (beatable.length === 0 && action.pass) return null;
+
+        // Score all options
+        let scored = beatable.map(p => {
+            let feat = extractPlayFeatures(p, hand, lastPlay, role, memory, { ...state, players: state.players.map(arr => [...arr]) });
+            return { play: p, score: scorePlay(feat, role, memory, { ...state }, hand) };
+        });
+        scored.sort((a, b) => b.score - a.score);
+
+        let chosenPlay = action.pass ? null : chosenCards;
+        let chosenScore = chosenPlay ? (scored.find(s => {
+            let ids1 = new Set(s.play.map(c => c.id));
+            let ids2 = new Set(chosenPlay.map(c => c.id));
+            if (ids1.size !== ids2.size) return false;
+            return [...ids1].every(id => ids2.has(id));
+        })?.score || -9999) : -1;
+
+        // Check for mistakes
+        let mistakes = [];
+
+        // 1. Overkill: used bomb/rocket when smaller works
+        if (chosenPlay) {
+            let chosenType = getCardType(chosenPlay);
+            if (chosenType && (chosenType.type === CardType.BOMB || chosenType.type === CardType.ROCKET)) {
+                let hasCheaperBeat = scored.some(s => {
+                    if (s.play === chosenPlay) return false;
+                    let t = getCardType(s.play);
+                    return t && t.type !== CardType.BOMB && t.type !== CardType.ROCKET;
+                });
+                if (hasCheaperBeat) {
+                    let cheaper = scored.find(s => {
+                        let t = getCardType(s.play);
+                        return t && t.type !== CardType.BOMB && t.type !== CardType.ROCKET;
+                    });
+                    mistakes.push({
+                        severity: 'high',
+                        category: 'overkill',
+                        chosenType: chosenType.type,
+                        reason: chosenType.type === CardType.ROCKET
+                            ? '用王炸过度压制，可改用单张'
+                            : '用炸弹过度压制，有更小牌型可用',
+                        wouldWin: false
+                    });
+                }
+            }
+
+            // 2. High kicker waste
+            if (chosenType && (chosenType.type === CardType.TRIPLE_WITH_SINGLE || chosenType.type === CardType.TRIPLE_WITH_PAIR)) {
+                let cnt = countValues(chosenPlay.map(c => c.value));
+                let target = chosenType.type === CardType.TRIPLE_WITH_SINGLE ? 1 : 2;
+                let kickerVal = parseInt(Object.keys(cnt).find(k => cnt[k] === target && parseInt(k) !== chosenType.value)) || 0;
+                if (kickerVal >= 11) {
+                    let hasSmallerKicker = hand.some(c => c.value !== chosenType.value && c.value < kickerVal);
+                    if (hasSmallerKicker) {
+                        mistakes.push({
+                            severity: 'medium',
+                            category: 'high_kicker',
+                            chosenType: chosenType.type,
+                            reason: `三带中使用高牌(值=${kickerVal})做带牌，手上有更小牌可选`,
+                            wouldWin: false
+                        });
+                    }
+                }
+            }
+        }
+
+        // 3. Pass when should beat (opponent about to win)
+        if (action.pass) {
+            let oppIdx = state.lastPlayerId;
+            if (oppIdx >= 0 && state.players[oppIdx] && state.players[oppIdx].length <= 3 && beatable.length > 0) {
+                mistakes.push({
+                    severity: 'high',
+                    category: 'bad_pass',
+                    chosenType: 'pass',
+                    reason: '对手剩余牌少，不应放过，有牌可压',
+                    wouldWin: false
+                });
+            }
+        }
+
+        return mistakes.length > 0 ? mistakes[0] : null;
+    },
+
+    _applyAction(state, action) {
+        if (action.pass) {
+            state.passCount++;
+            if (state.passCount >= 2) {
+                state.lastPlay = null;
+                state.lastPlayerId = -1;
+                state.passCount = 0;
+            }
+        } else {
+            let playIds = new Set(action.c.map(c => c.id));
+            state.players[action.p] = state.players[action.p].filter(c => !playIds.has(c.id));
+            state.lastPlay = getCardType(action.c.map(c => ({ ...c })));
+            state.lastPlayerId = action.p;
+            state.passCount = 0;
+        }
+        state.currentPlayer = (action.p + 1) % 3;
+    },
+
+    _simulateOptimal(game, mistakes) {
+        if (!game.initialDeal) return false;
+        let lordIdx = game.calling.landlord;
+        if (lordIdx < 0) return false;
+        let players = game.initialDeal.players.map(p => p.map(c => ({ ...c })));
+        let lordCards = game.initialDeal.lordCards.map(c => ({ ...c }));
+        players[lordIdx].push(...lordCards);
+        players.forEach(p => p.sort((a, b) => a.value - b.value));
+
+        let mem = new MasterMemory();
+        let state = {
+            players: players.map(p => [...p]),
+            landlord: lordIdx,
+            currentPlayer: game.actions[0]?.p || 0,
+            lastPlay: null,
+            lastPlayerId: -1,
+            passCount: 0,
+            phase: 'playing',
+            baseScore: game.result?.baseScore || 1,
+            bombCount: game.result?.bombCount || 0
+        };
+
+        let mistakeSet = new Set(mistakes.filter(m => m.severity === 'high').map(m => m.turnIndex));
+
+        for (let i = 0; i < game.actions.length; i++) {
+            if (state.players.some(p => p.length === 0)) break;
+            let action = game.actions[i];
+
+            if (mistakeSet.has(i) && (action.p === 1 || action.p === 2)) {
+                let hand = state.players[action.p];
+                let lastPlay = state.lastPlay;
+                let needBeat = lastPlay && state.lastPlayerId !== action.p;
+                if (needBeat && hand.length > 0) {
+                    let role = action.p === state.landlord ? 'landlord' : 'farmer';
+                    let allPlays = getAllValidPlays(hand, lastPlay);
+                    let beatable = allPlays.filter(p => canBeat(getCardType(p), lastPlay));
+                    if (beatable.length > 0) {
+                        let scored = beatable.map(p => {
+                            let feat = extractPlayFeatures(p, hand, lastPlay, role, mem, { ...state, players: state.players.map(arr => [...arr]) });
+                            return { play: p, score: scorePlay(feat, role, mem, { ...state }, hand) };
+                        });
+                        scored.sort((a, b) => b.score - a.score);
+                        let bestPlay = scored[0].play;
+                        let playIds = new Set(bestPlay.map(c => c.id));
+                        state.players[action.p] = state.players[action.p].filter(c => !playIds.has(c.id));
+                        state.lastPlay = getCardType(bestPlay);
+                        state.lastPlayerId = action.p;
+                        state.passCount = 0;
+                        state.currentPlayer = (action.p + 1) % 3;
+                        continue;
+                    }
+                }
+            }
+            this._applyAction(state, action);
+        }
+
+        return state.players.some((p, idx) => p.length === 0 && idx !== game.calling.landlord)
+            ? !game.result?.isPlayerWin
+            : false;
+    }
+};
+
+// ======================== 6. CORRECTION RULES ========================
+const CorrectionRules = {
+    _rules: [],
+    _loaded: false,
+    MAX_RULES: 50,
+    MIN_CONFIDENCE: 0.5,
+
+    init() {
+        if (this._loaded) return;
+        this._loaded = true;
+        try {
+            let saved = localStorage.getItem('landlord_correction_rules');
+            if (saved) {
+                let data = JSON.parse(saved);
+                if (Array.isArray(data)) this._rules = data;
+            }
+        } catch (e) {}
+    },
+
+    _persist() {
+        try {
+            localStorage.setItem('landlord_correction_rules', JSON.stringify(this._rules));
+        } catch (e) {}
+    },
+
+    match(context) {
+        this.init();
+        let results = [];
+        for (let rule of this._rules) {
+            if (rule.confidence < this.MIN_CONFIDENCE) continue;
+            if (this._ruleMatches(rule, context)) {
+                results.push(rule);
+            }
+        }
+        return results;
+    },
+
+    _ruleMatches(rule, ctx) {
+        for (let key in rule.context) {
+            let val = rule.context[key];
+            if (val === true && !ctx[key]) return false;
+            if (val === false && ctx[key]) return false;
+            if (typeof val === 'number' && typeof ctx[key] === 'number') {
+                if (rule.comparators && rule.comparators[key] === 'lte') {
+                    if (ctx[key] > val) return false;
+                } else if (rule.comparators && rule.comparators[key] === 'gte') {
+                    if (ctx[key] < val) return false;
+                } else {
+                    if (ctx[key] !== val) return false;
+                }
+            }
+            if (typeof val === 'string' && ctx[key] !== val) return false;
+        }
+        return true;
+    },
+
+    _learnFromAnalysis(gameId, analysis) {
+        if (!analysis || !analysis.mistakes || analysis.mistakes.length === 0) return;
+        this.init();
+
+        for (let mistake of analysis.mistakes) {
+            if (mistake.category === 'overkill') {
+                this._addOrStrengthen({
+                    context: {
+                        needBeat: true,
+                        isBombPlay: false,
+                        isRocketPlay: false,
+                        hasSmallJoker: false
+                    },
+                    comparators: {},
+                    category: 'overkill',
+                    avoidType: mistake.chosenType === CardType.ROCKET ? 'rocket' : 'bomb',
+                    penalty: mistake.chosenType === CardType.ROCKET ? -350 : -300,
+                    reason: '避免过度压制，有更经济的出法'
+                });
+            } else if (mistake.category === 'high_kicker') {
+                this._addOrStrengthen({
+                    context: {
+                        playType: CardType.TRIPLE_WITH_SINGLE,
+                        kickerValue: 11
+                    },
+                    comparators: { kickerValue: 'gte' },
+                    category: 'high_kicker',
+                    avoidType: 'high_kicker',
+                    penalty: -250,
+                    reason: '三带中避免用高牌做带牌'
+                });
+            } else if (mistake.category === 'bad_pass') {
+                this._addOrStrengthen({
+                    context: {
+                        needBeat: true,
+                        isBombPlay: false,
+                        isRocketPlay: false
+                    },
+                    comparators: { handSize: 'gte' },
+                    category: 'bad_pass',
+                    avoidType: 'pass',
+                    penalty: -300,
+                    reason: '对手剩余牌少时不应放过'
+                });
+            }
+        }
+        this._prune();
+        this._persist();
+    },
+
+    _addOrStrengthen(template) {
+        let existing = this._rules.find(r =>
+            r.category === template.category &&
+            JSON.stringify(r.context) === JSON.stringify(template.context)
+        );
+        if (existing) {
+            existing.confidence = Math.min(1, existing.confidence + 0.08);
+            existing.triggerCount++;
+            existing.penalty = Math.max(existing.penalty, template.penalty);
+        } else {
+            this._rules.push({
+                id: 'rule_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+                category: template.category,
+                context: template.context,
+                comparators: template.comparators || {},
+                avoidType: template.avoidType,
+                penalty: template.penalty,
+                confidence: 0.4,
+                triggerCount: 1,
+                helpCount: 0,
+                reason: template.reason
+            });
+        }
+    },
+
+    _prune() {
+        this._rules.sort((a, b) => b.confidence - a.confidence);
+        if (this._rules.length > this.MAX_RULES) {
+            this._rules = this._rules.slice(0, this.MAX_RULES);
+        }
+        this._rules = this._rules.filter(r => {
+            if (r.confidence < 0.2 && r.triggerCount > 10) return false;
+            return true;
         });
     },
 
-    _refreshUI() {
-        let info = document.getElementById('aiParamInfo');
-        if (!info) return;
-        GameDatabase.count().then(count => {
-            let stats = ParameterOptimizer.getStats();
-            let isCustom = ParamConfig._overrides !== null;
-            info.innerHTML = `
-                <div>📌 参数版本: v${ParamConfig.get('version')} ${isCustom ? '✨ 已自定义' : '📄 默认'}</div>
-                <div>🎮 已记录游戏: ${count} 局</div>
-                <div>⏳ 待优化: ${stats.pendingGames} 局</div>
-                <div>${stats.running ? '🔴 优化进行中...' : '🟢 空闲'}</div>
-            `;
+    recordDecision(state, playerId, chosenPlay, scored) {
+        // Stub for future use: match live decisions against rules
+    },
+
+    getStats() {
+        this.init();
+        let active = this._rules.filter(r => r.confidence >= this.MIN_CONFIDENCE).length;
+        return { total: this._rules.length, active };
+    }
+};
+
+// ======================== 7. PARAM EXPORTER + UI ========================
+const ParamExporter = {
+    _currentTab: 'params',
+
+    showUI(tab) {
+        let modal = document.getElementById('aiParamModal');
+        if (tab) this._currentTab = tab;
+        if (modal) {
+            modal.classList.remove('hidden');
+            this._refreshUI();
+            return;
+        }
+        modal = document.createElement('div');
+        modal.id = 'aiParamModal';
+        modal.className = 'modal hidden';
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width:460px;max-height:80vh;overflow-y:auto;">
+                <div class="flex gap-1 mb-4">
+                    <button id="aiTabParams" class="pixel-btn ${this._currentTab==='params'?'bg-yellow-500':'bg-gray-600'} text-[10px] flex-1" onclick="ParamExporter.switchTab('params')">⚙ 参数</button>
+                    <button id="aiTabGames" class="pixel-btn ${this._currentTab==='games'?'bg-yellow-500':'bg-gray-600'} text-[10px] flex-1" onclick="ParamExporter.switchTab('games')">🎮 记录</button>
+                    <button id="aiTabRules" class="pixel-btn ${this._currentTab==='rules'?'bg-yellow-500':'bg-gray-600'} text-[10px] flex-1" onclick="ParamExporter.switchTab('rules')">📏 规则</button>
+                </div>
+                <div id="aiParamContent"></div>
+                <button onclick="document.getElementById('aiParamModal').classList.add('hidden')" class="pixel-btn bg-gray-500 text-[10px] w-full mt-2">关闭</button>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        this._refreshUI();
+    },
+
+    switchTab(tab) {
+        this._currentTab = tab;
+        ['aiTabParams','aiTabGames','aiTabRules'].forEach(id => {
+            let btn = document.getElementById(id);
+            if (btn) btn.className = `pixel-btn ${id.includes(tab)?'bg-yellow-500':'bg-gray-600'} text-[10px] flex-1`;
         });
+        this._refreshUI();
+    },
+
+    _refreshUI() {
+        let content = document.getElementById('aiParamContent');
+        if (!content) return;
+        if (this._currentTab === 'params') this._renderParamsTab(content);
+        else if (this._currentTab === 'games') this._renderGamesTab(content);
+        else if (this._currentTab === 'rules') this._renderRulesTab(content);
+    },
+
+    _renderParamsTab(container) {
+        let isCustom = ParamConfig._overrides !== null;
+        let ruleStats = CorrectionRules.getStats();
+        container.innerHTML = `
+            <div id="aiParamInfo" class="text-[10px] text-gray-300 mb-3 space-y-1">
+                <div>📌 参数版本: v${ParamConfig.get('version')} ${isCustom ? '✨ 已自定义' : '📄 默认'}</div>
+                <div>📏 纠错规则: ${ruleStats.active}/${ruleStats.total} 条生效</div>
+            </div>
+            <div class="flex flex-col gap-2">
+                <button onclick="ParamExporter.copyToClipboard()" class="pixel-btn bg-blue-500 text-[10px] w-full">📋 复制参数 JSON</button>
+                <button onclick="ParamExporter.downloadFile()" class="pixel-btn bg-green-500 text-[10px] w-full">💾 下载参数文件</button>
+                <button onclick="ParamExporter.importFromClipboard()" class="pixel-btn bg-yellow-500 text-[10px] w-full">📂 从剪贴板导入</button>
+                <button onclick="document.getElementById('aiParamFileInput').click()" class="pixel-btn bg-purple-500 text-[10px] w-full">📁 从文件导入</button>
+                <input type="file" id="aiParamFileInput" accept=".json" style="display:none" onchange="ParamExporter.importFromFile(event)">
+                <button onclick="ParamExporter.runDeepOptimization()" class="pixel-btn bg-red-500 text-[10px] w-full">⚡ 开始深度优化</button>
+                <button onclick="ParamExporter.resetParams()" class="pixel-btn bg-gray-600 text-[10px] w-full">↩ 恢复默认参数</button>
+            </div>
+            <div id="aiParamProgress" class="hidden mt-3 text-[10px] text-center text-yellow-400"></div>
+            <textarea id="aiParamTextArea" class="hidden" style="width:100%;height:100px;background:#1e1e2e;color:#aaa;border:1px solid #555;border-radius:4px;font-size:8px;margin-top:8px;padding:4px;"></textarea>
+        `;
+    },
+
+    _renderGamesTab(container) {
+        container.innerHTML = '<div class="text-[10px] text-gray-400 text-center py-4">⏳ 加载中...</div>';
+        let limit = 50;
+        GameDatabase.getRecent(limit).then(games => {
+            if (!games || games.length === 0) {
+                container.innerHTML = '<div class="text-[10px] text-gray-400 text-center py-4">暂无对局记录</div>';
+                return;
+            }
+            let html = `<div class="flex justify-between mb-2">
+                <span class="text-[10px] text-gray-400">最近 ${games.length} 局</span>
+                <button onclick="ParamExporter._deleteAllGames()" class="text-[8px] text-red-400 underline">清空全部</button>
+            </div>`;
+            for (let g of games) {
+                let resultIcon = g.result?.isPlayerWin ? '🎉' : '💔';
+                let timeStr = new Date(g.timestamp).toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+                let mistakeBadge = '';
+                if (g.analysed && g.id) {
+                    mistakeBadge = `<span class="text-yellow-400">📊</span>`;
+                }
+                html += `<div class="bg-gray-800/50 rounded p-2 mb-1 flex justify-between items-center text-[10px] cursor-pointer" onclick="ParamExporter._showGameDetail('${g.id}')">
+                    <div>${resultIcon} ${g.difficulty} ${timeStr}</div>
+                    <div class="text-gray-400">×${g.result?.multiplier || 1} ${mistakeBadge}</div>
+                </div>`;
+            }
+            container.innerHTML = html;
+        }).catch(() => {
+            container.innerHTML = '<div class="text-[10px] text-gray-400 text-center py-4">加载失败</div>';
+        });
+    },
+
+    _renderRulesTab(container) {
+        CorrectionRules.init();
+        let rules = CorrectionRules._rules;
+        if (rules.length === 0) {
+            container.innerHTML = '<div class="text-[10px] text-gray-400 text-center py-4">暂无纠错规则，完成对局后将自动生成</div>';
+            return;
+        }
+        let html = `<div class="text-[10px] text-gray-400 mb-2">共 ${rules.length} 条规则（显示置信度 ≥ ${Math.round(CorrectionRules.MIN_CONFIDENCE*100)}% 的生效规则）</div>`;
+        for (let r of rules) {
+            let active = r.confidence >= CorrectionRules.MIN_CONFIDENCE;
+            let categoryIcon = r.category === 'overkill' ? '💣' : r.category === 'high_kicker' ? '🃏' : r.category === 'bad_pass' ? '⏱' : '📋';
+            html += `<div class="bg-gray-800/50 rounded p-2 mb-1 text-[9px] ${active?'border-l-2 border-green-500':'opacity-50'}">
+                <div class="flex justify-between">
+                    <span>${categoryIcon} ${r.reason}</span>
+                    <span class="${active?'text-green-400':'text-gray-500'}">${Math.round(r.confidence*100)}%</span>
+                </div>
+                <div class="text-gray-500">触发${r.triggerCount}次 · 罚分 ${r.penalty}</div>
+            </div>`;
+        }
+        html += `<button onclick="CorrectionRules._rules=[];CorrectionRules._persist();ParamExporter._refreshUI();" class="pixel-btn bg-red-500 text-[10px] w-full mt-2">🗑 清空全部规则</button>`;
+        container.innerHTML = html;
+    },
+
+    _showGameDetail(gameId) {
+        GameDatabase.getAnalysis(gameId).then(analysis => {
+            GameDatabase.get(gameId).then(game => {
+                if (!game) { ParamExporter._showToast('未找到对局数据'); return; }
+                let modal = document.createElement('div');
+                modal.className = 'modal';
+                modal.style.zIndex = '1100';
+                let analysisHtml = '';
+                if (analysis && analysis.mistakes && analysis.mistakes.length > 0) {
+                    analysisHtml = `<div class="text-[10px] text-red-400 mb-2">🔴 发现 ${analysis.mistakes.length} 处可改进：</div>`;
+                    for (let m of analysis.mistakes) {
+                        let sevIcon = m.severity === 'high' ? '🔴' : '🟡';
+                        analysisHtml += `<div class="bg-gray-800/50 rounded p-1.5 mb-1 text-[9px]">${sevIcon} 第${m.turnIndex+1}手: ${m.reason}</div>`;
+                    }
+                    if (analysis.wouldWinIfOptimal) {
+                        analysisHtml += `<div class="text-green-400 text-[10px] mt-2">✅ 如避免以上失误，本局本可获胜</div>`;
+                    }
+                } else {
+                    analysisHtml = '<div class="text-green-400 text-[10px]">✅ 未发现明显失误</div>';
+                }
+                modal.innerHTML = `
+                    <div class="modal-content" style="max-width:440px;max-height:80vh;overflow-y:auto;">
+                        <h2 class="text-sm text-yellow-400 mb-3 retro-text text-center">🎮 对局详情</h2>
+                        <div class="text-[10px] text-gray-300 space-y-1 mb-3">
+                            <div>难度: ${game.difficulty} · 结果: ${game.result?.isPlayerWin ? '🎉 胜利' : '💔 失败'} · 倍数: ×${game.result?.multiplier || 1}</div>
+                            <div>时间: ${new Date(game.timestamp).toLocaleString('zh-CN')}</div>
+                            <div>总步数: ${game.actions?.length || 0}</div>
+                        </div>
+                        ${analysisHtml}
+                        <div class="mt-2 text-[9px] text-gray-500">${game.actions?.slice(0, 30).map((a, i) =>
+                            `<span>${i+1}. P${a.p} ${a.pass ? '不出' : '出'+a.c.length+'张'}</span>`
+                        ).join(' · ')}${(game.actions?.length || 0) > 30 ? '...' : ''}</div>
+                        <button onclick="this.closest('.modal').remove()" class="pixel-btn bg-gray-500 text-[10px] w-full mt-3">关闭</button>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+            });
+        });
+    },
+
+    _deleteAllGames() {
+        if (confirm('确认清空全部对局记录？此操作不可撤销。')) {
+            GameDatabase.deleteAll().then(() => {
+                this._showToast('已清空全部记录');
+                this._refreshUI();
+            });
+        }
     },
 
     copyToClipboard() {
@@ -681,6 +1318,7 @@ const ParamExporter = {
             this._showToast('已复制到剪贴板');
         } else {
             let ta = document.getElementById('aiParamTextArea');
+            if (!ta) return;
             ta.classList.remove('hidden');
             ta.value = json;
             ta.select();
@@ -704,6 +1342,7 @@ const ParamExporter = {
 
     importFromClipboard() {
         let ta = document.getElementById('aiParamTextArea');
+        if (!ta) return;
         ta.classList.remove('hidden');
         ta.value = '';
         ta.placeholder = '在此粘贴 JSON...';
@@ -715,6 +1354,7 @@ const ParamExporter = {
                 this._showToast('参数导入成功！');
                 ta.classList.add('hidden');
                 this._refreshUI();
+                btn.remove();
             } else {
                 this._showToast('JSON 格式错误');
             }
@@ -744,10 +1384,8 @@ const ParamExporter = {
         if (!progressEl) return;
         progressEl.classList.remove('hidden');
         progressEl.textContent = '⏳ 深度优化进行中 (0%)...';
-
         let buttons = document.querySelectorAll('#aiParamModal .pixel-btn');
         buttons.forEach(b => b.disabled = true);
-
         ParameterOptimizer.runDeepOptimization(
             (done, total) => {
                 let pct = Math.round(done / total * 100);
@@ -785,8 +1423,9 @@ const ParamExporter = {
     }
 };
 
-// ======================== 6. AUTO INIT ========================
+// ======================== 8. AUTO INIT ========================
 ParamConfig.init();
+CorrectionRules.init();
 GameDatabase.open();
 if (document.readyState === 'complete') {
     GameRecorder.installHooks();

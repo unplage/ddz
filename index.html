@@ -182,6 +182,7 @@
     let prevLastPlayId = -1;
     let prevLastPlayType = null;
     let bottomCardsShown = false;
+    let gameStateForRules = null;
 
     function changeSpeed(val) { aiSpeed = val; }
     function toggleSound() { 
@@ -719,6 +720,49 @@
         if (features.playType === CardType.TRIPLE_WITH_SINGLE || features.playType === CardType.TRIPLE_WITH_PAIR) {
             if (features.kickerValue >= 11) score += ph.kickerPenalty.ge11;
             if (features.kickerValue >= 13) score += ph.kickerPenalty.ge13;
+            // 检查是否有更小的牌可做带牌
+            if (features.kickerValue >= 11 && playerHand && features.kickerValue) {
+                let mainVal = features.playPower > 100 ? (features.playPower - 60) : (features.playPower > 70 ? (features.playPower - 70) : 0);
+                if (mainVal < 0) mainVal = 0;
+                let mainCnt = (features.playType === CardType.TRIPLE_WITH_SINGLE) ? 1 : 2;
+                let hasSmaller = playerHand.some(c => c.value !== mainVal && c.value < features.kickerValue);
+                if (hasSmaller) score += ph.kickerPenalty.hasSmallerAlternative || -100;
+            }
+        }
+
+        // 过杀检测：有非炸弹/火箭方案可用，却用炸弹/火箭
+        if ((features.isBomb || features.isRocket) && features.needBeat && features.remainTotal > 3) {
+            if (features.lastPlayType === 'single' && features.lastPlayPower <= 12) {
+                score += ph.overkill.singleLe12 || -200;
+            }
+            if (features.lastPlayType === 'pair' && features.lastPlayPower <= 10) {
+                score += ph.overkill.pairLe10 || -150;
+            }
+        }
+
+        // 应用纠错规则
+        if (typeof CorrectionRules !== 'undefined' && playerHand && gameStateForRules) {
+            let ruleCtx = {
+                needBeat: features.needBeat,
+                lastPlayType: features.lastPlayType,
+                lastPlayPower: features.lastPlayPower,
+                playType: features.playType,
+                playPower: features.playPower,
+                kickerValue: features.kickerValue,
+                role: role,
+                handSize: playerHand.length,
+                isBomb: features.isBomb,
+                isRocket: features.isRocket,
+                isBombPlay: features.isBomb,
+                isRocketPlay: features.isRocket,
+                hasBothJokers: playerHand.some(c=>c.value===14) && playerHand.some(c=>c.value===13),
+                hasSmallJoker: playerHand.some(c=>c.value===13),
+                hasBigJoker: playerHand.some(c=>c.value===14)
+            };
+            let rules = CorrectionRules.match(ruleCtx);
+            for (let rule of rules) {
+                score += rule.penalty;
+            }
         }
 
         return score;
@@ -894,7 +938,12 @@
             else if (type.type === CardType.BOMB) pscore = ds.bomb;
             else if (type.type === CardType.STRAIGHT) pscore = ds.straight + type.length * ds.straightLenFactor;
             else if (type.type === CardType.STRAIGHT_PAIR) pscore = ds.straightPair + type.length * ds.straightPairLenFactor;
-            else if (type.type === CardType.TRIPLE_WITH_SINGLE || type.type === CardType.TRIPLE_WITH_PAIR) pscore = ds.tripleWith;
+            else if (type.type === CardType.TRIPLE_WITH_SINGLE || type.type === CardType.TRIPLE_WITH_PAIR) {
+                let target = type.type === CardType.TRIPLE_WITH_SINGLE ? 1 : 2;
+                let cnt = countValues(play.map(c=>c.value));
+                let kickerVal = parseInt(Object.keys(cnt).find(k => cnt[k] === target && parseInt(k) !== type.value)) || 0;
+                pscore = ds.tripleWith - Math.max(0, kickerVal - 7) * 3;
+            }
             else if (type.type === CardType.PAIR) pscore = ds.pair;
             else if (type.type === CardType.TRIPLE) pscore = ds.triple;
             else pscore = ds.single;
@@ -1099,6 +1148,12 @@
     }
 
     function heuristicPlayout(state, startPlayer, myId, memory) {
+        return heuristicPlayoutWithMode(state, startPlayer, myId, memory, false);
+    }
+    function heuristicPlayoutDeterministic(state, startPlayer, myId, memory) {
+        return heuristicPlayoutWithMode(state, startPlayer, myId, memory, true);
+    }
+    function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministic) {
         let s = JSON.parse(JSON.stringify(state));
         let cp = startPlayer;
         let hp = ParamConfig.get('heuristicPlayout');
@@ -1121,10 +1176,12 @@
                 return { play: p, score: scorePlay(feat, role, memory, s, hand) };
             });
             scored.sort((a,b) => b.score - a.score);
-            let r = Math.random();
             let chosenPlay = scored[0].play;
-            if (r >= hp.bestProb && scored.length > 1) chosenPlay = scored[1].play;
-            if (r >= hp.top2Prob && scored.length > 2) chosenPlay = scored[2].play;
+            if (!deterministic) {
+                let r = Math.random();
+                if (r >= hp.bestProb && scored.length > 1) chosenPlay = scored[1].play;
+                if (r >= hp.top2Prob && scored.length > 2) chosenPlay = scored[2].play;
+            }
             s.players[cp] = s.players[cp].filter(c => !chosenPlay.includes(c));
             s.lastPlay = getCardType(chosenPlay);
             s.lastPlayerId = cp;
@@ -1185,8 +1242,8 @@
                 if (strength > (ct.one || 22) && curr < 1) return 1; 
                 return 0;
             }
+            let _callStrength = evaluateHandStrength(state.players[this.id], this.memory, false, this.id);
             if (this.difficulty === 'legendary') {
-                let strength = evaluateHandStrength(state.players[this.id], this.memory, false, this.id);
                 let bestBid = 0, bestEV = -999;
                 for (let bid = 1; bid <= 3; bid++) {
                     if (bid <= curr) continue;
@@ -1286,8 +1343,29 @@
             let noRandom = isCritical || oppCloseToWin;
             let rf = ParamConfig.get('randomFactors');
             let randomFactor = rf[this.difficulty] !== undefined ? rf[this.difficulty] : 0.6;
-            if (!noRandom && Math.random() < randomFactor && scored.length > 1 && scored[1].play.length > 0) return scored[1].play;
-            return scored[0].play;
+            let chosenPlay;
+            if (!noRandom && Math.random() < randomFactor && scored.length > 1 && scored[1].play.length > 0) {
+                chosenPlay = scored[1].play;
+            } else {
+                chosenPlay = scored[0].play;
+            }
+            // Store reasoning for GameRecorder
+            window.__lastAIPlayReasoning = {
+                turn: state.actions ? state.actions.length : 0,
+                player: this.id,
+                phase: 'play',
+                chosen: chosenPlay,
+                chosenScore: scored.find(s => s.play === chosenPlay)?.score || 0,
+                candidates: scored.slice(0, Math.min(scored.length, 10)).map(s => ({
+                    type: s.play.length > 0 ? (getCardType(s.play)?.type || 'unknown') : 'pass',
+                    score: s.score,
+                    isChosen: s.play === chosenPlay
+                }))
+            };
+            if (typeof CorrectionRules !== 'undefined') {
+                CorrectionRules.recordDecision(state, this.id, chosenPlay, scored);
+            }
+            return chosenPlay;
         }
         selectLeadSmart(plays, role, hand, state, partnerId) {
             if (plays.length === 0) return [];
@@ -1555,7 +1633,9 @@
         startOnlineTimer(2, null, id);
         trackTimeout(() => {
             let ai = GameState.aiList[id];
+            let _callStrength = evaluateHandStrength(GameState.players[id], GameState.cardMemory, false, id);
             let score = ai.think('call', GameState);
+            window.__lastAICallReasoning = { player: id, strength: _callStrength, decision: score };
             callScore(score);
         }, 1000);
     }
@@ -1640,6 +1720,7 @@
     function processPlayPhase() {
         if (GameState.phase !== 'playing') return;
         if (GameState.processing) return;
+        gameStateForRules = GameState;
         let id = GameState.currentPlayer;
         if (GameState.lastPlayerId !== -1 && GameState.players[GameState.lastPlayerId].length === 0) { endGame(GameState.lastPlayerId); return; }
         if (GameState.passCount === 2) {
@@ -2354,6 +2435,7 @@
         }
         addHistory(isPlayerWin ? '🎉胜利！' : '💔失败');
         GameState.processing = false;
+        gameStateForRules = null;
         const playBtn = document.getElementById('playBtn');
         const passBtn = document.getElementById('passBtn');
         if (playBtn) playBtn.disabled = true;
