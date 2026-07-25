@@ -1478,6 +1478,7 @@
                 GameState.players[0].sort((a,b)=>a.value-b.value);
                 GameState.players[1].sort((a,b)=>a.value-b.value);
                 GameState.players[2].sort((a,b)=>a.value-b.value);
+                renderPlayerHand();
                 trackTimeout(startCallPhase, 500);
             }
         }, 30);
@@ -2040,6 +2041,7 @@
         let prevLastPlayerId = GameState.lastPlayerId;
         GameState.phase = state.phase;
         GameState.players = state.players.map(p=>[...p]);
+        GameState.players[GameState.myIndex].sort((a,b)=>a.value-b.value);
         GameState.landlord = state.landlord;
         GameState.currentPlayer = state.currentPlayer;
         GameState.lastPlay = state.lastPlay;
