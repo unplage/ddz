@@ -81,7 +81,6 @@
             <div class="text-yellow-400 text-[10px] retro-text">💰<span id="coins">1000</span></div>
             <div id="connStatus" class="hidden text-[8px] bg-green-700 px-2 py-1 rounded">未连接</div>
         </div>
-        <div id="actionLog" class="flex-1 text-center text-[9px] text-white/70 truncate px-2" title="">等待开始...</div>
         <div class="flex items-center gap-2" id="topRightControls">
             <select id="difficulty" class="difficulty-select" onchange="changeDifficulty(this.value)">
                 <option value="easy">简单</option>
@@ -98,7 +97,7 @@
     <div class="relative w-full h-full pt-12 pb-36" id="gameArea">
         <div class="opponent-top opponent-left"><div class="opponent-avatar bg-blue-600 pixel-border">🧑‍🌾<div class="card-count" id="leftCount">0</div></div><div class="text-[10px] bg-black/50 px-2 py-1 rounded">农民A</div><div class="text-[10px] text-yellow-400 h-4" id="leftStatus"></div><div class="timer-bar w-16"><div id="leftTimerFill" class="timer-fill" style="width:0"></div></div></div>
         <div class="opponent-top opponent-right"><div class="opponent-avatar bg-blue-600 pixel-border">👩‍🌾<div class="card-count" id="rightCount">0</div></div><div class="text-[10px] bg-black/50 px-2 py-1 rounded">农民B</div><div class="text-[10px] text-yellow-400 h-4" id="rightStatus"></div><div class="timer-bar w-16"><div id="rightTimerFill" class="timer-fill" style="width:0"></div></div></div>
-        <div class="play-area"><div id="playTable" class="flex flex-col items-center gap-2 w-full"><div class="text-[10px] text-yellow-400 mb-1" id="scoreDisplay">底分: 1</div><div class="flex gap-1 justify-center min-h-[50px] items-center bg-black/20 rounded-lg p-2 w-full" id="playArea"><span class="text-gray-500 text-[10px]">等待出牌...</span></div><div class="text-[10px] text-white/70" id="lastPlayer"></div></div></div>
+        <div class="play-area"><div id="playTable" class="flex flex-col items-center gap-2 w-full"><div class="text-[10px] text-yellow-400 mb-1" id="scoreDisplay">底分: 1</div><div class="flex gap-1 justify-center min-h-[50px] items-center bg-black/20 rounded-lg p-2 w-full" id="playArea"><span class="text-gray-500 text-[10px]">等待出牌...</span></div><div class="text-[10px] text-white/70" id="actionLog"></div><div class="text-[10px] text-white/70" id="lastPlayer"></div></div></div>
         <div class="history-log" id="historyLog">📜 出牌记录</div>
         <div class="player-area safe-area-bottom">
             <div class="text-yellow-400 text-[11px] retro-text text-center mb-1 h-5" id="playerStatus">点击选牌，拖动排序（桌面端）</div>
@@ -2318,6 +2317,8 @@
         GameState.selectedCards.clear();
         bottomCardsShown = false;
         playLog = [];
+        let actionEl = document.getElementById('actionLog');
+        if (actionEl) actionEl.textContent = '';
         prevLastPlayId = -1;
         prevLastPlayType = null;
         if (GameState.mode === 'online' && GameState.myRole !== 'host') {
