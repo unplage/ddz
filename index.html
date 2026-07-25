@@ -134,7 +134,7 @@
             <button onclick="hideOnlinePanel()" class="pixel-btn bg-gray-600 w-full mt-2 text-[10px]">返回</button>
         </div>
         <div id="rulesModal" class="hidden fixed inset-0 bg-black/95 flex items-center justify-center z-50 p-4"><div class="bg-gray-800 p-4 pixel-border w-full max-w-sm max-h-[80vh] overflow-y-auto"><h2 class="text-lg text-yellow-400 mb-4 retro-text text-center">游戏规则</h2><div class="text-[10px] leading-6 text-gray-300 space-y-2"><p>• 发牌：每人17张，留3张底牌</p><p>• 叫分：1-3分或不叫，高分当地主</p><p>• 牌型：单张、对子、三带一/对、顺子(5+)、连对(3+)、四带二、炸弹、王炸</p><p>• 春天/反春天：底分×2</p></div><button onclick="toggleRules()" class="pixel-btn bg-red-500 mt-4 w-full text-[12px]">关闭</button></div></div>
-        <div id="gameOverScreen" class="hidden fixed inset-0 bg-black/95 flex flex-col items-center justify-center z-50 p-4 overflow-y-auto"><h2 id="resultTitle" class="text-2xl retro-text mb-4 text-center"></h2><div id="resultContent" class="text-center mb-6 text-[12px]"></div><button onclick="resetGame()" class="pixel-btn bg-green-500 w-full max-w-[200px]">再来一局</button><button onclick="backToMenu()" class="pixel-btn bg-gray-500 w-full max-w-[200px] mt-2">返回菜单</button></div>
+        <div id="gameOverScreen" class="hidden fixed inset-0 bg-black/95 flex flex-col items-center justify-center z-[60] p-4 overflow-y-auto"><h2 id="resultTitle" class="text-2xl retro-text mb-4 text-center"></h2><div id="resultContent" class="text-center mb-6 text-[12px]"></div><button onclick="resetGame()" class="pixel-btn bg-green-500 w-full max-w-[200px]">再来一局</button><button onclick="backToMenu()" class="pixel-btn bg-gray-500 w-full max-w-[200px] mt-2">返回菜单</button></div>
         <div id="statsModal" class="modal hidden">
             <div class="modal-content">
                 <h2 class="text-lg text-yellow-400 mb-4 retro-text text-center">📊 历史战绩</h2>
@@ -238,8 +238,18 @@
             case CardType.SINGLE: text = valueToChinese(type.value); break;
             case CardType.PAIR: text = "对" + valueToChinese(type.value); break;
             case CardType.TRIPLE: text = "三张" + valueToChinese(type.value); break;
-            case CardType.TRIPLE_WITH_SINGLE: text = "三带一 " + valueToChinese(type.value); break;
-            case CardType.TRIPLE_WITH_PAIR: text = "三带对 " + valueToChinese(type.value); break;
+            case CardType.TRIPLE_WITH_SINGLE: {
+                let cnt = countValues(cards.map(c=>c.value));
+                let singleVal = parseInt(Object.keys(cnt).find(k=>cnt[k]===1));
+                text = "三个" + valueToChinese(type.value) + "带一个" + valueToChinese(singleVal);
+                break;
+            }
+            case CardType.TRIPLE_WITH_PAIR: {
+                let cnt = countValues(cards.map(c=>c.value));
+                let pairVal = parseInt(Object.keys(cnt).find(k=>cnt[k]===2));
+                text = "三个" + valueToChinese(type.value) + "带一对" + valueToChinese(pairVal);
+                break;
+            }
             case CardType.STRAIGHT: text = "顺子"; break;
             case CardType.STRAIGHT_PAIR: text = "连对"; break;
             case CardType.FOUR_WITH_TWO_SINGLE: text = "四带二"; break;
@@ -1683,8 +1693,6 @@
                 playSound('bomb');
                 triggerBombFlash(); 
                 addHistory(`💣 炸弹！倍数x2`);
-            } else {
-                playSound('play');
             }
             if (GameState.mode === 'single' && GameState.cardMemory) GameState.cardMemory.recordPlayerPlay(player, cards);
             displayPlayed(cards);
@@ -2314,6 +2322,9 @@
         if (window.speechSynthesis) {
             window.speechSynthesis.getVoices();
             selectedVoice = getChineseVoice();
+            window.speechSynthesis.onvoiceschanged = () => {
+                if (!selectedVoice) selectedVoice = getChineseVoice();
+            };
         }
     };
     window.onbeforeunload = () => { saveHistory(); };
