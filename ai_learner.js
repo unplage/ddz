@@ -1161,6 +1161,7 @@ const ParamExporter = {
                     <button id="aiTabParams" class="pixel-btn ${this._currentTab==='params'?'bg-yellow-500':'bg-gray-600'} text-[10px] flex-1" onclick="ParamExporter.switchTab('params')">⚙ 参数</button>
                     <button id="aiTabGames" class="pixel-btn ${this._currentTab==='games'?'bg-yellow-500':'bg-gray-600'} text-[10px] flex-1" onclick="ParamExporter.switchTab('games')">🎮 记录</button>
                     <button id="aiTabRules" class="pixel-btn ${this._currentTab==='rules'?'bg-yellow-500':'bg-gray-600'} text-[10px] flex-1" onclick="ParamExporter.switchTab('rules')">📏 规则</button>
+                    <button id="aiTabStats" class="pixel-btn ${this._currentTab==='stats'?'bg-yellow-500':'bg-gray-600'} text-[10px] flex-1" onclick="ParamExporter.switchTab('stats')">📊 战绩</button>
                 </div>
                 <div id="aiParamContent"></div>
                 <button onclick="document.getElementById('aiParamModal').classList.add('hidden')" class="pixel-btn bg-gray-500 text-[10px] w-full mt-2">关闭</button>
@@ -1172,7 +1173,7 @@ const ParamExporter = {
 
     switchTab(tab) {
         this._currentTab = tab;
-        ['aiTabParams','aiTabGames','aiTabRules'].forEach(id => {
+        ['aiTabParams','aiTabGames','aiTabRules','aiTabStats'].forEach(id => {
             let btn = document.getElementById(id);
             if (btn) btn.className = `pixel-btn ${id.includes(tab)?'bg-yellow-500':'bg-gray-600'} text-[10px] flex-1`;
         });
@@ -1185,6 +1186,7 @@ const ParamExporter = {
         if (this._currentTab === 'params') this._renderParamsTab(content);
         else if (this._currentTab === 'games') this._renderGamesTab(content);
         else if (this._currentTab === 'rules') this._renderRulesTab(content);
+        else if (this._currentTab === 'stats') this._renderStatsTab(content);
     },
 
     _renderParamsTab(container) {
@@ -1259,6 +1261,28 @@ const ParamExporter = {
             </div>`;
         }
         html += `<button onclick="CorrectionRules._rules=[];CorrectionRules._persist();ParamExporter._refreshUI();" class="pixel-btn bg-red-500 text-[10px] w-full mt-2">🗑 清空全部规则</button>`;
+        container.innerHTML = html;
+    },
+
+    _renderStatsTab(container) {
+        let total = GameState.stats?.total || 0;
+        let win = GameState.stats?.win || 0;
+        let rate = total > 0 ? Math.round(win / total * 100) : 0;
+        let coins = GameState.coins || 0;
+        let html = `<div class="text-[10px] text-gray-300 mb-3 flex justify-between px-1">
+            <span>🏆 ${win}/${total} (${rate}%)</span>
+            <span>💰 ${coins}</span>
+        </div>`;
+        if (!matchHistory || matchHistory.length === 0) {
+            html += '<div class="text-center text-gray-400 text-[10px] py-4">暂无对局记录</div>';
+        } else {
+            for (let rec of matchHistory) {
+                let resultClass = rec.result === 'win' ? 'history-win' : 'history-lose';
+                let deltaStr = rec.delta > 0 ? `+${rec.delta}` : `${rec.delta}`;
+                html += `<div class="history-item ${resultClass} text-[10px]"><div>${rec.time}</div><div>${rec.result === 'win' ? '🎉 胜利' : '💔 失败'} (倍数:${rec.multiplier})</div><div>筹码变化: ${deltaStr} → ${rec.coinsAfter}</div></div>`;
+            }
+        }
+        html += `<button onclick="clearHistory();ParamExporter._refreshUI();" class="pixel-btn bg-red-500 text-[10px] w-full mt-2">🗑 清空记录</button>`;
         container.innerHTML = html;
     },
 
