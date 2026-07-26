@@ -509,7 +509,7 @@ const GameRecorder = {
             p.map(c => ({ id: c.id, suit: c.suit, rank: c.rank, value: c.value }))
         );
         this.currentGame = {
-            id: 'game_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+            id: 'game_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8),
             timestamp: Date.now(),
             mode: state.mode,
             difficulty: state.difficulty,
@@ -593,6 +593,8 @@ const GameRecorder = {
         GameDatabase.save(game).then(() => {
             GameAnalyzer.analyze(game);
             GodViewLearner.learn(game);
+        }).then(() => {
+            game.analysed = true;
         });
         ParameterOptimizer._onGameEnd(game);
     }
@@ -608,6 +610,7 @@ const ParameterOptimizer = {
 
     _onGameEnd(game) {
         if (!game || !game.result) return;
+        if (this._pendingGames.length >= 100) this._pendingGames.shift();
         this._pendingGames.push(game);
         if (this._pendingGames.length >= this._INCREMENTAL_INTERVAL) {
             this._scheduleIncremental();
@@ -670,11 +673,7 @@ const ParameterOptimizer = {
                 this._mergeParams(avg, e.params, w);
             }
             if (totalWeight > 0) {
-                for (let key in avg) {
-                    if (typeof avg[key] === 'number' && typeof elite[0].params[key] === 'number') {
-                        avg[key] /= totalWeight;
-                    }
-                }
+                this._divideParams(avg, totalWeight);
             }
             avg.version = DEFAULT_PARAMS.version;
             ParamConfig._overrides = avg;
@@ -747,6 +746,16 @@ const ParameterOptimizer = {
                 target[key] = (target[key] || 0) + source[key] * weight;
             } else if (typeof source[key] === 'object' && typeof target[key] === 'object') {
                 this._mergeParams(target[key], source[key], weight);
+            }
+        }
+    },
+
+    _divideParams(target, divisor) {
+        for (let key in target) {
+            if (typeof target[key] === 'number') {
+                target[key] /= divisor;
+            } else if (typeof target[key] === 'object') {
+                this._divideParams(target[key], divisor);
             }
         }
     },
@@ -909,7 +918,6 @@ const GameAnalyzer = {
             let chosenType = getCardType(chosenPlay);
             if (chosenType && (chosenType.type === CardType.BOMB || chosenType.type === CardType.ROCKET)) {
                 let hasCheaperBeat = scored.some(s => {
-                    if (s.play === chosenPlay) return false;
                     let t = getCardType(s.play);
                     return t && t.type !== CardType.BOMB && t.type !== CardType.ROCKET;
                 });
@@ -1041,9 +1049,13 @@ const GameAnalyzer = {
             this._applyAction(state, action);
         }
 
-        return state.players.some((p, idx) => p.length === 0 && idx !== game.calling.landlord)
-            ? !game.result?.isPlayerWin
-            : false;
+        let lordWon = state.players[game.calling.landlord]?.length === 0;
+        let farmerWon = state.players.some((p, idx) => p.length === 0 && idx !== game.calling.landlord);
+        if (lordWon || farmerWon) {
+            let simulationHumanWon = lordWon ? game.calling.landlord === 0 : game.calling.landlord !== 0;
+            return simulationHumanWon && !game.result?.isPlayerWin;
+        }
+        return false;
     }
 };
 
@@ -1154,23 +1166,26 @@ const CorrectionRules = {
     },
 
     _addOrStrengthen(template) {
-        let existing = this._rules.find(r =>
-            r.category === template.category &&
-            JSON.stringify(r.context) === JSON.stringify(template.context)
-        );
+        let existing = this._rules.find(r => {
+            if (r.category !== template.category) return false;
+            let rKeys = Object.keys(r.context).sort();
+            let tKeys = Object.keys(template.context).sort();
+            if (rKeys.length !== tKeys.length) return false;
+            return rKeys.every((k, i) => k === tKeys[i] && r.context[k] === template.context[k]);
+        });
         if (existing) {
             existing.confidence = Math.min(1, existing.confidence + 0.08);
             existing.triggerCount++;
             existing.penalty = Math.max(existing.penalty, template.penalty);
         } else {
             this._rules.push({
-                id: 'rule_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+                id: 'rule_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
                 category: template.category,
                 context: template.context,
                 comparators: template.comparators || {},
                 avoidType: template.avoidType,
                 penalty: template.penalty,
-                confidence: 0.4,
+                confidence: 0.15,
                 triggerCount: 1,
                 helpCount: 0,
                 reason: template.reason
@@ -1183,8 +1198,11 @@ const CorrectionRules = {
         if (this._rules.length > this.MAX_RULES) {
             this._rules = this._rules.slice(0, this.MAX_RULES);
         }
+        this._rules.forEach(r => {
+            r.confidence = Math.max(0.05, r.confidence - 0.02);
+        });
         this._rules = this._rules.filter(r => {
-            if (r.confidence < 0.2 && r.triggerCount > 10) return false;
+            if (r.confidence < 0.2 && r.triggerCount > 3) return false;
             return true;
         });
     },
@@ -1210,7 +1228,7 @@ const GodViewLearner = {
     _statsCache: { total: 0, recent20: 0, passMiss: 0, bombMiss: 0 },
 
     _initCache() {
-        GameDatabase.countCorrections().then(total => { this._statsCache.total = total; });
+        GameDatabase.countCorrections().then(total => { this._statsCache.total = total; }).catch(() => {});
         GameDatabase.getRecentCorrections(20).then(data => {
             if (data && data.length) {
                 let recent = data.filter(c => c.diff > 0.25);
@@ -1218,7 +1236,7 @@ const GodViewLearner = {
                 this._statsCache.passMiss = recent.filter(c => c.actualType === 'pass').length;
                 this._statsCache.bombMiss = recent.filter(c => c.actualType !== 'bomb' && c.actualType !== 'rocket' && (c.bestType === 'bomb' || c.bestType === 'rocket')).length;
             }
-        });
+        }).catch(() => {});
     },
 
     learn(game) {
@@ -1303,7 +1321,7 @@ const GodViewLearner = {
             simState.passCount = 0;
 
             if (simState.players[action.p].length === 0) {
-                simResults.push({ play, score: scored[j].score, winRate: action.p === lordIdx ? 1 : 0 });
+                simResults.push({ play, score: scored[j].score, winRate: 1 });
                 continue;
             }
             let nextP = (action.p + 1) % 3;
@@ -1412,9 +1430,18 @@ const GodViewLearner = {
     _saveCorrections(corrections) {
         let entries = corrections.map(c => ({ ...c, ts: Date.now() }));
         let count = entries.length;
-        for (let e of entries) GameDatabase.saveCorrection(e);
+        Promise.all(entries.map(e => GameDatabase.saveCorrection(e))).then(() => {
+            GameDatabase.countCorrections().then(total => { this._statsCache.total = total; });
+            GameDatabase.getRecentCorrections(20).then(data => {
+                if (data && data.length) {
+                    let recent = data.filter(c => c.diff > 0.25);
+                    this._statsCache.recent20 = recent.length;
+                    this._statsCache.passMiss = recent.filter(c => c.actualType === 'pass').length;
+                    this._statsCache.bombMiss = recent.filter(c => c.actualType !== 'bomb' && c.actualType !== 'rocket' && (c.bestType === 'bomb' || c.bestType === 'rocket')).length;
+                }
+            });
+        });
         this._statsCache.total += count;
-        this._statsCache.recent20 = Math.min(this._statsCache.recent20 + count, 20);
         let recentPass = entries.filter(c => c.actualType === 'pass').length;
         let recentBomb = entries.filter(c => c.actualType !== 'bomb' && c.actualType !== 'rocket' && (c.bestType === 'bomb' || c.bestType === 'rocket')).length;
         this._statsCache.passMiss += recentPass;
@@ -1426,7 +1453,7 @@ const GodViewLearner = {
         if (now - this._lastAdjustmentTime < this._ADJUST_INTERVAL) return;
         this._lastAdjustmentTime = now;
 
-        let lr = 0.03;
+        let lr = 0.1;
         for (let corr of corrections) {
             if (corr.diff < 0.3) continue;
 
@@ -1467,7 +1494,7 @@ const GodViewLearner = {
                 this._adjust('playHeuristics.suppressPair.diffLe7', -2 * lr);
             }
 
-            if (corr.bestWinRate > 0.6 && corr.actualWinRate < 0.3) {
+            if (corr.category === 'overkill' && corr.bestWinRate > 0.6 && corr.actualWinRate < 0.3) {
                 this._adjust('playHeuristics.overkill.singleLe12', 5 * lr);
                 this._adjust('playHeuristics.overkill.pairLe10', 5 * lr);
             }
@@ -1648,7 +1675,7 @@ const ParamExporter = {
         container.innerHTML = `<div class="text-[10px] text-gray-300 mb-3 space-y-1">
             <div>📊 总复盘次数: ${stats.total}</div>
             <div>🎯 近期修正: ${stats.recent20} 条</div>
-            <div>⏱ 该PASS却未PASS: ${stats.passMiss} 次</div>
+            <div>⏱ 不该PASS却PASS: ${stats.passMiss} 次</div>
             <div>💣 该用炸弹却未用: ${stats.bombMiss} 次</div>
         </div><div id="learnTabBody" class="text-center text-gray-400 text-[10px] py-4">⏳ 加载中...</div>
         <div class="text-[8px] text-gray-500 mt-2">每局结束后自动分析AI决策，发现错失机会后微调参数</div>`;

@@ -216,7 +216,7 @@
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'zh-CN';
         utterance.rate = 0.9;
-        //if (selectedVoice) utterance.voice = selectedVoice;
+        if (selectedVoice) utterance.voice = selectedVoice;
         utterance.onerror = (e) => console.error("语音错误", e);
         window.speechSynthesis.speak(utterance);
         return true;
@@ -370,7 +370,7 @@
         if (cards.length >= 6 && cards.length % 2 === 0) {
             let cnt = countValues(values);
             let pairs = Object.keys(cnt).filter(k=>cnt[k]===2).map(Number).sort((a,b)=>a-b);
-            if (pairs.length === cards.length/2 && isStraight(pairs) && pairs[pairs.length-1] <= 11 && !pairs.includes(12)) return { type:CardType.STRAIGHT_PAIR, value:pairs[0], length:pairs.length, cards:sorted };
+            if (pairs.length === cards.length/2 && isStraight(pairs) && pairs[pairs.length-1] <= 11) return { type:CardType.STRAIGHT_PAIR, value:pairs[0], length:pairs.length, cards:sorted };
         }
         return null;
     }
@@ -382,7 +382,6 @@
         if (last.type === CardType.BOMB && current.type !== CardType.BOMB) return false;
         if (current.type !== last.type) return false;
         if (current.length && current.length !== last.length) return false;
-        if ([CardType.TRIPLE_WITH_PAIR, CardType.FOUR_WITH_TWO_SINGLE, CardType.FOUR_WITH_TWO_PAIR].includes(current.type)) return current.value > last.value;
         return current.value > last.value;
     }
 
@@ -451,8 +450,9 @@
             let shareRatio = Math.min(1, oppTotal / otherPlayersRemaining);
             return Math.min(1, totalOutside / (totalOutside + 1)) * shareRatio;
         }
-        getOpponentHandSize(playerId) {
-            return Math.max(0, 17 - (this.totalCardsPlayed[playerId] || 0));
+        getOpponentHandSize(playerId, isLandlord) {
+            let base = isLandlord ? 20 : 17;
+            return Math.max(0, base - (this.totalCardsPlayed[playerId] || 0));
         }
     }
 
@@ -730,8 +730,7 @@
             if (features.kickerValue >= 13) score += ph.kickerPenalty.ge13;
             // 检查是否有更小的牌可做带牌
             if (features.kickerValue >= 11 && playerHand && features.kickerValue) {
-                let mainVal = features.playPower > 100 ? (features.playPower - 60) : (features.playPower > 70 ? (features.playPower - 70) : 0);
-                if (mainVal < 0) mainVal = 0;
+                let mainVal = features.mainValue || 0;
                 let mainCnt = (features.playType === CardType.TRIPLE_WITH_SINGLE) ? 1 : 2;
                 let hasSmaller = playerHand.some(c => c.value !== mainVal && c.value < features.kickerValue);
                 if (hasSmaller) score += ph.kickerPenalty.hasSmallerAlternative || -100;
@@ -1055,7 +1054,7 @@
         let needBeat = state.lastPlay && state.lastPlayerId !== currentPlayer;
         let plays = needBeat ? getAllValidPlays(hand, state.lastPlay) : getAllValidPlays(hand, null);
 
-        if (plays.length === 0 || (!needBeat && state.lastPlay && state.lastPlayerId !== currentPlayer)) {
+        if (plays.length === 0) {
             let s2 = JSON.parse(JSON.stringify(state));
             s2.passCount++;
             return minimaxEndgame(s2, (currentPlayer + 1) % 3, myId, depth + 1, maxDepth, alpha, beta);
@@ -1229,10 +1228,10 @@
             while (node) { node.visits++; if (result) node.wins++; node = node.parent; }
         }
         let best = root.bestChild();
-        if (best && best.play && best.play.length > 0) return best.play;
+        if (best && best.play) return best.play;
         let needBeat = state.lastPlay && state.lastPlayerId !== playerId;
         let fallbackPlays = needBeat ? getAllValidPlays(hand, state.lastPlay) : getAllValidPlays(hand, null);
-        if (fallbackPlays.length > 0) return fallbackPlays[fallbackPlays.length - 1];
+        if (fallbackPlays.length > 0) return fallbackPlays[0];
         return null;
     }
 
@@ -1257,7 +1256,6 @@
                 if (strength > (ct.one || 22) && curr < 1) return 1; 
                 return 0;
             }
-            let _callStrength = evaluateHandStrength(state.players[this.id], this.memory, false, this.id);
             if (this.difficulty === 'legendary') {
                 let bestBid = 0, bestEV = -999;
                 for (let bid = 1; bid <= 3; bid++) {
@@ -1647,7 +1645,7 @@
             startOnlineTimer(10, () => { if (GameState.phase === 'calling' && GameState.currentPlayer === GameState.myIndex) callScore(0); }, GameState.myIndex);
             return;
         }
-        startOnlineTimer(2, null, id);
+        startOnlineTimer(1, null, id);
         trackTimeout(() => {
             let ai = GameState.aiList[id];
             let _callStrength = evaluateHandStrength(GameState.players[id], GameState.cardMemory, false, id);
@@ -1864,7 +1862,7 @@
             } else {
                 playSound('play');
             }
-            if (GameState.mode === 'single' && GameState.cardMemory) GameState.cardMemory.recordPlayerPlay(player, cards);
+            if (GameState.cardMemory) GameState.cardMemory.recordPlayerPlay(player, cards);
             displayPlayed(cards);
             speakPlay(cards);
             
@@ -2104,7 +2102,13 @@
         let target = document.getElementById('targetPeerId').value.trim();
         if (!target) return;
         let conn = GameState.peer.connect(target);
+        let joinTimeout = setTimeout(() => {
+            if (conn.open) return;
+            showToast('连接超时，请检查房间号');
+            conn.close();
+        }, 10000);
         conn.on('open', () => {
+            clearTimeout(joinTimeout);
             GameState.connections.push(conn);
             conn.on('data', d => onConnectionData(conn, d));
             GameState.myRole = 'client';
@@ -2401,7 +2405,7 @@
             } else if (GameState.phase === 'playing' && GameState.currentPlayer === disconnectedPlayer) {
                 let cards = ai.think('play', GameState);
                 if (cards && cards.length > 0) {
-                    let isValid = cards.every(c => GameState.players[disconnectedPlayer].includes(c));
+                    let isValid = cards.every(c => GameState.players[disconnectedPlayer].some(hc => hc.id === c.id));
                     let typeValid = getCardType(cards) !== null;
                     if (isValid && typeValid) { executePlayCards(disconnectedPlayer, cards); return; }
                 }
@@ -2431,6 +2435,7 @@
         if (isPlayerWin) { GameState.stats.win++; GameState.coins += amount; playSound('win'); }
         else { GameState.coins = Math.max(0, GameState.coins - amount); }
         let delta = GameState.coins - oldCoins;
+        let actualAmount = isPlayerWin ? delta : oldCoins - GameState.coins;
         addMatchRecord(isPlayerWin ? 'win' : 'lose', multiplier, delta, GameState.coins);
         updateStats();
         let screen = document.getElementById('gameOverScreen'), title = document.getElementById('resultTitle'), content = document.getElementById('resultContent');
@@ -2445,10 +2450,10 @@
         remainingHtml += '</div>';
         if (isPlayerWin) {
             title.textContent = '🎉 胜利！'; title.className = 'text-xl retro-text mb-4 text-yellow-400 text-center';
-            content.innerHTML = `赢得 ${amount} 筹码<br>余额：${GameState.coins}${isSpring?'<br>🌸春天加成':''}${isAntiSpring?'<br>⚡反春天加成':''}${remainingHtml}`;
+            content.innerHTML = `赢得 ${actualAmount} 筹码<br>余额：${GameState.coins}${isSpring?'<br>🌸春天加成':''}${isAntiSpring?'<br>⚡反春天加成':''}${remainingHtml}`;
         } else {
             title.textContent = '💔 失败'; title.className = 'text-xl retro-text mb-4 text-gray-400 text-center';
-            content.innerHTML = `失去 ${amount} 筹码<br>余额：${GameState.coins}${remainingHtml}`;
+            content.innerHTML = `失去 ${actualAmount} 筹码<br>余额：${GameState.coins}${remainingHtml}`;
         }
         addHistory(isPlayerWin ? '🎉胜利！' : '💔失败');
         GameState.processing = false;
