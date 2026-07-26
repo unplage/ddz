@@ -1082,6 +1082,14 @@ const CorrectionRules = {
         try {
             localStorage.setItem('landlord_correction_rules', JSON.stringify(this._rules));
         } catch (e) {}
+        if (typeof window !== 'undefined' && window.AiWorkerPool && window.AiWorkerPool.ready) {
+            try {
+                let msg = { cmd: 'init', correctionRules: this._rules };
+                for (let w of window.AiWorkerPool.workers) {
+                    if (w._ready && !w._dead) w.postMessage(msg);
+                }
+            } catch (e) {}
+        }
     },
 
     match(context) {

@@ -7,12 +7,13 @@ const BASE_PATH = self.location.pathname.replace(/[^/]+$/, '');
 // 构建带项目标识的缓存名称，避免多项目冲突
 // 例如 '/ddz/' -> 'pwa-cache-ddz-v1'
 const PROJECT_PREFIX = `pwa-cache${BASE_PATH.replace(/\//g, '-').replace(/--/g, '-').replace(/(^-|-$)/g, '')}`;
-const CACHE_NAME = `${PROJECT_PREFIX}v44`;
+const CACHE_NAME = `${PROJECT_PREFIX}v45`;
 
 // 预缓存资源列表（全部使用相对于当前 sw.js 的路径）
 const PRECACHE_URLS = [
   BASE_PATH,                 // 例如 '/pwa1/'
   `${BASE_PATH}index.html`,
+  `${BASE_PATH}ai_worker.js`,
   `${BASE_PATH}manifest.json`,
   `${BASE_PATH}icons/icon-192.png`,
   `${BASE_PATH}icons/icon-512.png`,

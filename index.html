@@ -181,7 +181,6 @@
     let prevLastPlayId = -1;
     let prevLastPlayType = null;
     let bottomCardsShown = false;
-    let gameStateForRules = null;
 
     function changeSpeed(val) { aiSpeed = val; }
     function toggleSound() { 
@@ -767,7 +766,7 @@
         }
 
         // 应用纠错规则
-        if (typeof CorrectionRules !== 'undefined' && playerHand && gameStateForRules) {
+        if (typeof CorrectionRules !== 'undefined' && playerHand) {
             let ruleCtx = {
                 needBeat: features.needBeat,
                 lastPlayType: features.lastPlayType,
@@ -1258,7 +1257,10 @@
     // ======================== 增强大师级AI ========================
     class MasterAI {
         constructor(id, difficulty, memory) { this.id = id; this.difficulty = difficulty; this.memory = memory; }
-        think(phase, state) {
+        async think(phase, state) {
+            if (AiWorkerPool.ready && (this.difficulty === 'hard' || this.difficulty === 'grandmaster' || this.difficulty === 'legendary')) {
+                return AiWorkerPool.think(phase, state, this.id, this.difficulty, this.memory);
+            }
             if (phase === 'call') return this.callDecision(state);
             return this.playDecision(state);
         }
@@ -1672,13 +1674,18 @@
             startOnlineTimer(10, () => { if (GameState.phase === 'calling' && GameState.currentPlayer === GameState.myIndex) callScore(0); }, GameState.myIndex);
             return;
         }
-        startOnlineTimer(1, null, id);
+        startOnlineTimer(3, null, id);
         trackTimeout(() => {
             let ai = GameState.aiList[id];
             let _callStrength = evaluateHandStrength(GameState.players[id], GameState.cardMemory, false, id);
-            let score = ai.think('call', GameState);
-            window.__lastAICallReasoning = { player: id, strength: _callStrength, decision: score };
-            callScore(score);
+            let result = ai.think('call', GameState);
+            let finalize = (score) => {
+                if (GameState.currentPlayer !== id || GameState.phase !== 'calling') return;
+                window.__lastAICallReasoning = { player: id, strength: _callStrength, decision: score };
+                callScore(score);
+            };
+            if (result && typeof result.then === 'function') result.then(finalize);
+            else finalize(result);
         }, 1000);
     }
 
@@ -1762,7 +1769,6 @@
     function processPlayPhase() {
         if (GameState.phase !== 'playing') return;
         if (GameState.processing) return;
-        gameStateForRules = GameState;
         let id = GameState.currentPlayer;
         if (GameState.lastPlayerId !== -1 && GameState.players[GameState.lastPlayerId].length === 0) { endGame(GameState.lastPlayerId); return; }
         if (GameState.passCount === 2) {
@@ -1810,14 +1816,19 @@
             trackTimeout(() => {
                 if (GameState.currentPlayer !== id || GameState.phase !== 'playing') return;
                 let ai = GameState.aiList[id];
-                let cards = ai.think('play', GameState);
-                if (cards && cards.length > 0) {
-                    let isValid = cards.every(c => GameState.players[id].some(hc => hc.id === c.id));
-                    let typeValid = getCardType(cards) !== null;
-                    if (!isValid || !typeValid) cards = [];
-                }
-                executePlayCards(id, cards || []);
-                GameState.processing = false;
+                let processResult = (cards) => {
+                    if (GameState.currentPlayer !== id || GameState.phase !== 'playing') return;
+                    if (cards && cards.length > 0) {
+                        let isValid = cards.every(c => GameState.players[id].some(hc => hc.id === c.id));
+                        let typeValid = getCardType(cards) !== null;
+                        if (!isValid || !typeValid) cards = [];
+                    }
+                    executePlayCards(id, cards || []);
+                    GameState.processing = false;
+                };
+                let result = ai.think('play', GameState);
+                if (result && typeof result.then === 'function') result.then(processResult).catch(() => processResult([]));
+                else processResult(result);
             }, delay);
         }
     }
@@ -2484,7 +2495,6 @@
         }
         addHistory(isPlayerWin ? '🎉胜利！' : '💔失败');
         GameState.processing = false;
-        gameStateForRules = null;
         const playBtn = document.getElementById('playBtn');
         const passBtn = document.getElementById('passBtn');
         if (playBtn) playBtn.disabled = true;
@@ -2523,8 +2533,151 @@
         }
     }
     window.addEventListener('resize', ()=>{ if(GameState.players[GameState.myIndex]?.length) renderPlayerHand(); });
+
+    // ======================== AI Worker 池 ========================
+    const AiWorkerPool = {
+        workers: [],
+        ready: false,
+        taskId: 0,
+        pending: new Map(),
+        init() {
+            if (typeof Worker === 'undefined') return;
+            if (location.protocol === 'file:') return;
+            let numWorkers = Math.min(
+                navigator.hardwareConcurrency ? Math.max(1, navigator.hardwareConcurrency - 1) : 2,
+                8
+            );
+            this._createWorkers(numWorkers);
+        },
+        _createWorkers(n) {
+            let readyCount = 0;
+            for (let i = 0; i < n; i++) {
+                try {
+                    let w = new Worker('./ai_worker.js');
+                    w.onmessage = (e) => {
+                        if (e.data.status === 'ready') {
+                            readyCount++;
+                            w._ready = true;
+                            if (readyCount === n) this._seedWorkers();
+                            return;
+                        }
+                        this._onResult(e.data);
+                    };
+                    w.onerror = () => { w._dead = true; };
+                    this.workers.push(w);
+                } catch (e) {
+                    this.workers.push({ _dead: true, _ready: false, postMessage: () => {} });
+                }
+            }
+        },
+        _seedWorkers() {
+            let params = null;
+            if (typeof ParamConfig !== 'undefined') {
+                let overrides = localStorage.getItem('landlord_ai_params');
+                if (overrides) { try { params = JSON.parse(overrides); } catch(e) {} }
+            }
+            let cr = [];
+            if (typeof CorrectionRules !== 'undefined') {
+                CorrectionRules.init();
+                cr = CorrectionRules._rules || [];
+            }
+            let msg = { cmd: 'init' };
+            if (params) msg.params = params;
+            if (cr.length > 0) msg.correctionRules = cr;
+            for (let w of this.workers) {
+                if (w._ready) w.postMessage(msg);
+            }
+            this.ready = true;
+        },
+        think(phase, state, playerId, difficulty, memory) {
+            return new Promise((resolve, reject) => {
+                let active = this.workers.filter(w => !w._dead && w._ready && !w._busy);
+                if (active.length === 0) {
+                    let ai = GameState.aiList[playerId];
+                    resolve(phase === 'call' ? ai.callDecision(state) : ai.playDecision(state));
+                    return;
+                }
+                let taskId = ++this.taskId;
+                this.pending.set(taskId, { resolve, reject, timeout: null });
+                let serializedState = this._serializeState(state);
+                let serializedMemory = memoryToData(memory);
+                let worker = active[0];
+                worker._busy = true;
+                worker._taskId = taskId;
+                worker.postMessage({
+                    cmd: 'think', taskId, phase, state: serializedState,
+                    playerId, difficulty, memory: serializedMemory
+                });
+                let timeout = setTimeout(() => {
+                    this.pending.delete(taskId);
+                    worker._busy = false;
+                    let ai = GameState.aiList[playerId];
+                    resolve(phase === 'call' ? ai.callDecision(state) : ai.playDecision(state));
+                }, 15000);
+                this.pending.get(taskId).timeout = timeout;
+            });
+        },
+        _onResult(data) {
+            let entry = this.pending.get(data.taskId);
+            if (!entry) return;
+            clearTimeout(entry.timeout);
+            if (data.error) {
+                let w = this.workers.find(w => w._taskId === data.taskId);
+                if (w) { w._busy = false; w._dead = true; }
+                this.pending.delete(data.taskId);
+                entry.reject(new Error(data.error));
+                return;
+            }
+            let w = this.workers.find(w => w._taskId === data.taskId);
+            if (w) { w._busy = false; w._taskId = null; }
+            this.pending.delete(data.taskId);
+            if (data.memory && GameState.cardMemory) {
+                memoryFromData(GameState.cardMemory, data.memory);
+            }
+            entry.resolve(data.result);
+        },
+        _serializeState(state) {
+            let s = {
+                players: state.players.map(p => p.map(c => ({ id: c.id, suit: c.suit, rank: c.rank, value: c.value }))),
+                landlord: state.landlord,
+                currentPlayer: state.currentPlayer,
+                lastPlay: state.lastPlay ? { type: state.lastPlay.type, value: state.lastPlay.value, length: state.lastPlay.length || undefined } : null,
+                lastPlayerId: state.lastPlayerId,
+                passCount: state.passCount,
+                baseScore: state.baseScore,
+                bombCount: state.bombCount,
+                firstPlayMade: state.firstPlayMade,
+                lordPlayCount: state.lordPlayCount,
+                farmerPlayed: state.farmerPlayed,
+                callScores: state.callScores,
+                lordCards: state.lordCards ? state.lordCards.map(c => ({ id: c.id, suit: c.suit, rank: c.rank, value: c.value })) : []
+            };
+            return s;
+        }
+    };
+
+    function memoryToData(memory) {
+        if (!memory) return null;
+        return {
+            remain: [...memory.remain],
+            seen: [...memory.seen],
+            history: memory.history.map(arr => [...arr]),
+            playerHistory: memory.playerHistory.map(arr => arr.map(a => [...a])),
+            totalCardsPlayed: [...memory.totalCardsPlayed]
+        };
+    }
+    function memoryFromData(memory, data) {
+        if (!memory || !data) return;
+        memory.remain = data.remain;
+        memory.seen = new Set(data.seen);
+        memory.history = data.history.map(arr => [...arr]);
+        memory.playerHistory = data.playerHistory.map(arr => arr.map(a => [...a]));
+        memory.totalCardsPlayed = [...data.totalCardsPlayed];
+    }
+
     window.onload = () => {
         loadHistory();
+        AiWorkerPool.init();
         if (window.speechSynthesis) {
             window.speechSynthesis.getVoices();
             selectedVoice = getChineseVoice();
@@ -2533,7 +2686,6 @@
             };
         }
     };
-    window.onbeforeunload = () => { saveHistory(); };
 </script>
 </body>
 <script>
