@@ -175,6 +175,16 @@ const ParamConfig = {
         } else {
             localStorage.removeItem('landlord_ai_params');
         }
+        if (typeof window !== 'undefined' && window.AiWorkerPool && window.AiWorkerPool.ready) {
+            try {
+                let params = this._overrides ? this._overrides : null;
+                let msg = { cmd: 'init' };
+                if (params) msg.params = params;
+                for (let w of window.AiWorkerPool.workers) {
+                    if (w._ready && !w._dead) w.postMessage(msg);
+                }
+            } catch (e) {}
+        }
     }
 };
 
@@ -575,7 +585,7 @@ const GameRecorder = {
         let isLordWin = (winner === gs.landlord);
         let isSpring = isLordWin && !gs.farmerPlayed && gs.firstPlayMade;
         let isAntiSpring = !isLordWin && gs.lordPlayCount === 1 && gs.firstPlayMade;
-        let multiplier = gs.baseScore * Math.pow(2, gs.bombCount);
+        let multiplier = gs.baseScore;
         if (isSpring || isAntiSpring) multiplier *= 2;
 
         this.currentGame.result = {
@@ -761,16 +771,24 @@ const ParameterOptimizer = {
     },
 
     _simulateGame(params) {
-        if (typeof heuristicPlayoutDeterministic !== 'function' || typeof GameState === 'undefined') return Math.random() < 0.4;
+        if (typeof heuristicPlayoutDeterministic !== 'function') return Math.random() < 0.4;
         let savedOverrides = ParamConfig._overrides;
         ParamConfig._overrides = params;
         try {
-            let sim = JSON.parse(JSON.stringify(GameState));
-            if (!sim.players || !sim.players[0] || sim.players[0].length === 0) return Math.random() < 0.4;
-            let myId = 0;
-            let cp = sim.currentPlayer !== undefined ? sim.currentPlayer : 0;
+            const suits = ['♠','♥','♣','♦'], ranks = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
+            let deck = [];
+            for (let suit of suits) for (let i=0;i<ranks.length;i++) deck.push({ suit, rank: ranks[i], value: i, id: suit+ranks[i] });
+            deck.push({ suit:'JOKER', rank:'小王', value:13, id:'joker1' }, { suit:'JOKER', rank:'大王', value:14, id:'joker2' });
+            for (let i=deck.length-1; i>0; i--) { const j=Math.floor(Math.random()*(i+1)); [deck[i],deck[j]]=[deck[j],deck[i]]; }
+            let players = [[],[],[]];
+            for (let i = 0; i < 51; i++) players[i % 3].push(deck[i]);
+            let lordCards = deck.slice(51, 54);
+            let landlord = Math.floor(Math.random() * 3);
+            players[landlord].push(...lordCards);
+            players.forEach(p => p.sort((a,b) => a.value - b.value));
+            let sim = { players, landlord, currentPlayer: landlord, lastPlay: null, lastPlayerId: -1, passCount: 0, phase: 'playing', baseScore: 1, bombCount: 0 };
             let mem = new MasterMemory();
-            return heuristicPlayoutDeterministic(sim, cp, myId, mem);
+            return heuristicPlayoutDeterministic(sim, sim.currentPlayer, 0, mem);
         } catch (e) {
             return Math.random() < 0.4;
         } finally {
@@ -843,6 +861,7 @@ const GameAnalyzer = {
         state.currentPlayer = order.length > 0 ? order[0] : 0;
 
         // Replay and analyze each action
+        let memory = new MasterMemory();
         for (let i = 0; i < game.actions.length; i++) {
             let action = game.actions[i];
             if (state.phase !== 'playing') break;
@@ -852,7 +871,7 @@ const GameAnalyzer = {
             if (action.p === 1 || action.p === 2) {
                 let playerHand = state.players[action.p];
                 if (playerHand && playerHand.length > 0) {
-                    let m = this._checkDecision(state, action, playerHand, game.difficulty);
+                    let m = this._checkDecision(state, action, playerHand, game.difficulty, memory);
                     if (m) {
                         m.turnIndex = i;
                         m.player = action.p;
@@ -863,6 +882,7 @@ const GameAnalyzer = {
 
             // Apply the actual action to advance state
             this._applyAction(state, action);
+            if (!action.pass && action.c && action.c.length > 0) memory.record(action.c);
         }
 
         let wouldWinIfOptimal = false;
@@ -881,7 +901,7 @@ const GameAnalyzer = {
         };
     },
 
-    _checkDecision(state, action, hand, difficulty) {
+    _checkDecision(state, action, hand, difficulty, memory) {
         let lastPlay = state.lastPlay;
         let needBeat = lastPlay && state.lastPlayerId !== action.p;
         let role = action.p === state.landlord ? 'landlord' : 'farmer';
@@ -889,7 +909,6 @@ const GameAnalyzer = {
 
         if (!needBeat) return null;
 
-        let memory = new MasterMemory();
         let allPlays = getAllValidPlays(hand, lastPlay);
         let beatable = allPlays.filter(p => canBeat(getCardType(p), lastPlay));
 

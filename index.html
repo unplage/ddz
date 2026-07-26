@@ -649,7 +649,7 @@
             partnerHandCount: (role === 'farmer' && partnerId !== -1) ? (state.players[partnerId]?.length || 0) : 0,
             outsideBombCount: memory.getOutsideBombCount(), isCritical: (newHand.length <= 3) ? 1 : 0,
             needBeat: needBeat ? 1 : 0, lastPlayType: lastPlay ? lastPlay.type : 'none', lastPlayPower: lastPlay ? lastPlay.value : 0,
-            playType: playType.type, kickerValue
+            playType: playType.type, kickerValue, mainValue: playType.value
         };
     }
 
@@ -1640,7 +1640,7 @@
             if (count < 51) {
                 let idx = count % 3, card = GameState.deck.pop();
                 GameState.players[idx].push(card);
-                if (idx === GameState.myIndex && count % 3 === 0) playSound('deal');
+                if (idx === GameState.myIndex) playSound('deal');
                 if (idx === GameState.myIndex) renderPlayerHand(); else updateOpponentCount(idx);
                 count++;
             } else { 
@@ -1818,13 +1818,15 @@
                 let ai = GameState.aiList[id];
                 let processResult = (cards) => {
                     if (GameState.currentPlayer !== id || GameState.phase !== 'playing') return;
+                    if (!GameState.processing) return;
                     if (cards && cards.length > 0) {
                         let isValid = cards.every(c => GameState.players[id].some(hc => hc.id === c.id));
                         let typeValid = getCardType(cards) !== null;
                         if (!isValid || !typeValid) cards = [];
                     }
-                    executePlayCards(id, cards || []);
                     GameState.processing = false;
+                    clearTimer();
+                    executePlayCards(id, cards || []);
                 };
                 let result = ai.think('play', GameState);
                 if (result && typeof result.then === 'function') result.then(processResult).catch(() => processResult([]));
@@ -2080,6 +2082,7 @@
         if (!type) { showToast('无效的牌型'); document.getElementById('handContainer').classList.add('ani-shake'); trackTimeout(()=>document.getElementById('handContainer').classList.remove('ani-shake'),300); return; }
         if (!canBeat(type, GameState.lastPlay)) { showToast('需要大过上一手'); document.getElementById('handContainer').classList.add('ani-shake'); trackTimeout(()=>document.getElementById('handContainer').classList.remove('ani-shake'),300); return; }
         if (GameState.mode === 'online') {
+            clearTimer();
             sendAction({ type: 'play', cards });
             let playBtn = document.getElementById('playBtn'); if (playBtn) playBtn.disabled = true;
             GameState.selectedCards.clear();
@@ -2093,7 +2096,7 @@
         if (GameState.processing) { showToast('请等待AI思考...'); return; }
         if (GameState.phase !== 'playing' || GameState.currentPlayer !== GameState.myIndex) return;
         if (!GameState.lastPlay || GameState.lastPlayerId === GameState.myIndex) { showToast('你必须出牌'); return; }
-        if (GameState.mode === 'online') sendAction({ type: 'pass' });
+        if (GameState.mode === 'online') { clearTimer(); sendAction({ type: 'pass' }); }
         else executePlayCards(GameState.myIndex, []);
     }
     function resetSelection() { GameState.selectedCards.clear(); renderPlayerHand(); let btn = document.getElementById('playBtn'); if(btn) btn.disabled = true; }
@@ -2357,14 +2360,29 @@
             }, id);
         } else {
             document.getElementById('controls').innerHTML = '<button class="pixel-btn bg-gray-600" disabled>等待出牌</button>';
-            startOnlineTimer(15, null, id);
+            startOnlineTimer(15, () => {
+                if (GameState.currentPlayer === id && GameState.phase === 'playing' && GameState.myRole === 'host') {
+                    let ai = new MasterAI(id, GameState.difficulty, GameState.cardMemory || new MasterMemory());
+                    let result = ai.think('play', GameState);
+                    let doPlay = (cards) => {
+                        if (GameState.currentPlayer !== id || GameState.phase !== 'playing') return;
+                        if (cards && cards.length > 0) {
+                            let isValid = cards.every(c => GameState.players[id].some(hc => hc.id === c.id));
+                            if (isValid && getCardType(cards)) { executePlayCards(id, cards); return; }
+                        }
+                        executePlayCards(id, []);
+                    };
+                    if (result && typeof result.then === 'function') result.then(doPlay);
+                    else doPlay(result);
+                }
+            }, id);
         }
     }
     function renderUI() {
         renderPlayerHand();
         updateOpponentCount((GameState.myIndex + 1) % 3);
         updateOpponentCount((GameState.myIndex + 2) % 3);
-        document.getElementById('scoreDisplay').innerHTML = `底分: ${GameState.baseScore}${GameState.bombCount>0?` ×${Math.pow(2,GameState.bombCount)}`:''}`;
+        document.getElementById('scoreDisplay').innerHTML = `底分: ${GameState.baseScore}${GameState.bombCount>0?` (含${GameState.bombCount}炸)`:''}`;
         let area = document.getElementById('playArea');
         if (bottomCardsShown && GameState.lordCards && GameState.lordCards.length > 0) {
             // 保持底牌显示
@@ -2436,18 +2454,24 @@
         let disconnectedPlayer = dcIdx;
         if (GameState.myRole === 'host' && (GameState.phase === 'calling' || GameState.phase === 'playing')) {
             let ai = new MasterAI(disconnectedPlayer, GameState.difficulty, GameState.cardMemory || new MasterMemory());
-            if (GameState.phase === 'calling' && GameState.currentPlayer === disconnectedPlayer) {
-                let score = ai.think('call', GameState);
-                executeCall(disconnectedPlayer, score);
-                broadcastFullState();
-            } else if (GameState.phase === 'playing' && GameState.currentPlayer === disconnectedPlayer) {
-                let cards = ai.think('play', GameState);
-                if (cards && cards.length > 0) {
-                    let isValid = cards.every(c => GameState.players[disconnectedPlayer].some(hc => hc.id === c.id));
-                    let typeValid = getCardType(cards) !== null;
-                    if (isValid && typeValid) { executePlayCards(disconnectedPlayer, cards); return; }
+            let handleResult = (result) => {
+                if (GameState.phase === 'calling') {
+                    executeCall(disconnectedPlayer, result);
+                } else if (GameState.phase === 'playing') {
+                    let cards = result;
+                    if (cards && cards.length > 0) {
+                        let isValid = cards.every(c => GameState.players[disconnectedPlayer].some(hc => hc.id === c.id));
+                        let typeValid = getCardType(cards) !== null;
+                        if (isValid && typeValid) { executePlayCards(disconnectedPlayer, cards); return; }
+                    }
+                    executePlayCards(disconnectedPlayer, []);
                 }
-                executePlayCards(disconnectedPlayer, []);
+                broadcastFullState();
+            };
+            if (GameState.currentPlayer === disconnectedPlayer) {
+                let result = ai.think(GameState.phase === 'calling' ? 'call' : 'play', GameState);
+                if (result && typeof result.then === 'function') result.then(handleResult).catch(() => handleResult(0));
+                else handleResult(result);
             } else {
                 broadcastFullState();
             }
@@ -2462,7 +2486,7 @@
             ? ((winner === GameState.myIndex) || (winner !== GameState.myIndex && GameState.landlord !== GameState.myIndex && winner !== GameState.landlord))
             : (winner === GameState.myIndex);
         let isLordWin = (winner === GameState.landlord);
-        let multiplier = GameState.baseScore * Math.pow(2, GameState.bombCount);
+        let multiplier = GameState.baseScore;
         let isSpring = false, isAntiSpring = false;
         if (isLordWin && !GameState.farmerPlayed && GameState.firstPlayMade) isSpring = true;
         if (!isLordWin && GameState.lordPlayCount === 1 && GameState.firstPlayMade) isAntiSpring = true;
@@ -2563,7 +2587,21 @@
                         }
                         this._onResult(e.data);
                     };
-                    w.onerror = () => { w._dead = true; };
+                    w.onerror = () => {
+                        w._dead = true;
+                        w._ready = false;
+                        let taskId = w._taskId;
+                        if (taskId !== undefined && taskId !== null) {
+                            let entry = this.pending.get(taskId);
+                            if (entry) {
+                                clearTimeout(entry.timeout);
+                                this.pending.delete(taskId);
+                                entry.resolve(null);
+                            }
+                            w._taskId = null;
+                        }
+                        w._busy = false;
+                    };
                     this.workers.push(w);
                 } catch (e) {
                     this.workers.push({ _dead: true, _ready: false, postMessage: () => {} });
@@ -2650,7 +2688,8 @@
                 lordPlayCount: state.lordPlayCount,
                 farmerPlayed: state.farmerPlayed,
                 callScores: state.callScores,
-                lordCards: state.lordCards ? state.lordCards.map(c => ({ id: c.id, suit: c.suit, rank: c.rank, value: c.value })) : []
+                lordCards: state.lordCards ? state.lordCards.map(c => ({ id: c.id, suit: c.suit, rank: c.rank, value: c.value })) : [],
+                phase: state.phase
             };
             return s;
         }
