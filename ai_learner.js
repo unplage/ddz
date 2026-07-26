@@ -87,10 +87,10 @@ const DEFAULT_PARAMS = {
     endgame: {
         maxDepth: 20, bombDepthPenalty: 1
     },
-    aiTiming: {
-        thinkingSeconds: { legendary: 8, grandmaster: 6, hard: 5, medium: 3, easy: 3 },
-        delayMs: { fast: 300, normal: 700, slow: 1200 }
-    },
+        aiTiming: {
+            thinkingSeconds: { legendary: 4, grandmaster: 3, hard: 2, medium: 2, easy: 2 },
+            delayMs: { fast: 300, normal: 700, slow: 1200 }
+        },
     analysis: {
         maxGames: -1,
         deterministic: true,

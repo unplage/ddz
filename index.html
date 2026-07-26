@@ -507,8 +507,15 @@
         return score;
     }
 
+    function _canContend(lastPlay, type) {
+        if (!lastPlay) return true;
+        if (type === CardType.ROCKET) return true;
+        if (type === CardType.BOMB) return lastPlay.type !== CardType.ROCKET;
+        return type === lastPlay.type;
+    }
     function getAllValidPlays(hand, lastPlay = null) {
         if (!hand || hand.length === 0) return [];
+        if (lastPlay && lastPlay.type === CardType.ROCKET) return [];
         let candidates = [];
         const byValue = {};
         hand.forEach(c => { if (!byValue[c.value]) byValue[c.value] = []; byValue[c.value].push(c); });
@@ -517,41 +524,53 @@
         Object.values(byValue).forEach(arr => { if (arr.length >= 3) candidates.push([arr[0], arr[1], arr[2]]); });
         Object.values(byValue).forEach(arr => { if (arr.length === 4) candidates.push(arr); });
         if (byValue[13] && byValue[14]) candidates.push([byValue[13][0], byValue[14][0]]);
-        for (let triple of Object.values(byValue).filter(arr=>arr.length>=3)) {
-            for (let single of hand) if (single.value !== triple[0].value) candidates.push([...triple.slice(0,3), single]);
-        }
-        for (let triple of Object.values(byValue).filter(arr=>arr.length>=3)) {
-            for (let pair of Object.values(byValue).filter(arr=>arr.length>=2 && arr[0].value !== triple[0].value)) {
-                candidates.push([...triple.slice(0,3), ...pair.slice(0,2)]);
+        if (_canContend(lastPlay, CardType.TRIPLE_WITH_SINGLE)) {
+            for (let triple of Object.values(byValue).filter(arr=>arr.length>=3)) {
+                for (let single of hand) if (single.value !== triple[0].value) candidates.push([...triple.slice(0,3), single]);
             }
         }
-        for (let quad of Object.values(byValue).filter(arr=>arr.length===4)) {
-            let singles = hand.filter(c => c.value !== quad[0].value);
-            for (let i=0;i<singles.length;i++) for (let j=i+1;j<singles.length;j++) candidates.push([...quad, singles[i], singles[j]]);
-        }
-        for (let quad of Object.values(byValue).filter(arr=>arr.length===4)) {
-            let pairs = Object.values(byValue).filter(arr=>arr.length>=2 && arr[0].value !== quad[0].value);
-            for (let i=0;i<pairs.length;i++) for (let j=i+1;j<pairs.length;j++) candidates.push([...quad, ...pairs[i].slice(0,2), ...pairs[j].slice(0,2)]);
-        }
-        let uniqueValues = [...new Set(hand.map(c=>c.value).filter(v=>v<12))].sort((a,b)=>a-b);
-        for (let len=5; len<=12; len++) {
-            for (let i=0; i+len <= uniqueValues.length; i++) {
-                let seq = uniqueValues.slice(i, i+len);
-                if (isStraight(seq)) {
-                    let cards = [], ok=true;
-                    for (let v of seq) { if (!byValue[v]) { ok=false; break; } cards.push(byValue[v][0]); }
-                    if (ok) candidates.push(cards);
+        if (_canContend(lastPlay, CardType.TRIPLE_WITH_PAIR)) {
+            for (let triple of Object.values(byValue).filter(arr=>arr.length>=3)) {
+                for (let pair of Object.values(byValue).filter(arr=>arr.length>=2 && arr[0].value !== triple[0].value)) {
+                    candidates.push([...triple.slice(0,3), ...pair.slice(0,2)]);
                 }
             }
         }
-        let pairValues = Object.keys(byValue).filter(v => byValue[v].length >= 2 && v<12).map(Number).sort((a,b)=>a-b);
-        for (let len=3; len<=6; len++) {
-            for (let i=0; i+len <= pairValues.length; i++) {
-                let seq = pairValues.slice(i, i+len);
-                if (isStraight(seq)) {
-                    let cards = [], ok=true;
-                    for (let v of seq) { if (!byValue[v] || byValue[v].length<2) { ok=false; break; } cards.push(byValue[v][0], byValue[v][1]); }
-                    if (ok) candidates.push(cards);
+        if (_canContend(lastPlay, CardType.FOUR_WITH_TWO_SINGLE)) {
+            for (let quad of Object.values(byValue).filter(arr=>arr.length===4)) {
+                let singles = hand.filter(c => c.value !== quad[0].value);
+                for (let i=0;i<singles.length;i++) for (let j=i+1;j<singles.length;j++) candidates.push([...quad, singles[i], singles[j]]);
+            }
+        }
+        if (_canContend(lastPlay, CardType.FOUR_WITH_TWO_PAIR)) {
+            for (let quad of Object.values(byValue).filter(arr=>arr.length===4)) {
+                let pairs = Object.values(byValue).filter(arr=>arr.length>=2 && arr[0].value !== quad[0].value);
+                for (let i=0;i<pairs.length;i++) for (let j=i+1;j<pairs.length;j++) candidates.push([...quad, ...pairs[i].slice(0,2), ...pairs[j].slice(0,2)]);
+            }
+        }
+        if (_canContend(lastPlay, CardType.STRAIGHT)) {
+            let uniqueValues = [...new Set(hand.map(c=>c.value).filter(v=>v<12))].sort((a,b)=>a-b);
+            for (let len=5; len<=12; len++) {
+                for (let i=0; i+len <= uniqueValues.length; i++) {
+                    let seq = uniqueValues.slice(i, i+len);
+                    if (isStraight(seq)) {
+                        let cards = [], ok=true;
+                        for (let v of seq) { if (!byValue[v]) { ok=false; break; } cards.push(byValue[v][0]); }
+                        if (ok) candidates.push(cards);
+                    }
+                }
+            }
+        }
+        if (_canContend(lastPlay, CardType.STRAIGHT_PAIR)) {
+            let pairValues = Object.keys(byValue).filter(v => byValue[v].length >= 2 && v<12).map(Number).sort((a,b)=>a-b);
+            for (let len=3; len<=6; len++) {
+                for (let i=0; i+len <= pairValues.length; i++) {
+                    let seq = pairValues.slice(i, i+len);
+                    if (isStraight(seq)) {
+                        let cards = [], ok=true;
+                        for (let v of seq) { if (!byValue[v] || byValue[v].length<2) { ok=false; break; } cards.push(byValue[v][0], byValue[v][1]); }
+                        if (ok) candidates.push(cards);
+                    }
                 }
             }
         }
@@ -921,6 +940,7 @@
     // ======================== DP 手牌分解引擎 (D) ========================
     function decomposeHandDP(hand) {
         if (!hand || hand.length === 0) return { plays: [], score: 0 };
+        if (hand.length > 14) return { plays: [], score: -999 };
         const n = hand.length;
         const idxToCard = hand;
         let cardIndex = {};
@@ -1319,13 +1339,20 @@
                 if (mctsResult && mctsResult.length > 0) return mctsResult;
             }
 
-            let allPlays = getAllValidPlays(hand, null);
+            if (lastPlay && state.lastPlayerId !== this.id) {
+                if (lastPlay.type === CardType.ROCKET) return [];
+                if (lastPlay.type === CardType.BOMB) {
+                    let hasBeatingBomb = Object.values(hand.reduce((a,c)=>(a[c.value]=(a[c.value]||0)+1,a),{})).some(v=>v===4);
+                    if (!hasBeatingBomb && !(hand.some(c=>c.value===13) && hand.some(c=>c.value===14))) return [];
+                }
+            }
 
             if (!lastPlay || state.lastPlayerId === this.id) {
+                let allPlays = getAllValidPlays(hand, null);
                 return this.selectLeadSmart(allPlays, role, hand, state, partnerId);
             }
 
-            let beatable = allPlays.filter(p => canBeat(getCardType(p), lastPlay));
+            let beatable = getAllValidPlays(hand, lastPlay);
             if (beatable.length === 0) return [];
 
             let scored = beatable.map(play => {
