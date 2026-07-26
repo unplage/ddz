@@ -182,9 +182,10 @@ const ParamConfig = {
 const GameDatabase = {
     db: null,
     DB_NAME: 'ddz_ai_db',
-    DB_VERSION: 3,
+    DB_VERSION: 4,
     STORE_NAME: 'games',
     ANALYSIS_STORE: 'analysis',
+    CORRECTIONS_STORE: 'corrections',
     _initPromise: null,
 
     open() {
@@ -204,6 +205,10 @@ const GameDatabase = {
                     let analysisStore = db.createObjectStore(this.ANALYSIS_STORE, { keyPath: 'gameId' });
                     analysisStore.createIndex('timestamp', 'timestamp', { unique: false });
                     analysisStore.createIndex('mistakeCount', 'mistakeCount', { unique: false });
+                }
+                if (!db.objectStoreNames.contains(this.CORRECTIONS_STORE)) {
+                    let correctionsStore = db.createObjectStore(this.CORRECTIONS_STORE, { keyPath: 'id', autoIncrement: true });
+                    correctionsStore.createIndex('timestamp', 'ts', { unique: false });
                 }
             };
             req.onsuccess = (e) => { this.db = e.target.result; resolve(this.db); };
@@ -370,12 +375,66 @@ const GameDatabase = {
             if (!db) return;
             return new Promise((resolve) => {
                 try {
-                    let tx = db.transaction([this.STORE_NAME, this.ANALYSIS_STORE], 'readwrite');
+                    let tx = db.transaction([this.STORE_NAME, this.ANALYSIS_STORE, this.CORRECTIONS_STORE], 'readwrite');
                     tx.objectStore(this.STORE_NAME).clear();
                     tx.objectStore(this.ANALYSIS_STORE).clear();
+                    tx.objectStore(this.CORRECTIONS_STORE).clear();
                     tx.oncomplete = () => resolve();
                     tx.onerror = () => resolve();
                 } catch (e) { resolve(); }
+            });
+        });
+    },
+
+    saveCorrection(entry) {
+        return this.open().then(db => {
+            if (!db) return false;
+            return new Promise((resolve) => {
+                try {
+                    let tx = db.transaction(this.CORRECTIONS_STORE, 'readwrite');
+                    let store = tx.objectStore(this.CORRECTIONS_STORE);
+                    store.add(entry);
+                    tx.oncomplete = () => resolve(true);
+                    tx.onerror = () => resolve(false);
+                } catch (e) { resolve(false); }
+            });
+        });
+    },
+
+    getRecentCorrections(limit = 50) {
+        return this.open().then(db => {
+            if (!db) return [];
+            return new Promise((resolve) => {
+                try {
+                    let tx = db.transaction(this.CORRECTIONS_STORE, 'readonly');
+                    let store = tx.objectStore(this.CORRECTIONS_STORE);
+                    let idx = store.index('timestamp');
+                    let req = idx.openCursor(null, 'prev');
+                    let results = [];
+                    req.onsuccess = (e) => {
+                        let cursor = e.target.result;
+                        if (cursor && results.length < limit) {
+                            results.push(cursor.value);
+                            cursor.continue();
+                        } else { resolve(results); }
+                    };
+                    req.onerror = () => resolve([]);
+                } catch (e) { resolve([]); }
+            });
+        });
+    },
+
+    countCorrections() {
+        return this.open().then(db => {
+            if (!db) return 0;
+            return new Promise((resolve) => {
+                try {
+                    let tx = db.transaction(this.CORRECTIONS_STORE, 'readonly');
+                    let store = tx.objectStore(this.CORRECTIONS_STORE);
+                    let req = store.count();
+                    req.onsuccess = () => resolve(req.result);
+                    req.onerror = () => resolve(0);
+                } catch (e) { resolve(0); }
             });
         });
     }
@@ -533,6 +592,7 @@ const GameRecorder = {
         this.currentGame = null;
         GameDatabase.save(game).then(() => {
             GameAnalyzer.analyze(game);
+            GodViewLearner.learn(game);
         });
         ParameterOptimizer._onGameEnd(game);
     }
@@ -1140,7 +1200,300 @@ const CorrectionRules = {
     }
 };
 
-// ======================== 7. PARAM EXPORTER + UI ========================
+// ======================== 7. GOD VIEW COUNTERFACTUAL LEARNER ========================
+const GodViewLearner = {
+    _queue: [],
+    _running: false,
+    _correctionsHistory: null,
+    _lastAdjustmentTime: 0,
+    _ADJUST_INTERVAL: 3000,
+    _statsCache: { total: 0, recent20: 0, passMiss: 0, bombMiss: 0 },
+
+    _initCache() {
+        GameDatabase.countCorrections().then(total => { this._statsCache.total = total; });
+        GameDatabase.getRecentCorrections(20).then(data => {
+            if (data && data.length) {
+                let recent = data.filter(c => c.diff > 0.25);
+                this._statsCache.recent20 = recent.length;
+                this._statsCache.passMiss = recent.filter(c => c.actualType === 'pass').length;
+                this._statsCache.bombMiss = recent.filter(c => c.actualType !== 'bomb' && c.actualType !== 'rocket' && (c.bestType === 'bomb' || c.bestType === 'rocket')).length;
+            }
+        });
+    },
+
+    learn(game) {
+        if (!game || !game.initialDeal || !game.actions || game.actions.length < 3) return;
+        if (game.mode !== 'single') return;
+        if (this._running) { this._queue.push(game); return; }
+        this._running = true;
+        setTimeout(() => this._run(game), 200);
+    },
+
+    _run(game) {
+        try {
+            let corrections = this._analyzeGame(game);
+            if (corrections.length > 0) {
+                this._saveCorrections(corrections);
+                this._applyAdjustments(corrections);
+            }
+        } catch (e) {
+            console.warn('GodViewLearner error:', e.message);
+        }
+        this._running = false;
+        if (this._queue.length > 0) this.learn(this._queue.shift());
+    },
+
+    _analyzeGame(game) {
+        let lordCards = game.initialDeal.lordCards.map(c => ({ ...c }));
+        let players = game.initialDeal.players.map(p => p.map(c => ({ ...c })));
+        let lordIdx = game.calling.landlord;
+        if (lordIdx < 0) return [];
+        players[lordIdx].push(...lordCards);
+        players.forEach(p => p.sort((a, b) => a.value - b.value));
+
+        let state = {
+            players: players.map(p => [...p]),
+            landlord: lordIdx,
+            currentPlayer: game.actions[0]?.p || 0,
+            lastPlay: null, lastPlayerId: -1, passCount: 0, phase: 'playing'
+        };
+        let corrections = [];
+        let aiPlayers = [1, 2];
+
+        for (let i = 0; i < game.actions.length; i++) {
+            let action = game.actions[i];
+            if (state.players.some(p => p.length === 0)) break;
+
+            if (aiPlayers.includes(action.p)) {
+                let hand = state.players[action.p];
+                if (hand && hand.length > 0) {
+                    let corr = this._checkCounterfactual(state, action, hand, lordIdx, i);
+                    if (corr) corrections.push(corr);
+                }
+            }
+            this._advanceState(state, action);
+        }
+        return corrections;
+    },
+
+    _checkCounterfactual(state, action, hand, lordIdx, turnIdx) {
+        let aiRole = action.p === lordIdx ? 'landlord' : 'farmer';
+        let isLead = !state.lastPlay || state.lastPlayerId === action.p;
+
+        let allPlays = getAllValidPlays(hand, isLead ? null : state.lastPlay);
+        if (!isLead && allPlays.length === 0) return null;
+
+        let memory = new MasterMemory();
+        let scored = allPlays.map(play => {
+            let feat = extractPlayFeatures(play, hand, state.lastPlay, aiRole, memory, state);
+            return { play, score: scorePlay(feat, aiRole, memory, state, hand) };
+        });
+        scored.sort((a, b) => b.score - a.score);
+
+        let topN = Math.min(4, scored.length);
+        let simResults = [];
+
+        for (let j = 0; j < topN; j++) {
+            let play = scored[j].play;
+            let ids = new Set(play.map(c => c.id));
+            let simState = JSON.parse(JSON.stringify(state));
+            simState.players[action.p] = simState.players[action.p].filter(c => !ids.has(c.id));
+            simState.lastPlay = getCardType(play);
+            simState.lastPlayerId = action.p;
+            simState.passCount = 0;
+
+            if (simState.players[action.p].length === 0) {
+                simResults.push({ play, score: scored[j].score, winRate: action.p === lordIdx ? 1 : 0 });
+                continue;
+            }
+            let nextP = (action.p + 1) % 3;
+            let wins = 0, trials = 4;
+            for (let t = 0; t < trials; t++) {
+                if (this._simulateGame(simState, nextP, action.p, lordIdx)) wins++;
+            }
+            simResults.push({ play, score: scored[j].score, winRate: wins / trials });
+        }
+
+        if (!isLead) {
+            let passState = JSON.parse(JSON.stringify(state));
+            passState.passCount++;
+            let wins = 0, trials = 3;
+            for (let t = 0; t < trials; t++) {
+                if (this._simulateGame(passState, (action.p + 1) % 3, action.p, lordIdx)) wins++;
+            }
+            simResults.push({ play: [], score: -9999, winRate: wins / trials });
+        }
+
+        simResults.sort((a, b) => {
+            if (Math.abs(a.winRate - b.winRate) > 0.15) return b.winRate - a.winRate;
+            return b.score - a.score;
+        });
+
+        let actualPlay = action.pass ? [] : action.c;
+        let actualSim = simResults.find(s => {
+            if (actualPlay.length === 0 && s.play.length === 0) return true;
+            if (actualPlay.length === 0 || s.play.length === 0) return false;
+            let ids1 = new Set(actualPlay.map(c => c.id));
+            let ids2 = new Set(s.play.map(c => c.id));
+            if (ids1.size !== ids2.size) return false;
+            return [...ids1].every(id => ids2.has(id));
+        });
+
+        let bestSim = simResults[0];
+        if (!actualSim || !bestSim || actualSim === bestSim) return null;
+        if (bestSim.winRate - actualSim.winRate < 0.25) return null;
+        if (bestSim.winRate <= 0.3) return null;
+
+        let bestType = bestSim.play.length > 0 ? getCardType(bestSim.play) : null;
+        let actualType = actualPlay.length > 0 ? getCardType(actualPlay) : null;
+        if (bestType && actualType && bestType.type === actualType.type && bestType.value === actualType.value) return null;
+
+        return {
+            turnIdx, player: action.p, role: aiRole, diff: bestSim.winRate - actualSim.winRate,
+            bestWinRate: bestSim.winRate, actualWinRate: actualSim.winRate,
+            handSize: hand.length, lordSize: state.players[lordIdx]?.length || 0,
+            lastPlayType: state.lastPlay?.type || 'none', lastPlayPower: state.lastPlay?.value || 0,
+            isLead, actualType: actualType?.type || 'pass', bestType: bestType?.type || 'pass',
+            bestScore: bestSim.score, actualScore: actualSim?.score || 0
+        };
+    },
+
+    _simulateGame(startState, startPlayer, aiPlayerId, lordIdx) {
+        let s = JSON.parse(JSON.stringify(startState));
+        let cp = startPlayer;
+        let limit = 50;
+        for (let step = 0; step < limit; step++) {
+            for (let i = 0; i < 3; i++) {
+                if (s.players[i].length === 0) {
+                    if (aiPlayerId === lordIdx) return i === lordIdx;
+                    return i !== lordIdx;
+                }
+            }
+            if (s.passCount >= 2) { s.lastPlay = null; s.lastPlayerId = -1; s.passCount = 0; }
+            let hand = s.players[cp];
+            if (!hand || hand.length === 0) { cp = (cp + 1) % 3; continue; }
+            let needBeat = s.lastPlay && s.lastPlayerId !== cp;
+            let plays = needBeat ? getAllValidPlays(hand, s.lastPlay) : getAllValidPlays(hand, null);
+            if (plays.length === 0) { s.passCount++; cp = (cp + 1) % 3; continue; }
+            let role = cp === s.landlord ? 'landlord' : 'farmer';
+            let mem = new MasterMemory();
+            let scored = plays.map(p => {
+                let feat = extractPlayFeatures(p, hand, s.lastPlay, role, mem, s);
+                return { play: p, score: scorePlay(feat, role, mem, s, hand) };
+            });
+            scored.sort((a, b) => b.score - a.score);
+            let chosen = scored[0].play;
+            if (Math.random() < 0.12 && scored.length > 1 && scored[1].play.length > 0) {
+                chosen = scored[1].play;
+            }
+            s.players[cp] = s.players[cp].filter(c => !chosen.includes(c));
+            s.lastPlay = getCardType(chosen);
+            s.lastPlayerId = cp;
+            s.passCount = 0;
+            cp = (cp + 1) % 3;
+        }
+        return false;
+    },
+
+    _advanceState(state, action) {
+        if (action.pass) {
+            state.passCount++;
+            if (state.passCount >= 2) { state.lastPlay = null; state.lastPlayerId = -1; state.passCount = 0; }
+        } else {
+            let ids = new Set(action.c.map(c => c.id));
+            state.players[action.p] = state.players[action.p].filter(c => !ids.has(c.id));
+            state.lastPlay = getCardType(action.c.map(c => ({ ...c })));
+            state.lastPlayerId = action.p;
+            state.passCount = 0;
+        }
+        state.currentPlayer = (action.p + 1) % 3;
+    },
+
+    _saveCorrections(corrections) {
+        let entries = corrections.map(c => ({ ...c, ts: Date.now() }));
+        let count = entries.length;
+        for (let e of entries) GameDatabase.saveCorrection(e);
+        this._statsCache.total += count;
+        this._statsCache.recent20 = Math.min(this._statsCache.recent20 + count, 20);
+        let recentPass = entries.filter(c => c.actualType === 'pass').length;
+        let recentBomb = entries.filter(c => c.actualType !== 'bomb' && c.actualType !== 'rocket' && (c.bestType === 'bomb' || c.bestType === 'rocket')).length;
+        this._statsCache.passMiss += recentPass;
+        this._statsCache.bombMiss += recentBomb;
+    },
+
+    _applyAdjustments(corrections) {
+        let now = Date.now();
+        if (now - this._lastAdjustmentTime < this._ADJUST_INTERVAL) return;
+        this._lastAdjustmentTime = now;
+
+        let lr = 0.03;
+        for (let corr of corrections) {
+            if (corr.diff < 0.3) continue;
+
+            if (corr.isLead) {
+                if (corr.bestType === 'single' && corr.actualType === 'pair') {
+                    this._adjust('playHeuristics.landlordLeadSingle.le6', 2);
+                }
+                continue;
+            }
+
+            let isBombBest = corr.bestType === 'bomb' || corr.bestType === 'rocket';
+            let isBombActual = corr.actualType === 'bomb' || corr.actualType === 'rocket';
+
+            if (isBombBest && !isBombActual) {
+                this._adjust('playHeuristics.bombUrgent.oppAboutToWin', 8 * lr);
+                this._adjust('playHeuristics.bombUrgent.landlordRemainLe4', 5 * lr);
+                this._adjust('playHeuristics.bombUrgent.remainLe2', 5 * lr);
+            }
+
+            if (!isBombBest && isBombActual) {
+                this._adjust('playHeuristics.bombWasted.lowLastPower', -5 * lr);
+                this._adjust('playHeuristics.bombWasted.highLastPower', -5 * lr);
+                this._adjust('playHeuristics.bombWasted.notCritical', -5 * lr);
+            }
+
+            if (corr.actualType === 'pass' && corr.bestWinRate > 0.5) {
+                this._adjust('passScores.lordHandGt4', -3 * lr);
+                this._adjust('passScores.farmerPartnerBase', -3 * lr);
+            }
+
+            if (corr.actualType === 'single' && (corr.bestType === 'bomb' || corr.bestType === 'pair' || corr.bestType === 'triple')) {
+                this._adjust('playHeuristics.suppressSingle.diffLe4', -3 * lr);
+                this._adjust('playHeuristics.suppressSingle.diffLe7', -2 * lr);
+            }
+
+            if (corr.actualType === 'pair' && corr.bestType === 'single') {
+                this._adjust('playHeuristics.suppressPair.diffLe4', -3 * lr);
+                this._adjust('playHeuristics.suppressPair.diffLe7', -2 * lr);
+            }
+
+            if (corr.bestWinRate > 0.6 && corr.actualWinRate < 0.3) {
+                this._adjust('playHeuristics.overkill.singleLe12', 5 * lr);
+                this._adjust('playHeuristics.overkill.pairLe10', 5 * lr);
+            }
+        }
+    },
+
+    _adjust(path, delta) {
+        if (Math.abs(delta) < 0.01) return;
+        let current = ParamConfig.get(path);
+        if (current === undefined || current === null) return;
+        let maxClamp = 500, minClamp = -500;
+        if (path.startsWith('passScores')) { minClamp = -999; maxClamp = 999; }
+        let newVal = Math.max(minClamp, Math.min(maxClamp, current + delta));
+        if (Math.abs(newVal - current) > 0.01) ParamConfig.set(path, Math.round(newVal * 100) / 100);
+    },
+
+    getStats() {
+        return this._statsCache;
+    },
+
+    getRecentCorrections(limit) {
+        return GameDatabase.getRecentCorrections(limit).then(data => data || []);
+    }
+};
+
+// ======================== 10. PARAM EXPORTER + UI ========================
 const ParamExporter = {
     _currentTab: 'params',
 
@@ -1162,6 +1515,7 @@ const ParamExporter = {
                     <button id="aiTabGames" class="pixel-btn ${this._currentTab==='games'?'bg-yellow-500':'bg-gray-600'} text-[10px] flex-1" onclick="ParamExporter.switchTab('games')">🎮 记录</button>
                     <button id="aiTabRules" class="pixel-btn ${this._currentTab==='rules'?'bg-yellow-500':'bg-gray-600'} text-[10px] flex-1" onclick="ParamExporter.switchTab('rules')">📏 规则</button>
                     <button id="aiTabStats" class="pixel-btn ${this._currentTab==='stats'?'bg-yellow-500':'bg-gray-600'} text-[10px] flex-1" onclick="ParamExporter.switchTab('stats')">📊 战绩</button>
+                    <button id="aiTabLearn" class="pixel-btn ${this._currentTab==='learn'?'bg-yellow-500':'bg-gray-600'} text-[10px] flex-1" onclick="ParamExporter.switchTab('learn')">🧠 学习</button>
                 </div>
                 <div id="aiParamContent"></div>
                 <button onclick="document.getElementById('aiParamModal').classList.add('hidden')" class="pixel-btn bg-gray-500 text-[10px] w-full mt-2">关闭</button>
@@ -1173,7 +1527,7 @@ const ParamExporter = {
 
     switchTab(tab) {
         this._currentTab = tab;
-        ['aiTabParams','aiTabGames','aiTabRules','aiTabStats'].forEach(id => {
+        ['aiTabParams','aiTabGames','aiTabRules','aiTabStats','aiTabLearn'].forEach(id => {
             let btn = document.getElementById(id);
             if (btn) btn.className = `pixel-btn ${id.includes(tab)?'bg-yellow-500':'bg-gray-600'} text-[10px] flex-1`;
         });
@@ -1187,15 +1541,18 @@ const ParamExporter = {
         else if (this._currentTab === 'games') this._renderGamesTab(content);
         else if (this._currentTab === 'rules') this._renderRulesTab(content);
         else if (this._currentTab === 'stats') this._renderStatsTab(content);
+        else if (this._currentTab === 'learn') this._renderLearnTab(content);
     },
 
     _renderParamsTab(container) {
         let isCustom = ParamConfig._overrides !== null;
         let ruleStats = CorrectionRules.getStats();
+        let learnStats = GodViewLearner.getStats();
         container.innerHTML = `
             <div id="aiParamInfo" class="text-[10px] text-gray-300 mb-3 space-y-1">
                 <div>📌 参数版本: v${ParamConfig.get('version')} ${isCustom ? '✨ 已自定义' : '📄 默认'}</div>
                 <div>📏 纠错规则: ${ruleStats.active}/${ruleStats.total} 条生效</div>
+                <div>🧠 反事实学习: ${learnStats.total} 次复盘 · ${learnStats.recent20} 近期修正</div>
             </div>
             <div class="flex flex-col gap-2">
                 <button onclick="ParamExporter.copyToClipboard()" class="pixel-btn bg-blue-500 text-[10px] w-full">📋 复制参数 JSON</button>
@@ -1284,6 +1641,35 @@ const ParamExporter = {
         }
         html += `<button onclick="clearHistory();ParamExporter._refreshUI();" class="pixel-btn bg-red-500 text-[10px] w-full mt-2">🗑 清空记录</button>`;
         container.innerHTML = html;
+    },
+
+    _renderLearnTab(container) {
+        let stats = GodViewLearner.getStats();
+        container.innerHTML = `<div class="text-[10px] text-gray-300 mb-3 space-y-1">
+            <div>📊 总复盘次数: ${stats.total}</div>
+            <div>🎯 近期修正: ${stats.recent20} 条</div>
+            <div>⏱ 该PASS却未PASS: ${stats.passMiss} 次</div>
+            <div>💣 该用炸弹却未用: ${stats.bombMiss} 次</div>
+        </div><div id="learnTabBody" class="text-center text-gray-400 text-[10px] py-4">⏳ 加载中...</div>
+        <div class="text-[8px] text-gray-500 mt-2">每局结束后自动分析AI决策，发现错失机会后微调参数</div>`;
+        GodViewLearner.getRecentCorrections(15).then(data => {
+            let body = document.getElementById('learnTabBody');
+            if (!body) return;
+            if (!data || data.length === 0) {
+                body.innerHTML = '暂无学习数据，完成对局后自动分析';
+            } else {
+                let html = '<div class="text-[10px] text-gray-500 mb-1">最近反事实分析：</div>';
+                for (let c of data) {
+                    let icon = c.diff > 0.5 ? '🔴' : '🟡';
+                    let roleTag = c.role === 'landlord' ? '👑地主' : '🌾农民';
+                    let detail = c.isLead
+                        ? `先手应出 <b>${c.bestType}</b> 而非 ${c.actualType}`
+                        : `拦截应出 <b>${c.bestType}</b> 而非 ${c.actualType}`;
+                    html += `<div class="bg-gray-800/50 rounded p-1.5 mb-1 text-[9px]">${icon} P${c.player} ${roleTag} ${detail} (胜率差 ${Math.round(c.diff*100)}%)</div>`;
+                }
+                body.innerHTML = html;
+            }
+        });
     },
 
     _showGameDetail(gameId) {
@@ -1447,10 +1833,12 @@ const ParamExporter = {
     }
 };
 
-// ======================== 8. AUTO INIT ========================
+// ======================== 11. AUTO INIT ========================
 ParamConfig.init();
 CorrectionRules.init();
-GameDatabase.open();
+GameDatabase.open().then(() => {
+    GodViewLearner._initCache();
+});
 if (document.readyState === 'complete') {
     GameRecorder.installHooks();
 } else {
