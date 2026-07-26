@@ -7,7 +7,7 @@ const BASE_PATH = self.location.pathname.replace(/[^/]+$/, '');
 // 构建带项目标识的缓存名称，避免多项目冲突
 // 例如 '/ddz/' -> 'pwa-cache-ddz-v1'
 const PROJECT_PREFIX = `pwa-cache${BASE_PATH.replace(/\//g, '-').replace(/--/g, '-').replace(/(^-|-$)/g, '')}`;
-const CACHE_NAME = `${PROJECT_PREFIX}v46`;
+const CACHE_NAME = `${PROJECT_PREFIX}v47`;
 
 // 预缓存资源列表（全部使用相对于当前 sw.js 的路径）
 const PRECACHE_URLS = [
@@ -129,4 +129,11 @@ self.addEventListener('fetch', (event) => {
 
   // ----- 5.3 其他请求（如 API）默认不缓存，直接走网络 -----
   // （业务数据通常存储在 IndexedDB 中，不受影响）
+});
+
+// ---------- 6. 消息处理（跳过等待） ----------
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
