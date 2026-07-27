@@ -5,10 +5,21 @@
 const CardType = {
     SINGLE:'single', PAIR:'pair', TRIPLE:'triple', TRIPLE_WITH_SINGLE:'triple_single', TRIPLE_WITH_PAIR:'triple_pair',
     STRAIGHT:'straight', STRAIGHT_PAIR:'straight_pair', FOUR_WITH_TWO_SINGLE:'four_two_single', FOUR_WITH_TWO_PAIR:'four_two_pair',
-    BOMB:'bomb', ROCKET:'rocket'
+    BOMB:'bomb', ROCKET:'rocket',
+    PLANE:'plane', PLANE_WITH_SINGLE:'plane_single', PLANE_WITH_PAIR:'plane_pair'
 };
 function countValues(values) { let cnt = {}; values.forEach(v => cnt[v] = (cnt[v] || 0) + 1); return cnt; }
 function isStraight(values) { for (let i = 1; i < values.length; i++) if (values[i] !== values[i-1] + 1) return false; return true; }
+function getCombinations(arr, k) {
+    if (k === 0) return [[]];
+    if (arr.length < k) return [];
+    let result = [];
+    for (let i = 0; i <= arr.length - k; i++) {
+        for (let sub of getCombinations(arr.slice(i + 1), k - 1))
+            result.push([arr[i], ...sub]);
+    }
+    return result;
+}
 function getCardType(cards) {
     if (!cards || cards.length === 0) return null;
     const sorted = [...cards].sort((a,b)=>a.value-b.value);
@@ -28,6 +39,39 @@ function getCardType(cards) {
         let cnt = countValues(values);
         let pairs = Object.keys(cnt).filter(k=>cnt[k]===2).map(Number).sort((a,b)=>a-b);
         if (pairs.length === cards.length/2 && isStraight(pairs) && pairs[pairs.length-1] <= 11) return { type:CardType.STRAIGHT_PAIR, value:pairs[0], length:pairs.length, cards:sorted };
+    }
+    if (cards.length >= 6 && cards.length % 3 === 0) {
+        let cnt = countValues(values);
+        let tripVals = Object.keys(cnt).filter(k=>cnt[k]===3).map(Number).sort((a,b)=>a-b);
+        let groupLen = cards.length / 3;
+        if (tripVals.length === groupLen && groupLen >= 2 && isStraight(tripVals) && tripVals[groupLen-1] <= 11)
+            return { type:CardType.PLANE, value:tripVals[0], length:groupLen, cards:sorted };
+    }
+    if (cards.length >= 8 && cards.length % 4 === 0) {
+        let cnt = countValues(values);
+        let groupLen = cards.length / 4;
+        let tripVals = Object.keys(cnt).filter(k=>cnt[k]>=3).map(Number).sort((a,b)=>a-b);
+        for (let i=0; i+groupLen<=tripVals.length; i++) {
+            let seq = tripVals.slice(i, i+groupLen);
+            if (!isStraight(seq) || seq[groupLen-1]>11) continue;
+            let used = new Set(seq);
+            let remain = Object.keys(cnt).filter(k=>!used.has(parseInt(k)) && cnt[k]===1);
+            if (remain.length === groupLen)
+                return { type:CardType.PLANE_WITH_SINGLE, value:seq[0], length:groupLen, cards:sorted };
+        }
+    }
+    if (cards.length >= 10 && cards.length % 5 === 0) {
+        let cnt = countValues(values);
+        let groupLen = cards.length / 5;
+        let tripVals = Object.keys(cnt).filter(k=>cnt[k]>=3).map(Number).sort((a,b)=>a-b);
+        for (let i=0; i+groupLen<=tripVals.length; i++) {
+            let seq = tripVals.slice(i, i+groupLen);
+            if (!isStraight(seq) || seq[groupLen-1]>11) continue;
+            let used = new Set(seq);
+            let remain = Object.keys(cnt).filter(k=>!used.has(parseInt(k)) && cnt[k]===2);
+            if (remain.length === groupLen)
+                return { type:CardType.PLANE_WITH_PAIR, value:seq[0], length:groupLen, cards:sorted };
+        }
     }
     return null;
 }
@@ -56,6 +100,9 @@ function getPlayPower(play) {
         case CardType.TRIPLE_WITH_PAIR: base = type.value + 70; break;
         case CardType.STRAIGHT: base = type.value + 80 + type.length; break;
         case CardType.STRAIGHT_PAIR: base = type.value + 90 + type.length; break;
+        case CardType.PLANE: base = type.value + 100 + type.length * 3; break;
+        case CardType.PLANE_WITH_SINGLE: base = type.value + 110 + type.length * 3; break;
+        case CardType.PLANE_WITH_PAIR: base = type.value + 120 + type.length * 3; break;
         case CardType.FOUR_WITH_TWO_SINGLE: base = type.value + 110; break;
         case CardType.FOUR_WITH_TWO_PAIR: base = type.value + 120; break;
         default: base = type.value;
@@ -138,6 +185,7 @@ const DEFAULT_PARAMS = {
         landlord: {
             bombPenalty: 100, longGte5: 20, longGte3: 10, pairPlay: 5,
             straightBonus: 15, straightPairBonus: 10, tripleWithBonus: 8,
+            planeBonus: 12, planeWithBonus: 10,
             smallValLe6: 15, controlValGe12LenLe2: 30
         },
         farmer: {
@@ -147,6 +195,7 @@ const DEFAULT_PARAMS = {
     dpScores: {
         rocket: 60, bomb: 50, straight: 30, straightLenFactor: 2,
         straightPair: 25, straightPairLenFactor: 2, tripleWith: 20,
+        plane: 40, planeLenFactor: 3, planeWith: 30,
         pair: 5, triple: 8, single: -5, completeBonus: 100
     },
     heuristicPlayout: {
@@ -358,6 +407,12 @@ function extractPlayFeatures(play, hand, lastPlay, role, memory, state) {
         let kv = Object.keys(cnt).find(k => cnt[k] === target && parseInt(k) !== playType.value);
         if (kv !== undefined) kickerValue = parseInt(kv);
     }
+    if (playType.type === CardType.PLANE_WITH_SINGLE || playType.type === CardType.PLANE_WITH_PAIR) {
+        let cnt = countValues(play.map(c=>c.value));
+        let target = playType.type === CardType.PLANE_WITH_SINGLE ? 1 : 2;
+        let kickerVals = Object.keys(cnt).filter(k => cnt[k] === target).map(Number);
+        kickerValue = kickerVals.length > 0 ? Math.max(...kickerVals) : 0;
+    }
     let nextPlayerId = (state.currentPlayer + 1) % 3;
     return {
         playLength: play.length, playPower, isBomb: isBomb ? 1 : 0, isRocket: (playType.type === CardType.ROCKET) ? 1 : 0,
@@ -432,6 +487,57 @@ function getAllValidPlays(hand, lastPlay = null) {
                     let cards = [], ok=true;
                     for (let v of seq) { if (!byValue[v] || byValue[v].length<2) { ok=false; break; } cards.push(byValue[v][0], byValue[v][1]); }
                     if (ok) candidates.push(cards);
+                }
+            }
+        }
+    }
+    if (_canContend(lastPlay, CardType.PLANE)) {
+        let tripleValues = Object.keys(byValue).filter(v => byValue[v].length >= 3 && v<12).map(Number).sort((a,b)=>a-b);
+        for (let len=2; len<=tripleValues.length; len++) {
+            for (let i=0; i+len<=tripleValues.length; i++) {
+                let seq = tripleValues.slice(i, i+len);
+                if (isStraight(seq)) {
+                    let cards = [], ok=true;
+                    for (let v of seq) { if (!byValue[v] || byValue[v].length<3) { ok=false; break; } cards.push(byValue[v][0], byValue[v][1], byValue[v][2]); }
+                    if (ok) candidates.push(cards);
+                }
+            }
+        }
+    }
+    if (_canContend(lastPlay, CardType.PLANE_WITH_SINGLE)) {
+        let tripleValues = Object.keys(byValue).filter(v => byValue[v].length >= 3 && v<12).map(Number).sort((a,b)=>a-b);
+        for (let len=2; len<=tripleValues.length; len++) {
+            for (let i=0; i+len<=tripleValues.length; i++) {
+                let seq = tripleValues.slice(i, i+len);
+                if (!isStraight(seq)) continue;
+                let tripleCards = [], ok=true;
+                for (let v of seq) { if (!byValue[v] || byValue[v].length<3) { ok=false; break; } tripleCards.push(byValue[v][0], byValue[v][1], byValue[v][2]); }
+                if (!ok) continue;
+                let usedIds = new Set(tripleCards.map(c=>c.id));
+                let kickers = hand.filter(c => !usedIds.has(c.id));
+                for (let combo of getCombinations(kickers, len)) {
+                    candidates.push([...tripleCards, ...combo]);
+                }
+            }
+        }
+    }
+    if (_canContend(lastPlay, CardType.PLANE_WITH_PAIR)) {
+        let tripleValues = Object.keys(byValue).filter(v => byValue[v].length >= 3 && v<12).map(Number).sort((a,b)=>a-b);
+        let pairValues = Object.keys(byValue).filter(v => byValue[v].length >= 2 && v<12).map(Number).sort((a,b)=>a-b);
+        for (let len=2; len<=Math.min(tripleValues.length, 6); len++) {
+            for (let i=0; i+len<=tripleValues.length; i++) {
+                let seq = tripleValues.slice(i, i+len);
+                if (!isStraight(seq)) continue;
+                let tripleCards = [], ok=true;
+                for (let v of seq) { if (!byValue[v] || byValue[v].length<3) { ok=false; break; } tripleCards.push(byValue[v][0], byValue[v][1], byValue[v][2]); }
+                if (!ok) continue;
+                let usedVals = new Set(seq);
+                let availPairs = pairValues.filter(v => !usedVals.has(v));
+                for (let combo of getCombinations(availPairs, len)) {
+                    let cards = [...tripleCards];
+                    let ok2 = true;
+                    for (let v of combo) { if (!byValue[v] || byValue[v].length<2) { ok2=false; break; } cards.push(byValue[v][0], byValue[v][1]); }
+                    if (ok2) candidates.push(cards);
                 }
             }
         }
@@ -517,7 +623,7 @@ function scorePlay(features, role, memory, state, playerHand) {
     }
     if ((features.isBomb || features.isRocket) && features.needBeat && features.remainTotal > 6 && !oppAboutToWin) score += ph.bombWasted.notCritical;
     if (features.needBeat && features.remainTotal <= 3 && features.remainTotal + features.playLength <= (playerHand ? playerHand.length : 20)) score += ph.nearWin.remainLe3;
-    if (features.playType === CardType.TRIPLE_WITH_SINGLE || features.playType === CardType.TRIPLE_WITH_PAIR) {
+    if (features.playType === CardType.TRIPLE_WITH_SINGLE || features.playType === CardType.TRIPLE_WITH_PAIR || features.playType === CardType.PLANE_WITH_SINGLE || features.playType === CardType.PLANE_WITH_PAIR) {
         if (features.kickerValue >= 11) score += ph.kickerPenalty.ge11;
         if (features.kickerValue >= 13) score += ph.kickerPenalty.ge13;
         if (features.kickerValue >= 11 && playerHand && features.kickerValue) {
@@ -726,6 +832,14 @@ function decomposeHandDP(hand) {
         else if (type.type === CardType.BOMB) pscore = ds.bomb;
         else if (type.type === CardType.STRAIGHT) pscore = ds.straight + type.length * ds.straightLenFactor;
         else if (type.type === CardType.STRAIGHT_PAIR) pscore = ds.straightPair + type.length * ds.straightPairLenFactor;
+        else if (type.type === CardType.PLANE) pscore = ds.plane + type.length * ds.planeLenFactor;
+        else if (type.type === CardType.PLANE_WITH_SINGLE || type.type === CardType.PLANE_WITH_PAIR) {
+            let target = type.type === CardType.PLANE_WITH_SINGLE ? 1 : 2;
+            let cnt = countValues(play.map(c=>c.value));
+            let kickerVals = Object.keys(cnt).filter(k => cnt[k] === target).map(Number);
+            let maxKicker = kickerVals.length > 0 ? Math.max(...kickerVals) : 0;
+            pscore = ds.planeWith - Math.max(0, maxKicker - 7) * 3 * type.length;
+        }
         else if (type.type === CardType.TRIPLE_WITH_SINGLE || type.type === CardType.TRIPLE_WITH_PAIR) {
             let target = type.type === CardType.TRIPLE_WITH_SINGLE ? 1 : 2;
             let cnt = countValues(play.map(c=>c.value));
@@ -1120,6 +1234,8 @@ class MiniMasterAI {
                         else if (p.length === 2) score += sl.pairPlay;
                         if (type && type.type === CardType.STRAIGHT) score += sl.straightBonus;
                         if (type && type.type === CardType.STRAIGHT_PAIR) score += sl.straightPairBonus;
+                        if (type && type.type === CardType.PLANE) score += sl.planeBonus;
+                        if (type && (type.type === CardType.PLANE_WITH_SINGLE || type.type === CardType.PLANE_WITH_PAIR)) score += sl.planeWithBonus;
                         if (type && (type.type === CardType.TRIPLE_WITH_SINGLE || type.type === CardType.TRIPLE_WITH_PAIR)) score += sl.tripleWithBonus;
                         let val = p[0].value;
                         if (val <= 6) score += sl.smallValLe6;
@@ -1131,6 +1247,11 @@ class MiniMasterAI {
             }
             let straightPlays = plays.filter(p => getCardType(p)?.type === CardType.STRAIGHT);
             if (straightPlays.length) return straightPlays.sort((a,b)=>b.length-a.length)[0];
+            let planePlays = plays.filter(p => {
+                let t = getCardType(p);
+                return t && (t.type === CardType.PLANE || t.type === CardType.PLANE_WITH_SINGLE || t.type === CardType.PLANE_WITH_PAIR);
+            });
+            if (planePlays.length > 0) return planePlays.reduce((a,b) => getCardType(a).value < getCardType(b).value ? a : b);
             let triplePlays = plays.filter(p => {
                 let t = getCardType(p);
                 return t && (t.type === CardType.TRIPLE_WITH_SINGLE || t.type === CardType.TRIPLE_WITH_PAIR);

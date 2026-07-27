@@ -134,7 +134,7 @@
             <div class="input-group"><input type="text" id="targetPeerId" placeholder="输入对方房间码"><button onclick="joinGame()" class="pixel-btn bg-green-500 w-full mt-1">加入房间</button></div>
             <button onclick="hideOnlinePanel()" class="pixel-btn bg-gray-600 w-full mt-2 text-[10px]">返回</button>
         </div>
-        <div id="rulesModal" class="hidden fixed inset-0 bg-black/95 flex items-center justify-center z-50 p-4"><div class="bg-gray-800 p-4 pixel-border w-full max-w-sm max-h-[80vh] overflow-y-auto"><h2 class="text-lg text-yellow-400 mb-4 retro-text text-center">游戏规则</h2><div class="text-[10px] leading-6 text-gray-300 space-y-2"><p>• 发牌：每人17张，留3张底牌</p><p>• 叫分：1-3分或不叫，高分当地主</p><p>• 牌型：单张、对子、三带一/对、顺子(5+)、连对(3+)、四带二、炸弹、王炸</p><p>• 春天/反春天：底分×2</p></div><button onclick="toggleRules()" class="pixel-btn bg-red-500 mt-4 w-full text-[12px]">关闭</button></div></div>
+        <div id="rulesModal" class="hidden fixed inset-0 bg-black/95 flex items-center justify-center z-50 p-4"><div class="bg-gray-800 p-4 pixel-border w-full max-w-sm max-h-[80vh] overflow-y-auto"><h2 class="text-lg text-yellow-400 mb-4 retro-text text-center">游戏规则</h2><div class="text-[10px] leading-6 text-gray-300 space-y-2"><p>• 发牌：每人17张，留3张底牌</p><p>• 叫分：1-3分或不叫，高分当地主</p><p>• 牌型：单张、对子、三带一/对、顺子(5+)、连对(3+)、飞机(不带/带单/带对)、四带二、炸弹、王炸</p><p>• 春天/反春天：底分×2</p></div><button onclick="toggleRules()" class="pixel-btn bg-red-500 mt-4 w-full text-[12px]">关闭</button></div></div>
         <div id="gameOverScreen" class="hidden fixed inset-0 bg-black/95 flex flex-col items-center justify-center z-[60] p-4 overflow-y-auto"><h2 id="resultTitle" class="text-2xl retro-text mb-4 text-center"></h2><div id="resultContent" class="text-center mb-6 text-[12px]"></div><button onclick="resetGame()" class="pixel-btn bg-green-500 w-full max-w-[200px]">再来一局</button><button onclick="backToMenu()" class="pixel-btn bg-gray-500 w-full max-w-[200px] mt-2">返回菜单</button></div>
         <div id="statsModal" class="modal hidden">
             <div class="modal-content">
@@ -260,6 +260,17 @@
             }
             case CardType.STRAIGHT: text = "顺子"; break;
             case CardType.STRAIGHT_PAIR: text = "连对"; break;
+            case CardType.PLANE: text = "飞机" + valueToChinese(type.value) + "起"; break;
+            case CardType.PLANE_WITH_SINGLE: {
+                let cnt = countValues(cards.map(c=>c.value));
+                let kickers = Object.keys(cnt).filter(k=>cnt[k]===1).map(Number);
+                text = "飞机带" + kickers.length + "张"; break;
+            }
+            case CardType.PLANE_WITH_PAIR: {
+                let cnt = countValues(cards.map(c=>c.value));
+                let pairCount = Object.keys(cnt).filter(k=>cnt[k]===2).length;
+                text = "飞机带" + pairCount + "对"; break;
+            }
             case CardType.FOUR_WITH_TWO_SINGLE: text = "四带二"; break;
             case CardType.FOUR_WITH_TWO_PAIR: text = "四带两对"; break;
             case CardType.BOMB: text = "炸弹"; break;
@@ -346,10 +357,21 @@
     // ======================== 通用工具 ========================
     function countValues(values) { let cnt = {}; values.forEach(v => cnt[v] = (cnt[v] || 0) + 1); return cnt; }
     function isStraight(values) { for (let i = 1; i < values.length; i++) if (values[i] !== values[i-1] + 1) return false; return true; }
+    function getCombinations(arr, k) {
+        if (k === 0) return [[]];
+        if (arr.length < k) return [];
+        let result = [];
+        for (let i = 0; i <= arr.length - k; i++) {
+            for (let sub of getCombinations(arr.slice(i + 1), k - 1))
+                result.push([arr[i], ...sub]);
+        }
+        return result;
+    }
     const CardType = {
         SINGLE:'single', PAIR:'pair', TRIPLE:'triple', TRIPLE_WITH_SINGLE:'triple_single', TRIPLE_WITH_PAIR:'triple_pair',
         STRAIGHT:'straight', STRAIGHT_PAIR:'straight_pair', FOUR_WITH_TWO_SINGLE:'four_two_single', FOUR_WITH_TWO_PAIR:'four_two_pair',
-        BOMB:'bomb', ROCKET:'rocket'
+        BOMB:'bomb', ROCKET:'rocket',
+        PLANE:'plane', PLANE_WITH_SINGLE:'plane_single', PLANE_WITH_PAIR:'plane_pair'
     };
     function getCardType(cards) {
         if (!cards || cards.length === 0) return null;
@@ -370,6 +392,39 @@
             let cnt = countValues(values);
             let pairs = Object.keys(cnt).filter(k=>cnt[k]===2).map(Number).sort((a,b)=>a-b);
             if (pairs.length === cards.length/2 && isStraight(pairs) && pairs[pairs.length-1] <= 11) return { type:CardType.STRAIGHT_PAIR, value:pairs[0], length:pairs.length, cards:sorted };
+        }
+        if (cards.length >= 6 && cards.length % 3 === 0) {
+            let cnt = countValues(values);
+            let tripVals = Object.keys(cnt).filter(k=>cnt[k]===3).map(Number).sort((a,b)=>a-b);
+            let groupLen = cards.length / 3;
+            if (tripVals.length === groupLen && groupLen >= 2 && isStraight(tripVals) && tripVals[groupLen-1] <= 11)
+                return { type:CardType.PLANE, value:tripVals[0], length:groupLen, cards:sorted };
+        }
+        if (cards.length >= 8 && cards.length % 4 === 0) {
+            let cnt = countValues(values);
+            let groupLen = cards.length / 4;
+            let tripVals = Object.keys(cnt).filter(k=>cnt[k]>=3).map(Number).sort((a,b)=>a-b);
+            for (let i=0; i+groupLen<=tripVals.length; i++) {
+                let seq = tripVals.slice(i, i+groupLen);
+                if (!isStraight(seq) || seq[groupLen-1]>11) continue;
+                let used = new Set(seq);
+                let remain = Object.keys(cnt).filter(k=>!used.has(parseInt(k)) && cnt[k]===1);
+                if (remain.length === groupLen)
+                    return { type:CardType.PLANE_WITH_SINGLE, value:seq[0], length:groupLen, cards:sorted };
+            }
+        }
+        if (cards.length >= 10 && cards.length % 5 === 0) {
+            let cnt = countValues(values);
+            let groupLen = cards.length / 5;
+            let tripVals = Object.keys(cnt).filter(k=>cnt[k]>=3).map(Number).sort((a,b)=>a-b);
+            for (let i=0; i+groupLen<=tripVals.length; i++) {
+                let seq = tripVals.slice(i, i+groupLen);
+                if (!isStraight(seq) || seq[groupLen-1]>11) continue;
+                let used = new Set(seq);
+                let remain = Object.keys(cnt).filter(k=>!used.has(parseInt(k)) && cnt[k]===2);
+                if (remain.length === groupLen)
+                    return { type:CardType.PLANE_WITH_PAIR, value:seq[0], length:groupLen, cards:sorted };
+            }
         }
         return null;
     }
@@ -471,6 +526,9 @@
             case CardType.TRIPLE_WITH_PAIR: base = type.value + 70; break;
             case CardType.STRAIGHT: base = type.value + 80 + type.length; break;
             case CardType.STRAIGHT_PAIR: base = type.value + 90 + type.length; break;
+            case CardType.PLANE: base = type.value + 100 + type.length * 3; break;
+            case CardType.PLANE_WITH_SINGLE: base = type.value + 110 + type.length * 3; break;
+            case CardType.PLANE_WITH_PAIR: base = type.value + 120 + type.length * 3; break;
             case CardType.FOUR_WITH_TWO_SINGLE: base = type.value + 110; break;
             case CardType.FOUR_WITH_TWO_PAIR: base = type.value + 120; break;
             default: base = type.value;
@@ -573,6 +631,57 @@
                 }
             }
         }
+        if (_canContend(lastPlay, CardType.PLANE)) {
+            let tripleValues = Object.keys(byValue).filter(v => byValue[v].length >= 3 && v<12).map(Number).sort((a,b)=>a-b);
+            for (let len=2; len<=tripleValues.length; len++) {
+                for (let i=0; i+len<=tripleValues.length; i++) {
+                    let seq = tripleValues.slice(i, i+len);
+                    if (isStraight(seq)) {
+                        let cards = [], ok=true;
+                        for (let v of seq) { if (!byValue[v] || byValue[v].length<3) { ok=false; break; } cards.push(byValue[v][0], byValue[v][1], byValue[v][2]); }
+                        if (ok) candidates.push(cards);
+                    }
+                }
+            }
+        }
+        if (_canContend(lastPlay, CardType.PLANE_WITH_SINGLE)) {
+            let tripleValues = Object.keys(byValue).filter(v => byValue[v].length >= 3 && v<12).map(Number).sort((a,b)=>a-b);
+            for (let len=2; len<=tripleValues.length; len++) {
+                for (let i=0; i+len<=tripleValues.length; i++) {
+                    let seq = tripleValues.slice(i, i+len);
+                    if (!isStraight(seq)) continue;
+                    let tripleCards = [], ok=true;
+                    for (let v of seq) { if (!byValue[v] || byValue[v].length<3) { ok=false; break; } tripleCards.push(byValue[v][0], byValue[v][1], byValue[v][2]); }
+                    if (!ok) continue;
+                    let usedIds = new Set(tripleCards.map(c=>c.id));
+                    let kickers = hand.filter(c => !usedIds.has(c.id));
+                    for (let combo of getCombinations(kickers, len)) {
+                        candidates.push([...tripleCards, ...combo]);
+                    }
+                }
+            }
+        }
+        if (_canContend(lastPlay, CardType.PLANE_WITH_PAIR)) {
+            let tripleValues = Object.keys(byValue).filter(v => byValue[v].length >= 3 && v<12).map(Number).sort((a,b)=>a-b);
+            let pairValues = Object.keys(byValue).filter(v => byValue[v].length >= 2 && v<12).map(Number).sort((a,b)=>a-b);
+            for (let len=2; len<=Math.min(tripleValues.length, 6); len++) {
+                for (let i=0; i+len<=tripleValues.length; i++) {
+                    let seq = tripleValues.slice(i, i+len);
+                    if (!isStraight(seq)) continue;
+                    let tripleCards = [], ok=true;
+                    for (let v of seq) { if (!byValue[v] || byValue[v].length<3) { ok=false; break; } tripleCards.push(byValue[v][0], byValue[v][1], byValue[v][2]); }
+                    if (!ok) continue;
+                    let usedVals = new Set(seq);
+                    let availPairs = pairValues.filter(v => !usedVals.has(v));
+                    for (let combo of getCombinations(availPairs, len)) {
+                        let cards = [...tripleCards];
+                        let ok2 = true;
+                        for (let v of combo) { if (!byValue[v] || byValue[v].length<2) { ok2=false; break; } cards.push(byValue[v][0], byValue[v][1]); }
+                        if (ok2) candidates.push(cards);
+                    }
+                }
+            }
+        }
         let unique = new Map();
         candidates.forEach(arr => { let key = arr.map(c=>c.id).sort().join(','); if (!unique.has(key)) unique.set(key, arr); });
         let result = Array.from(unique.values()).filter(play => getCardType(play) !== null);
@@ -636,6 +745,12 @@
             let target = playType.type === CardType.TRIPLE_WITH_SINGLE ? 1 : 2;
             let kv = Object.keys(cnt).find(k => cnt[k] === target && parseInt(k) !== playType.value);
             if (kv !== undefined) kickerValue = parseInt(kv);
+        }
+        if (playType.type === CardType.PLANE_WITH_SINGLE || playType.type === CardType.PLANE_WITH_PAIR) {
+            let cnt = countValues(play.map(c=>c.value));
+            let target = playType.type === CardType.PLANE_WITH_SINGLE ? 1 : 2;
+            let kickerVals = Object.keys(cnt).filter(k => cnt[k] === target).map(Number);
+            kickerValue = kickerVals.length > 0 ? Math.max(...kickerVals) : 0;
         }
         let nextPlayerId = (state.currentPlayer + 1) % 3;
         return {
@@ -742,8 +857,8 @@
 
         if (features.needBeat && features.remainTotal <= 3 && features.remainTotal + features.playLength <= (playerHand ? playerHand.length : 20)) score += ph.nearWin.remainLe3;
 
-        // 三带X 带牌价值惩罚（避免A/2/王做带牌）
-        if (features.playType === CardType.TRIPLE_WITH_SINGLE || features.playType === CardType.TRIPLE_WITH_PAIR) {
+        // 三带X/飞机带 带牌价值惩罚（避免A/2/王做带牌）
+        if (features.playType === CardType.TRIPLE_WITH_SINGLE || features.playType === CardType.TRIPLE_WITH_PAIR || features.playType === CardType.PLANE_WITH_SINGLE || features.playType === CardType.PLANE_WITH_PAIR) {
             if (features.kickerValue >= 11) score += ph.kickerPenalty.ge11;
             if (features.kickerValue >= 13) score += ph.kickerPenalty.ge13;
             // 检查是否有更小的牌可做带牌
@@ -971,6 +1086,14 @@
             else if (type.type === CardType.BOMB) pscore = ds.bomb;
             else if (type.type === CardType.STRAIGHT) pscore = ds.straight + type.length * ds.straightLenFactor;
             else if (type.type === CardType.STRAIGHT_PAIR) pscore = ds.straightPair + type.length * ds.straightPairLenFactor;
+            else if (type.type === CardType.PLANE) pscore = ds.plane + type.length * ds.planeLenFactor;
+            else if (type.type === CardType.PLANE_WITH_SINGLE || type.type === CardType.PLANE_WITH_PAIR) {
+                let target = type.type === CardType.PLANE_WITH_SINGLE ? 1 : 2;
+                let cnt = countValues(play.map(c=>c.value));
+                let kickerVals = Object.keys(cnt).filter(k => cnt[k] === target).map(Number);
+                let maxKicker = kickerVals.length > 0 ? Math.max(...kickerVals) : 0;
+                pscore = ds.planeWith - Math.max(0, maxKicker - 7) * 3 * type.length;
+            }
             else if (type.type === CardType.TRIPLE_WITH_SINGLE || type.type === CardType.TRIPLE_WITH_PAIR) {
                 let target = type.type === CardType.TRIPLE_WITH_SINGLE ? 1 : 2;
                 let cnt = countValues(play.map(c=>c.value));
@@ -1434,6 +1557,8 @@
                             else if (p.length === 2) score += sl.pairPlay;
                             if (type && type.type === CardType.STRAIGHT) score += sl.straightBonus;
                             if (type && type.type === CardType.STRAIGHT_PAIR) score += sl.straightPairBonus;
+                            if (type && type.type === CardType.PLANE) score += sl.planeBonus;
+                            if (type && (type.type === CardType.PLANE_WITH_SINGLE || type.type === CardType.PLANE_WITH_PAIR)) score += sl.planeWithBonus;
                             if (type && (type.type === CardType.TRIPLE_WITH_SINGLE || type.type === CardType.TRIPLE_WITH_PAIR)) score += sl.tripleWithBonus;
                             let val = p[0].value;
                             if (val <= 6) score += sl.smallValLe6;
@@ -1446,6 +1571,12 @@
                 // 优先出顺子（清掉多张牌）
                 let straightPlays = plays.filter(p => getCardType(p)?.type === CardType.STRAIGHT);
                 if (straightPlays.length) return straightPlays.sort((a,b)=>b.length-a.length)[0];
+                // 优先出飞机（清掉多张牌）
+                let planePlays = plays.filter(p => {
+                    let t = getCardType(p);
+                    return t && (t.type === CardType.PLANE || t.type === CardType.PLANE_WITH_SINGLE || t.type === CardType.PLANE_WITH_PAIR);
+                });
+                if (planePlays.length > 0) return planePlays.reduce((a,b) => getCardType(a).value < getCardType(b).value ? a : b);
                 // 优先出三带（清掉多张牌）
                 let triplePlays = plays.filter(p => {
                     let t = getCardType(p);
@@ -1856,6 +1987,9 @@
             }
             case 'straight': return '顺子';
             case 'straight_pair': return '连对';
+            case 'plane': return '飞机';
+            case 'plane_single': return '飞机带单';
+            case 'plane_pair': return '飞机带对';
             case 'four_two_single': return '四带二';
             case 'four_two_pair': return '四带两对';
             case 'bomb': return '💣炸弹';

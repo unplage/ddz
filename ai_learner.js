@@ -70,6 +70,7 @@ const DEFAULT_PARAMS = {
         landlord: {
             bombPenalty: 100, longGte5: 20, longGte3: 10, pairPlay: 5,
             straightBonus: 15, straightPairBonus: 10, tripleWithBonus: 8,
+            planeBonus: 12, planeWithBonus: 10,
             smallValLe6: 15, controlValGe12LenLe2: 30
         },
         farmer: {
@@ -79,6 +80,7 @@ const DEFAULT_PARAMS = {
     dpScores: {
         rocket: 60, bomb: 50, straight: 30, straightLenFactor: 2,
         straightPair: 25, straightPairLenFactor: 2, tripleWith: 20,
+        plane: 40, planeLenFactor: 3, planeWith: 30,
         pair: 5, triple: 8, single: -5, completeBonus: 100
     },
     heuristicPlayout: {
