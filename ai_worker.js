@@ -606,10 +606,12 @@ function scorePlay(features, role, memory, state, playerHand) {
         if (features.playPower >= 12) score += ph.farmerLeadHigh.powerGe12;
         if (features.playPower >= 11 && features.playPower <= 14 && features.partnerHandCount <= 4) score += ph.farmerLeadHigh.power1114PartnerLe4;
     }
-    let landlordAboutToWin = state.landlord >= 0 && state.players[state.landlord] && state.players[state.landlord].length <= 2;
-    let nextPlayerIdx = (state.currentPlayer + 1) % 3;
-    let nextPlayerAboutToWin = nextPlayerIdx >= 0 && state.players[nextPlayerIdx] && state.players[nextPlayerIdx].length <= 2;
-    let oppAboutToWin = (state.lastPlayerId >= 0 && state.players[state.lastPlayerId] && state.players[state.lastPlayerId].length <= 3) || landlordAboutToWin || nextPlayerAboutToWin;
+    let oppAboutToWin;
+    if (role === 'farmer') {
+        oppAboutToWin = (state.players[state.landlord]?.length || 20) <= 2;
+    } else {
+        oppAboutToWin = [0, 1, 2].some(i => i !== state.landlord && (state.players[i]?.length || 20) <= 2);
+    }
     let farmerWinPossible = role === 'farmer' && oppAboutToWin && features.needBeat;
     let lordWinPossible = role === 'landlord' && oppAboutToWin;
     if ((features.isBomb || features.isRocket) && oppAboutToWin) score += ph.bombUrgent.oppAboutToWin;
@@ -684,7 +686,8 @@ function computePassScore(role, state) {
     }
     let nextP = (state.currentPlayer + 1) % 3;
     let nextCards = state.players[nextP] ? state.players[nextP].length : 17;
-    if (nextCards <= 2 && state.lastPlayerId !== -1 && state.lastPlayerId !== state.currentPlayer) score -= 300;
+    let isNextOpp = role === 'farmer' ? nextP === state.landlord : nextP !== state.landlord;
+    if (nextCards <= 2 && isNextOpp && state.lastPlayerId !== -1 && state.lastPlayerId !== state.currentPlayer) score -= 300;
     if (state.passCount >= 1) score += ps.passCountGe1;
     return score;
 }
@@ -787,7 +790,7 @@ function simulateOpponentResponseV2(play, hand, state, role, memory, depth = 1) 
             s2.lastPlayerId = nextPlayer;
             if (s2.players[nextPlayer].length === 0) {
                 let wRole = nextPlayer === s2.landlord ? 'landlord' : 'farmer';
-                weighted += wRole === role ? -100 : 100;
+                weighted += wRole === role ? 100 : -100;
             } else {
                 let third = (nextPlayer + 1) % 3;
                 weighted += evalState(s2, third, role, depth);
@@ -917,7 +920,7 @@ function minimaxEndgame(state, currentPlayer, myId, depth, maxDepth, alpha = -99
     if (depth > maxDepth) return 0;
     if (state.players[myId].length === 0) return 100 - depth;
     if (state.players.map((p,i)=>i!==myId && p.length===0).some(x=>x)) return -100 + depth;
-    if (state.passCount === 2) {
+    if (state.passCount >= 2) {
         state.lastPlay = null;
         state.lastPlayerId = -1;
         state.passCount = 0;
@@ -965,7 +968,7 @@ function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministi
     for (let step = 0; step < hp.stepLimit; step++) {
         if (s.players[myId].length === 0) return true;
         if (s.players.map((p,i)=>i!==myId && p.length===0).some(x=>x)) return false;
-        if (s.passCount === 2) { s.lastPlay = null; s.lastPlayerId = -1; s.passCount = 0; }
+        if (s.passCount >= 2) { s.lastPlay = null; s.lastPlayerId = -1; s.passCount = 0; }
         let hand = s.players[cp];
         if (hand.length === 0) { cp = (cp + 1) % 3; continue; }
         let needBeat = s.lastPlay && s.lastPlayerId !== cp;
@@ -1203,9 +1206,13 @@ class MiniMasterAI {
         scored.sort((a,b)=>b.score - a.score);
         if (scored[0].play.length === 0) return [];
         let isCritical = (hand.length <= 3) || (this.memory.getMaxOutside(hand) <= 12 && hand.length <= 5);
-        let nextP2 = (state.currentPlayer + 1) % 3;
-        let nextCloseToWin = nextP2 >= 0 && state.players[nextP2] && state.players[nextP2].length <= 2;
-        let oppCloseToWin = (state.lastPlayerId >= 0 && state.players[state.lastPlayerId] && state.players[state.lastPlayerId].length <= 3) || nextCloseToWin;
+        let roleP = (state.landlord === this.id) ? 'landlord' : 'farmer';
+        let oppCloseToWin;
+        if (roleP === 'farmer') {
+            oppCloseToWin = (state.players[state.landlord]?.length || 20) <= 2;
+        } else {
+            oppCloseToWin = [0, 1, 2].some(i => i !== state.landlord && (state.players[i]?.length || 20) <= 2);
+        }
         let noRandom = isCritical || oppCloseToWin;
         let rf = paramGet('randomFactors');
         let randomFactor = rf[this.difficulty] !== undefined ? rf[this.difficulty] : 0.6;
@@ -1219,6 +1226,10 @@ class MiniMasterAI {
         let fullHouse = plays.find(p => p.length === hand.length);
         if (fullHouse) return fullHouse;
         if (role === 'landlord') {
+            let _oppMin = Math.min(
+                (state.players[(state.currentPlayer + 1) % 3] || {length:20}).length,
+                (state.players[(state.currentPlayer + 2) % 3] || {length:20}).length
+            );
             let dpLimit = paramGet('endgameThresholds.' + this.difficulty) || 12;
             let sl = paramGet('selectLead.landlord');
             if (hand.length <= dpLimit) {
@@ -1240,6 +1251,7 @@ class MiniMasterAI {
                         let val = p[0].value;
                         if (val <= 6) score += sl.smallValLe6;
                         if (val >= 12 && p.length <= 2) score += sl.controlValGe12LenLe2;
+                        if (_oppMin <= 2 && p.length <= 2 && val < 12) score -= 500;
                         if (score > bestLeadScore) { bestLeadScore = score; bestLead = p; }
                     }
                     if (bestLead) return bestLead;
@@ -1259,13 +1271,19 @@ class MiniMasterAI {
             if (triplePlays.length > 0) return triplePlays.reduce((a,b) => getCardType(a).value < getCardType(b).value ? a : b);
             let smallPairs = plays.filter(p => p.length === 2 && getCardType(p).value <= 6);
             if (smallPairs.length > 0) return smallPairs.reduce((a,b) => getCardType(a).value < getCardType(b).value ? a : b);
-            let twoPlay = plays.find(p => {
-                if (p.length === hand.length) return true;
-                let rest = hand.filter(c => !p.includes(c));
-                let restPlays = getAllValidPlays(rest, null);
-                return rest.length === 0 || restPlays.some(rp => rp.length === rest.length);
-            });
-            if (twoPlay) return twoPlay;
+            if (_oppMin > 2) {
+                let twoPlay = plays.find(p => {
+                    if (p.length === hand.length) return true;
+                    let rest = hand.filter(c => !p.includes(c));
+                    let restPlays = getAllValidPlays(rest, null);
+                    return rest.length === 0 || restPlays.some(rp => rp.length === rest.length);
+                });
+                if (twoPlay) return twoPlay;
+            }
+            if (_oppMin <= 2) {
+                let safe = plays.filter(p => p.length !== 1 || p[0].value >= 10);
+                if (safe.length > 0) return safe.sort((a,b)=>getPlayPower(a)-getPlayPower(b))[0];
+            }
             let smallSingles = plays.filter(p => p.length === 1 && p[0].value <= 6);
             if (smallSingles.length > 0) return smallSingles.reduce((a,b) => a[0].value < b[0].value ? a : b);
             return plays.sort((a,b)=>getPlayPower(a)-getPlayPower(b))[0];
@@ -1273,7 +1291,7 @@ class MiniMasterAI {
             let isLordNext = (state.landlord + 1) % 3 === this.id;
             let partnerCount = state.players[partnerId !== null ? partnerId : -1]?.length || 20;
             let lordCards = state.players[state.landlord] ? state.players[state.landlord].length : 20;
-            if (partnerCount <= 2) {
+            if (partnerCount <= 2 && lordCards > 2) {
                 return plays.reduce((a,b) => getPlayPower(a) < getPlayPower(b) ? a : b);
             }
             if (lordCards <= 2) {

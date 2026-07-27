@@ -612,199 +612,13 @@ const GameRecorder = {
     }
 };
 
-// ======================== 4. PARAMETER OPTIMIZER (CEM) ========================
+// ======================== 4. PARAMETER OPTIMIZER (DISABLED) ========================
+// 已由 GodViewLearner（反事实学习）替代。保留结构避免引用错误。
 const ParameterOptimizer = {
-    _pendingGames: [],
-    _lastOptimizeTime: 0,
-    _MIN_GAMES_FOR_DEEP: 20,
-    _INCREMENTAL_INTERVAL: 10,
     _running: false,
-
-    _onGameEnd(game) {
-        if (!game || !game.result) return;
-        if (this._pendingGames.length >= 100) this._pendingGames.shift();
-        this._pendingGames.push(game);
-        if (this._pendingGames.length >= this._INCREMENTAL_INTERVAL) {
-            this._scheduleIncremental();
-        }
-    },
-
-    _scheduleIncremental() {
-        if (this._running) return;
-        if (typeof requestIdleCallback === 'function') {
-            requestIdleCallback(() => this._runIncremental(), { timeout: 5000 });
-        } else {
-            setTimeout(() => this._runIncremental(), 2000);
-        }
-    },
-
-    _runIncremental() {
-        if (this._running || this._pendingGames.length < this._INCREMENTAL_INTERVAL) return;
-        this._running = true;
-        let games = this._pendingGames.splice(0, this._INCREMENTAL_INTERVAL);
-        let currentWinRate = games.filter(g => g.result && g.result.isPlayerWin).length / games.length;
-        let candidate = this._mutate(ParamConfig._overrides || DEFAULT_PARAMS, 0.15);
-        let candidateWins = 0, candidateTotal = Math.min(10, this._INCREMENTAL_INTERVAL);
-        for (let i = 0; i < candidateTotal; i++) {
-            if (this._simulateGame(candidate)) candidateWins++;
-        }
-        let candidateWinRate = candidateWins / candidateTotal;
-        if (candidateWinRate > currentWinRate || (candidateWinRate >= currentWinRate && Math.random() < 0.3)) {
-            ParamConfig._overrides = candidate;
-            ParamConfig._persist();
-        }
-        this._running = false;
-    },
-
-    runDeepOptimization(onProgress, onComplete) {
-        if (this._running) { if (onComplete) onComplete(false); return; }
-        this._running = true;
-        setTimeout(() => {
-            let N_CANDIDATES = 15, N_SIMS = 20, N_ELITE = 5;
-            let candidates = [];
-            let baseParams = ParamConfig._overrides || DEFAULT_PARAMS;
-            for (let i = 0; i < N_CANDIDATES; i++) {
-                candidates.push(this._mutate(JSON.parse(JSON.stringify(baseParams)), 0.25));
-            }
-            let results = [];
-            for (let i = 0; i < candidates.length; i++) {
-                let wins = 0;
-                for (let j = 0; j < N_SIMS; j++) {
-                    if (this._simulateGame(candidates[i])) wins++;
-                    if (onProgress) onProgress(i * N_SIMS + j + 1, N_CANDIDATES * N_SIMS);
-                }
-                results.push({ params: candidates[i], winRate: wins / N_SIMS });
-            }
-            results.sort((a, b) => b.winRate - a.winRate);
-            let elite = results.slice(0, N_ELITE);
-            let avg = JSON.parse(JSON.stringify(baseParams));
-            let totalWeight = 0;
-            for (let e of elite) {
-                let w = e.winRate;
-                totalWeight += w;
-                this._mergeParams(avg, e.params, w);
-            }
-            if (totalWeight > 0) {
-                this._divideParams(avg, totalWeight);
-            }
-            avg.version = DEFAULT_PARAMS.version;
-            ParamConfig._overrides = avg;
-            ParamConfig._persist();
-            this._running = false;
-            if (onComplete) onComplete(true, results[0].winRate);
-        }, 100);
-    },
-
-    _mutate(params, strength) {
-        let p = JSON.parse(JSON.stringify(params));
-        let r = () => 1 + (Math.random() - 0.5) * strength * 2;
-        if (p.weights) {
-            for (let k in p.weights) {
-                if (typeof p.weights[k] === 'number' && Math.random() < 0.5) {
-                    p.weights[k] *= r();
-                    p.weights[k] = Math.round(p.weights[k] * 100) / 100;
-                }
-            }
-        }
-        if (p.callThresholds) {
-            for (let diff in p.callThresholds) {
-                let ct = p.callThresholds[diff];
-                if (ct && typeof ct === 'object') {
-                    for (let k in ct) {
-                        if (typeof ct[k] === 'number' && Math.random() < 0.4) {
-                            ct[k] += (Math.random() - 0.5) * 6;
-                            ct[k] = Math.round(ct[k]);
-                            ct[k] = Math.max(-50, Math.min(100, ct[k]));
-                        }
-                    }
-                }
-            }
-        }
-        if (p.playHeuristics) this._mutateNested(p.playHeuristics, strength, 0.3);
-        if (p.passScores) {
-            for (let k in p.passScores) {
-                if (typeof p.passScores[k] === 'number' && Math.random() < 0.3) {
-                    p.passScores[k] *= r();
-                    p.passScores[k] = Math.round(p.passScores[k]);
-                }
-            }
-        }
-        if (p.evalCoeffs) {
-            for (let k in p.evalCoeffs) {
-                if (typeof p.evalCoeffs[k] === 'number' && Math.random() < 0.4) {
-                    p.evalCoeffs[k] *= r();
-                    p.evalCoeffs[k] = Math.round(p.evalCoeffs[k] * 10) / 10;
-                }
-            }
-        }
-        return p;
-    },
-
-    _mutateNested(obj, strength, prob) {
-        if (!obj || typeof obj !== 'object') return;
-        for (let k in obj) {
-            if (typeof obj[k] === 'number' && Math.random() < prob) {
-                obj[k] *= 1 + (Math.random() - 0.5) * strength * 2;
-                obj[k] = Math.round(obj[k]);
-            } else if (typeof obj[k] === 'object') {
-                this._mutateNested(obj[k], strength, prob);
-            }
-        }
-    },
-
-    _mergeParams(target, source, weight) {
-        for (let key in source) {
-            if (typeof source[key] === 'number' && typeof target[key] === 'number') {
-                target[key] = (target[key] || 0) + source[key] * weight;
-            } else if (typeof source[key] === 'object' && typeof target[key] === 'object') {
-                this._mergeParams(target[key], source[key], weight);
-            }
-        }
-    },
-
-    _divideParams(target, divisor) {
-        for (let key in target) {
-            if (typeof target[key] === 'number') {
-                target[key] /= divisor;
-            } else if (typeof target[key] === 'object') {
-                this._divideParams(target[key], divisor);
-            }
-        }
-    },
-
-    _simulateGame(params) {
-        if (typeof heuristicPlayoutDeterministic !== 'function') return Math.random() < 0.4;
-        let savedOverrides = ParamConfig._overrides;
-        ParamConfig._overrides = params;
-        try {
-            const suits = ['♠','♥','♣','♦'], ranks = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
-            let deck = [];
-            for (let suit of suits) for (let i=0;i<ranks.length;i++) deck.push({ suit, rank: ranks[i], value: i, id: suit+ranks[i] });
-            deck.push({ suit:'JOKER', rank:'小王', value:13, id:'joker1' }, { suit:'JOKER', rank:'大王', value:14, id:'joker2' });
-            for (let i=deck.length-1; i>0; i--) { const j=Math.floor(Math.random()*(i+1)); [deck[i],deck[j]]=[deck[j],deck[i]]; }
-            let players = [[],[],[]];
-            for (let i = 0; i < 51; i++) players[i % 3].push(deck[i]);
-            let lordCards = deck.slice(51, 54);
-            let landlord = Math.floor(Math.random() * 3);
-            players[landlord].push(...lordCards);
-            players.forEach(p => p.sort((a,b) => a.value - b.value));
-            let sim = { players, landlord, currentPlayer: landlord, lastPlay: null, lastPlayerId: -1, passCount: 0, phase: 'playing', baseScore: 1, bombCount: 0 };
-            let mem = new MasterMemory();
-            return heuristicPlayoutDeterministic(sim, sim.currentPlayer, 0, mem);
-        } catch (e) {
-            return Math.random() < 0.4;
-        } finally {
-            ParamConfig._overrides = savedOverrides;
-        }
-    },
-
-    getStats() {
-        return {
-            pendingGames: this._pendingGames.length,
-            lastOptimizeTime: this._lastOptimizeTime,
-            running: this._running
-        };
-    }
+    _onGameEnd() {},
+    runDeepOptimization(_onProgress, onComplete) { if (onComplete) setTimeout(() => onComplete(false), 100); },
+    getStats() { return { pendingGames: 0, running: false }; }
 };
 
 // ======================== 5. GAME ANALYZER ========================
@@ -1145,99 +959,7 @@ const CorrectionRules = {
     },
 
     _learnFromAnalysis(gameId, analysis) {
-        if (!analysis || !analysis.mistakes || analysis.mistakes.length === 0) return;
-        this.init();
-
-        for (let mistake of analysis.mistakes) {
-            if (mistake.category === 'overkill') {
-                this._addOrStrengthen({
-                    context: {
-                        needBeat: true,
-                        isBombPlay: false,
-                        isRocketPlay: false,
-                        hasSmallJoker: false
-                    },
-                    comparators: {},
-                    category: 'overkill',
-                    avoidType: mistake.chosenType === CardType.ROCKET ? 'rocket' : 'bomb',
-                    penalty: mistake.chosenType === CardType.ROCKET ? -350 : -300,
-                    reason: '避免过度压制，有更经济的出法'
-                });
-            } else if (mistake.category === 'high_kicker') {
-                this._addOrStrengthen({
-                    context: {
-                        playType: CardType.TRIPLE_WITH_SINGLE,
-                        kickerValue: 11
-                    },
-                    comparators: { kickerValue: 'gte' },
-                    category: 'high_kicker',
-                    avoidType: 'high_kicker',
-                    penalty: -250,
-                    reason: '三带中避免用高牌做带牌'
-                });
-            } else if (mistake.category === 'bad_pass') {
-                this._addOrStrengthen({
-                    context: {
-                        needBeat: true,
-                        isBombPlay: false,
-                        isRocketPlay: false
-                    },
-                    comparators: { handSize: 'gte' },
-                    category: 'bad_pass',
-                    avoidType: 'pass',
-                    penalty: -300,
-                    reason: '对手剩余牌少时不应放过'
-                });
-            }
-        }
-        this._prune();
-        this._persist();
-    },
-
-    _addOrStrengthen(template) {
-        let existing = this._rules.find(r => {
-            if (r.category !== template.category) return false;
-            let rKeys = Object.keys(r.context).sort();
-            let tKeys = Object.keys(template.context).sort();
-            if (rKeys.length !== tKeys.length) return false;
-            return rKeys.every((k, i) => k === tKeys[i] && r.context[k] === template.context[k]);
-        });
-        if (existing) {
-            existing.confidence = Math.min(1, existing.confidence + 0.08);
-            existing.triggerCount++;
-            existing.penalty = Math.max(existing.penalty, template.penalty);
-        } else {
-            this._rules.push({
-                id: 'rule_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-                category: template.category,
-                context: template.context,
-                comparators: template.comparators || {},
-                avoidType: template.avoidType,
-                penalty: template.penalty,
-                confidence: 0.15,
-                triggerCount: 1,
-                helpCount: 0,
-                reason: template.reason
-            });
-        }
-    },
-
-    _prune() {
-        this._rules.sort((a, b) => b.confidence - a.confidence);
-        if (this._rules.length > this.MAX_RULES) {
-            this._rules = this._rules.slice(0, this.MAX_RULES);
-        }
-        this._rules.forEach(r => {
-            r.confidence = Math.max(0.05, r.confidence - 0.02);
-        });
-        this._rules = this._rules.filter(r => {
-            if (r.confidence < 0.2 && r.triggerCount > 3) return false;
-            return true;
-        });
-    },
-
-    recordDecision(state, playerId, chosenPlay, scored) {
-        // Stub for future use: match live decisions against rules
+        // Deprecated: 学习功能已由 GodViewLearner 接管
     },
 
     getStats() {
@@ -1247,41 +969,56 @@ const CorrectionRules = {
     }
 };
 
-// ======================== 7. GOD VIEW COUNTERFACTUAL LEARNER ========================
+// ======================== 7. TRUE SKILL LEARNER ========================
+// 基于真实对局 replay + minimax/rollout 最优解搜索的权重学习引擎
 const GodViewLearner = {
     _queue: [],
     _running: false,
-    _correctionsHistory: null,
-    _lastAdjustmentTime: 0,
-    _ADJUST_INTERVAL: 3000,
-    _statsCache: { total: 0, recent20: 0, passMiss: 0, bombMiss: 0 },
+    _adjustCount: 0,
+    _ADJUST_INTERVAL: 1500,
+    _lastAdjustTime: 0,
+    _statsCache: { total: 0, recent20: 0, totalAdjustments: 0, avgDiff: 0 },
 
     _initCache() {
-        GameDatabase.countCorrections().then(total => { this._statsCache.total = total; }).catch(() => {});
-        GameDatabase.getRecentCorrections(20).then(data => {
-            if (data && data.length) {
-                let recent = data.filter(c => c.diff > 0.25);
-                this._statsCache.recent20 = recent.length;
-                this._statsCache.passMiss = recent.filter(c => c.actualType === 'pass').length;
-                this._statsCache.bombMiss = recent.filter(c => c.actualType !== 'bomb' && c.actualType !== 'rocket' && (c.bestType === 'bomb' || c.bestType === 'rocket')).length;
+        GameDatabase.countCorrections().then(t => { this._statsCache.total = t; }).catch(()=>{});
+        GameDatabase.getRecentCorrections(20).then(d => {
+            if (d && d.length) {
+                this._statsCache.recent20 = d.length;
+                this._statsCache.avgDiff = d.reduce((s,c)=>s+c.diff,0)/d.length;
             }
-        }).catch(() => {});
+        }).catch(()=>{});
     },
+
+    // 权重表中与 extractPlayFeatures 字段名一致的键
+    _WEIGHT_KEYS: [
+        'playPower','isBomb','isRocket','remainTotal','remainSingle','remainPair',
+        'remainTriple','remainBomb','remainMaxStraight','remainBigCards','hasRocket',
+        'opponentHandCount','partnerHandCount','outsideBombCount','isCritical','needBeat'
+    ],
 
     learn(game) {
         if (!game || !game.initialDeal || !game.actions || game.actions.length < 3) return;
         if (game.mode !== 'single') return;
         if (this._running) { this._queue.push(game); return; }
         this._running = true;
-        setTimeout(() => this._run(game), 200);
+        let fn = () => this._run(game);
+        if (typeof requestIdleCallback === 'function') {
+            requestIdleCallback(fn, { timeout: 4000 });
+        } else {
+            setTimeout(fn, 300);
+        }
     },
 
     _run(game) {
         try {
-            let corrections = this._analyzeGame(game);
+            let stats = { checked: 0, corrected: 0, totalDelta: 0 };
+            let corrections = this._analyzeGame(game, stats);
             if (corrections.length > 0) {
                 this._saveCorrections(corrections);
-                this._applyAdjustments(corrections);
+                this._applyAdjustments(corrections, stats);
+            }
+            if (stats.corrected > 0) {
+                ParamConfig._persist();
             }
         } catch (e) {
             console.warn('GodViewLearner error:', e.message);
@@ -1290,13 +1027,13 @@ const GodViewLearner = {
         if (this._queue.length > 0) this.learn(this._queue.shift());
     },
 
-    _analyzeGame(game) {
-        let lordCards = game.initialDeal.lordCards.map(c => ({ ...c }));
-        let players = game.initialDeal.players.map(p => p.map(c => ({ ...c })));
+    _analyzeGame(game, stats) {
+        let lordCards = game.initialDeal.lordCards.map(c => ({...c}));
+        let players = game.initialDeal.players.map(p => p.map(c => ({...c})));
         let lordIdx = game.calling.landlord;
         if (lordIdx < 0) return [];
         players[lordIdx].push(...lordCards);
-        players.forEach(p => p.sort((a, b) => a.value - b.value));
+        players.forEach(p => p.sort((a,b)=>a.value-b.value));
 
         let state = {
             players: players.map(p => [...p]),
@@ -1314,8 +1051,9 @@ const GodViewLearner = {
             if (aiPlayers.includes(action.p)) {
                 let hand = state.players[action.p];
                 if (hand && hand.length > 0) {
+                    stats.checked++;
                     let corr = this._checkCounterfactual(state, action, hand, lordIdx, i);
-                    if (corr) corrections.push(corr);
+                    if (corr) { corrections.push(corr); stats.corrected++; stats.totalDelta += corr.diff; }
                 }
             }
             this._advanceState(state, action);
@@ -1325,84 +1063,163 @@ const GodViewLearner = {
 
     _checkCounterfactual(state, action, hand, lordIdx, turnIdx) {
         let aiRole = action.p === lordIdx ? 'landlord' : 'farmer';
-        let isLead = !state.lastPlay || state.lastPlayerId === action.p;
+        let needBeat = state.lastPlay && state.lastPlayerId !== action.p;
+        let isLead = !needBeat;
 
-        let allPlays = getAllValidPlays(hand, isLead ? null : state.lastPlay);
+        let allPlays = getAllValidPlays(hand, needBeat ? state.lastPlay : null);
         if (!isLead && allPlays.length === 0) return null;
 
+        // Step 1: Find optimal play + its win rate
+        let opt = this._findOptimal(state, action.p, allPlays);
+        let bestPlay = opt && opt.bestPlay ? opt.bestPlay : null;
+        let bestWinRate = opt ? opt.bestWinRate : 0;
+
+        // Step 2: If not lead, also evaluate "pass"
+        let passWinRate = -1;
+        if (!isLead) {
+            let ps = JSON.parse(JSON.stringify(state));
+            ps.passCount++;
+            let pw = 0, pt = 6;
+            for (let t = 0; t < pt; t++) {
+                if (this._simulateGame(ps, (action.p+1)%3, action.p, lordIdx)) pw++;
+            }
+            passWinRate = pw / pt;
+            if (passWinRate > bestWinRate + 0.05) {
+                bestPlay = [];
+                bestWinRate = passWinRate;
+            }
+        }
+
+        // Step 3: Evaluate actual action's win rate
+        let actualWinRate = this._evalPlay(state, action, action.p, lordIdx);
+
+        // Step 4: Compare
+        if (bestWinRate - actualWinRate < 0.20) return null;
+        if (bestWinRate <= 0.3) return null;
+
+        let actualPlay = action.pass ? [] : action.c;
+
+        // Check they're truly different
+        if (bestPlay.length === 0 && actualPlay.length === 0) return null;
+        if (bestPlay.length > 0 && actualPlay.length > 0) {
+            let ids1 = new Set(bestPlay.map(c => c.id));
+            let ids2 = new Set(actualPlay.map(c => c.id));
+            if (ids1.size === ids2.size && [...ids1].every(id => ids2.has(id))) return null;
+        }
+
+        let bestType = bestPlay.length > 0 ? getCardType(bestPlay) : null;
+        let actualType = actualPlay.length > 0 ? getCardType(actualPlay) : null;
+
+        // Step 5: Extract feature vectors for weight update
         let memory = new MasterMemory();
-        let scored = allPlays.map(play => {
-            let feat = extractPlayFeatures(play, hand, state.lastPlay, aiRole, memory, state);
-            return { play, score: scorePlay(feat, aiRole, memory, state, hand) };
+        let optFeat = null;
+        if (bestPlay.length > 0) {
+            optFeat = extractPlayFeatures(bestPlay, hand, state.lastPlay, aiRole, memory, state);
+        }
+        let actualFeat = null;
+        if (actualPlay.length > 0) {
+            actualFeat = extractPlayFeatures(actualPlay, hand, state.lastPlay, aiRole, memory, state);
+        }
+
+        return {
+            turnIdx, player: action.p, role: aiRole,
+            diff: bestWinRate - actualWinRate,
+            bestWinRate, actualWinRate,
+            handSize: hand.length,
+            lordSize: state.players[lordIdx]?.length || 0,
+            lastPlayType: state.lastPlay?.type || 'none', lastPlayPower: state.lastPlay?.value || 0,
+            isLead,
+            actualType: actualType?.type || 'pass', bestType: bestType?.type || 'pass',
+            optFeat, actualFeat
+        };
+    },
+
+    _findOptimal(state, playerId, allPlays) {
+        let hand = state.players[playerId];
+        if (!hand || hand.length === 0 || allPlays.length === 0) return null;
+        let totalCards = state.players.reduce((s, p) => s + p.length, 0);
+
+        // Phase 1: Exact minimax for small endgames (deterministic optimal)
+        if (hand.length <= 14 && totalCards <= 20) {
+            return this._solveExact(state, playerId, allPlays);
+        }
+
+        // Phase 2: Rollout-based approximation
+        return this._solveRollout(state, playerId, allPlays);
+    },
+
+    _solveExact(state, playerId, allPlays) {
+        let bestPlay = null, bestScore = -Infinity;
+        for (let p of allPlays) {
+            let simState = JSON.parse(JSON.stringify(state));
+            let pIds = new Set(p.map(c => c.id));
+            simState.players[playerId] = simState.players[playerId].filter(c => !pIds.has(c.id));
+            if (simState.players[playerId].length === 0) {
+                return { bestPlay: p, bestWinRate: 1.0 };
+            }
+            simState.lastPlay = getCardType(p);
+            simState.lastPlayerId = playerId;
+            simState.passCount = 0;
+            let score = minimaxEndgame(simState, (playerId+1)%3, playerId, 0, 20);
+            if (score > bestScore) { bestScore = score; bestPlay = p; }
+        }
+        if (bestPlay) {
+            let wr = Math.max(0, Math.min(1, (bestScore + 100) / 200));
+            return { bestPlay, bestWinRate: wr };
+        }
+        return null;
+    },
+
+    _solveRollout(state, playerId, allPlays) {
+        let memory = new MasterMemory();
+        let role = playerId === state.landlord ? 'landlord' : 'farmer';
+        let scored = allPlays.map(p => {
+            let feat = extractPlayFeatures(p, state.players[playerId], state.lastPlay, role, memory, state);
+            return { play: p, score: scorePlay(feat, role, memory, state, state.players[playerId]) };
         });
         scored.sort((a, b) => b.score - a.score);
-
-        let topN = Math.min(4, scored.length);
-        let simResults = [];
+        let topN = Math.min(Math.min(8, scored.length), Math.max(3, Math.floor(scored.length * 0.3)));
+        let bestPlay = null, bestWinRate = -1;
 
         for (let j = 0; j < topN; j++) {
             let play = scored[j].play;
             let ids = new Set(play.map(c => c.id));
             let simState = JSON.parse(JSON.stringify(state));
-            simState.players[action.p] = simState.players[action.p].filter(c => !ids.has(c.id));
+            simState.players[playerId] = simState.players[playerId].filter(c => !ids.has(c.id));
             simState.lastPlay = getCardType(play);
+            simState.lastPlayerId = playerId;
+            simState.passCount = 0;
+            if (simState.players[playerId].length === 0) {
+                return { bestPlay: play, bestWinRate: 1.0 };
+            }
+            let wins = 0, trials = 6;
+            for (let t = 0; t < trials; t++) {
+                if (this._simulateGame(simState, (playerId+1)%3, playerId, state.landlord)) wins++;
+            }
+            let wr = wins / trials;
+            if (wr > bestWinRate) { bestWinRate = wr; bestPlay = play; }
+        }
+        if (bestPlay && bestWinRate >= 0) return { bestPlay, bestWinRate };
+        return null;
+    },
+
+    _evalPlay(state, action, aiPlayerId, lordIdx) {
+        let simState = JSON.parse(JSON.stringify(state));
+        if (action.pass) {
+            simState.passCount++;
+        } else {
+            let ids = new Set(action.c.map(c => c.id));
+            simState.players[action.p] = simState.players[action.p].filter(c => !ids.has(c.id));
+            simState.lastPlay = getCardType(action.c.map(c => ({...c})));
             simState.lastPlayerId = action.p;
             simState.passCount = 0;
-
-            if (simState.players[action.p].length === 0) {
-                simResults.push({ play, score: scored[j].score, winRate: 1 });
-                continue;
-            }
-            let nextP = (action.p + 1) % 3;
-            let wins = 0, trials = 4;
-            for (let t = 0; t < trials; t++) {
-                if (this._simulateGame(simState, nextP, action.p, lordIdx)) wins++;
-            }
-            simResults.push({ play, score: scored[j].score, winRate: wins / trials });
         }
-
-        if (!isLead) {
-            let passState = JSON.parse(JSON.stringify(state));
-            passState.passCount++;
-            let wins = 0, trials = 3;
-            for (let t = 0; t < trials; t++) {
-                if (this._simulateGame(passState, (action.p + 1) % 3, action.p, lordIdx)) wins++;
-            }
-            simResults.push({ play: [], score: -9999, winRate: wins / trials });
+        if (simState.players[action.p].length === 0) return 1.0;
+        let wins = 0, trials = 6;
+        for (let t = 0; t < trials; t++) {
+            if (this._simulateGame(simState, (action.p+1)%3, aiPlayerId, lordIdx)) wins++;
         }
-
-        simResults.sort((a, b) => {
-            if (Math.abs(a.winRate - b.winRate) > 0.15) return b.winRate - a.winRate;
-            return b.score - a.score;
-        });
-
-        let actualPlay = action.pass ? [] : action.c;
-        let actualSim = simResults.find(s => {
-            if (actualPlay.length === 0 && s.play.length === 0) return true;
-            if (actualPlay.length === 0 || s.play.length === 0) return false;
-            let ids1 = new Set(actualPlay.map(c => c.id));
-            let ids2 = new Set(s.play.map(c => c.id));
-            if (ids1.size !== ids2.size) return false;
-            return [...ids1].every(id => ids2.has(id));
-        });
-
-        let bestSim = simResults[0];
-        if (!actualSim || !bestSim || actualSim === bestSim) return null;
-        if (bestSim.winRate - actualSim.winRate < 0.25) return null;
-        if (bestSim.winRate <= 0.3) return null;
-
-        let bestType = bestSim.play.length > 0 ? getCardType(bestSim.play) : null;
-        let actualType = actualPlay.length > 0 ? getCardType(actualPlay) : null;
-        if (bestType && actualType && bestType.type === actualType.type && bestType.value === actualType.value) return null;
-
-        return {
-            turnIdx, player: action.p, role: aiRole, diff: bestSim.winRate - actualSim.winRate,
-            bestWinRate: bestSim.winRate, actualWinRate: actualSim.winRate,
-            handSize: hand.length, lordSize: state.players[lordIdx]?.length || 0,
-            lastPlayType: state.lastPlay?.type || 'none', lastPlayPower: state.lastPlay?.value || 0,
-            isLead, actualType: actualType?.type || 'pass', bestType: bestType?.type || 'pass',
-            bestScore: bestSim.score, actualScore: actualSim?.score || 0
-        };
+        return wins / trials;
     },
 
     _simulateGame(startState, startPlayer, aiPlayerId, lordIdx) {
@@ -1412,16 +1229,15 @@ const GodViewLearner = {
         for (let step = 0; step < limit; step++) {
             for (let i = 0; i < 3; i++) {
                 if (s.players[i].length === 0) {
-                    if (aiPlayerId === lordIdx) return i === lordIdx;
-                    return i !== lordIdx;
+                    return aiPlayerId === lordIdx ? i === lordIdx : i !== lordIdx;
                 }
             }
             if (s.passCount >= 2) { s.lastPlay = null; s.lastPlayerId = -1; s.passCount = 0; }
             let hand = s.players[cp];
-            if (!hand || hand.length === 0) { cp = (cp + 1) % 3; continue; }
+            if (!hand || hand.length === 0) { cp = (cp+1)%3; continue; }
             let needBeat = s.lastPlay && s.lastPlayerId !== cp;
             let plays = needBeat ? getAllValidPlays(hand, s.lastPlay) : getAllValidPlays(hand, null);
-            if (plays.length === 0) { s.passCount++; cp = (cp + 1) % 3; continue; }
+            if (plays.length === 0) { s.passCount++; cp = (cp+1)%3; continue; }
             let role = cp === s.landlord ? 'landlord' : 'farmer';
             let mem = new MasterMemory();
             let scored = plays.map(p => {
@@ -1437,7 +1253,7 @@ const GodViewLearner = {
             s.lastPlay = getCardType(chosen);
             s.lastPlayerId = cp;
             s.passCount = 0;
-            cp = (cp + 1) % 3;
+            cp = (cp+1)%3;
         }
         return false;
     },
@@ -1449,7 +1265,7 @@ const GodViewLearner = {
         } else {
             let ids = new Set(action.c.map(c => c.id));
             state.players[action.p] = state.players[action.p].filter(c => !ids.has(c.id));
-            state.lastPlay = getCardType(action.c.map(c => ({ ...c })));
+            state.lastPlay = getCardType(action.c.map(c => ({...c})));
             state.lastPlayerId = action.p;
             state.passCount = 0;
         }
@@ -1457,95 +1273,95 @@ const GodViewLearner = {
     },
 
     _saveCorrections(corrections) {
-        let entries = corrections.map(c => ({ ...c, ts: Date.now() }));
-        let count = entries.length;
+        let entries = corrections.map(c => ({...c, ts: Date.now()}));
         Promise.all(entries.map(e => GameDatabase.saveCorrection(e))).then(() => {
-            GameDatabase.countCorrections().then(total => { this._statsCache.total = total; });
-            GameDatabase.getRecentCorrections(20).then(data => {
-                if (data && data.length) {
-                    let recent = data.filter(c => c.diff > 0.25);
-                    this._statsCache.recent20 = recent.length;
-                    this._statsCache.passMiss = recent.filter(c => c.actualType === 'pass').length;
-                    this._statsCache.bombMiss = recent.filter(c => c.actualType !== 'bomb' && c.actualType !== 'rocket' && (c.bestType === 'bomb' || c.bestType === 'rocket')).length;
+            GameDatabase.countCorrections().then(t => { this._statsCache.total = t; });
+            GameDatabase.getRecentCorrections(20).then(d => {
+                if (d && d.length) {
+                    this._statsCache.recent20 = d.length;
+                    this._statsCache.avgDiff = d.reduce((s,c)=>s+c.diff,0)/d.length;
                 }
             });
         });
-        this._statsCache.total += count;
-        let recentPass = entries.filter(c => c.actualType === 'pass').length;
-        let recentBomb = entries.filter(c => c.actualType !== 'bomb' && c.actualType !== 'rocket' && (c.bestType === 'bomb' || c.bestType === 'rocket')).length;
-        this._statsCache.passMiss += recentPass;
-        this._statsCache.bombMiss += recentBomb;
+        this._statsCache.total += entries.length;
     },
 
-    _applyAdjustments(corrections) {
+    _applyAdjustments(corrections, stats) {
         let now = Date.now();
-        if (now - this._lastAdjustmentTime < this._ADJUST_INTERVAL) return;
-        this._lastAdjustmentTime = now;
+        if (now - this._lastAdjustTime < this._ADJUST_INTERVAL) return;
+        this._lastAdjustTime = now;
 
-        let lr = 0.1;
+        // 学习率随调整次数衰减
+        let lr = 0.02 / (1 + 0.001 * this._adjustCount);
+        if (lr < 0.001) return;
+
+        let weightDeltas = {};
+        let heuristicDeltas = {};
+
         for (let corr of corrections) {
-            if (corr.diff < 0.3) continue;
+            if (corr.diff < 0.25) continue;
 
-            if (corr.isLead) {
-                if (corr.bestType === 'single' && corr.actualType === 'pair') {
-                    this._adjust('playHeuristics.landlordLeadSingle.le6', 2);
+            // --- A: 线性权重更新（成对特征差）---
+            if (corr.optFeat && corr.actualFeat) {
+                for (let key of this._WEIGHT_KEYS) {
+                    let vOpt = corr.optFeat[key];
+                    let vAct = corr.actualFeat[key];
+                    if (vOpt === undefined || vAct === undefined) continue;
+                    let delta = vOpt - vAct;
+                    if (Math.abs(delta) < 0.01) continue;
+                    if (!weightDeltas[key]) weightDeltas[key] = 0;
+                    weightDeltas[key] += delta * lr;
                 }
-                continue;
+            }
+
+            // --- B: 启发式惩罚调整 ---
+            if (corr.actualType === 'pass' && corr.bestWinRate > 0.5 && corr.handSize >= 3) {
+                heuristicDeltas['passScores.lordHandGt4'] = (heuristicDeltas['passScores.lordHandGt4'] || 0) - 3 * lr;
+                heuristicDeltas['passScores.farmerPartnerBase'] = (heuristicDeltas['passScores.farmerPartnerBase'] || 0) - 3 * lr;
             }
 
             let isBombBest = corr.bestType === 'bomb' || corr.bestType === 'rocket';
             let isBombActual = corr.actualType === 'bomb' || corr.actualType === 'rocket';
 
-            if (isBombBest && !isBombActual) {
-                this._adjust('playHeuristics.bombUrgent.oppAboutToWin', 8 * lr);
-                this._adjust('playHeuristics.bombUrgent.landlordRemainLe4', 5 * lr);
-                this._adjust('playHeuristics.bombUrgent.remainLe2', 5 * lr);
+            if (isBombBest && !isBombActual && corr.bestWinRate > 0.6) {
+                heuristicDeltas['playHeuristics.bombUrgent.oppAboutToWin'] = (heuristicDeltas['playHeuristics.bombUrgent.oppAboutToWin'] || 0) + 8 * lr;
             }
+            if (!isBombBest && isBombActual && corr.actualWinRate < 0.4) {
+                heuristicDeltas['playHeuristics.bombWasted.lowLastPower'] = (heuristicDeltas['playHeuristics.bombWasted.lowLastPower'] || 0) - 5 * lr;
+                heuristicDeltas['playHeuristics.bombWasted.highLastPower'] = (heuristicDeltas['playHeuristics.bombWasted.highLastPower'] || 0) - 5 * lr;
+            }
+        }
 
-            if (!isBombBest && isBombActual) {
-                this._adjust('playHeuristics.bombWasted.lowLastPower', -5 * lr);
-                this._adjust('playHeuristics.bombWasted.highLastPower', -5 * lr);
-                this._adjust('playHeuristics.bombWasted.notCritical', -5 * lr);
-            }
+        // 应用权重更新
+        for (let key in weightDeltas) {
+            this._adjust('weights.' + key, weightDeltas[key]);
+        }
+        // 应用启发式更新
+        for (let path in heuristicDeltas) {
+            this._adjust(path, heuristicDeltas[path]);
+        }
 
-            if (corr.actualType === 'pass' && corr.bestWinRate > 0.5) {
-                this._adjust('passScores.lordHandGt4', -3 * lr);
-                this._adjust('passScores.farmerPartnerBase', -3 * lr);
-            }
-
-            if (corr.actualType === 'single' && (corr.bestType === 'bomb' || corr.bestType === 'pair' || corr.bestType === 'triple')) {
-                this._adjust('playHeuristics.suppressSingle.diffLe4', -3 * lr);
-                this._adjust('playHeuristics.suppressSingle.diffLe7', -2 * lr);
-            }
-
-            if (corr.actualType === 'pair' && corr.bestType === 'single') {
-                this._adjust('playHeuristics.suppressPair.diffLe4', -3 * lr);
-                this._adjust('playHeuristics.suppressPair.diffLe7', -2 * lr);
-            }
-
-            if (corr.category === 'overkill' && corr.bestWinRate > 0.6 && corr.actualWinRate < 0.3) {
-                this._adjust('playHeuristics.overkill.singleLe12', 5 * lr);
-                this._adjust('playHeuristics.overkill.pairLe10', 5 * lr);
-            }
+        let totalAdj = Object.keys(weightDeltas).length + Object.keys(heuristicDeltas).length;
+        if (totalAdj > 0) {
+            this._adjustCount++;
+            this._statsCache.totalAdjustments = this._adjustCount;
         }
     },
 
     _adjust(path, delta) {
-        if (Math.abs(delta) < 0.01) return;
+        if (Math.abs(delta) < 0.001) return;
         let current = ParamConfig.get(path);
         if (current === undefined || current === null) return;
-        let maxClamp = 500, minClamp = -500;
+        let minClamp = -500, maxClamp = 500;
         if (path.startsWith('passScores')) { minClamp = -999; maxClamp = 999; }
         let newVal = Math.max(minClamp, Math.min(maxClamp, current + delta));
-        if (Math.abs(newVal - current) > 0.01) ParamConfig.set(path, Math.round(newVal * 100) / 100);
+        if (Math.abs(newVal - current) > 0.001) ParamConfig.set(path, Math.round(newVal * 10000) / 10000);
     },
 
-    getStats() {
-        return this._statsCache;
-    },
+    getStats() { return this._statsCache; },
 
     getRecentCorrections(limit) {
-        return GameDatabase.getRecentCorrections(limit).then(data => data || []);
+        return GameDatabase.getRecentCorrections(limit).then(d => d || []);
     }
 };
 
@@ -1701,13 +1517,13 @@ const ParamExporter = {
 
     _renderLearnTab(container) {
         let stats = GodViewLearner.getStats();
+        let adjTotal = ParamConfig._overrides ? ParamConfig.get('version') + stats.totalAdjustments : stats.totalAdjustments;
         container.innerHTML = `<div class="text-[10px] text-gray-300 mb-3 space-y-1">
-            <div>📊 总复盘次数: ${stats.total}</div>
-            <div>🎯 近期修正: ${stats.recent20} 条</div>
-            <div>⏱ 不该PASS却PASS: ${stats.passMiss} 次</div>
-            <div>💣 该用炸弹却未用: ${stats.bombMiss} 次</div>
+            <div>📊 总复盘: ${stats.total} 次 · 修正 ${stats.recent20} 条</div>
+            <div>⚡ 参数调整: ${stats.totalAdjustments} 次 · 平均差异 ${(stats.avgDiff*100).toFixed(0)}%</div>
+            <div>🧠 特征权重: 线性更新 · 学习率 ${(0.02/(1+0.001*(stats.totalAdjustments||1))).toFixed(4)}</div>
         </div><div id="learnTabBody" class="text-center text-gray-400 text-[10px] py-4">⏳ 加载中...</div>
-        <div class="text-[8px] text-gray-500 mt-2">每局结束后自动分析AI决策，发现错失机会后微调参数</div>`;
+        <div class="text-[8px] text-gray-500 mt-2">每局结束后用 minimax/rollout 搜索最优解，基于特征差调整评分权重</div>`;
         GodViewLearner.getRecentCorrections(15).then(data => {
             let body = document.getElementById('learnTabBody');
             if (!body) return;
@@ -1849,23 +1665,8 @@ const ParamExporter = {
         let progressEl = document.getElementById('aiParamProgress');
         if (!progressEl) return;
         progressEl.classList.remove('hidden');
-        progressEl.textContent = '⏳ 深度优化进行中 (0%)...';
-        let buttons = document.querySelectorAll('#aiParamModal .pixel-btn');
-        buttons.forEach(b => b.disabled = true);
-        ParameterOptimizer.runDeepOptimization(
-            (done, total) => {
-                let pct = Math.round(done / total * 100);
-                progressEl.textContent = `⏳ 深度优化进行中 (${pct}%)...`;
-            },
-            (success, bestWinRate) => {
-                progressEl.textContent = success
-                    ? `✅ 优化完成！最优胜率: ${Math.round(bestWinRate * 100)}%`
-                    : '❌ 优化失败或已取消';
-                buttons.forEach(b => b.disabled = false);
-                this._refreshUI();
-                setTimeout(() => { progressEl.classList.add('hidden'); }, 5000);
-            }
-        );
+        progressEl.textContent = 'ℹ️ CEM 优化已禁用 — 使用 GodViewLearner 反事实学习替代';
+        setTimeout(() => { progressEl.classList.add('hidden'); }, 3000);
     },
 
     resetParams() {
