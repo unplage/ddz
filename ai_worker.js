@@ -897,11 +897,12 @@ function solveEndgame(state, playerId) {
     let hand = state.players[playerId];
     if (!hand || hand.length > 14) return null;
     let totalCards = state.players.reduce((s, p) => s + p.length, 0);
-    if (totalCards > 20) return null;
+    if (totalCards > 16) return null;
     let bestPlay = null, bestScore = -Infinity;
     let lastPlay = state.lastPlay;
     let needBeat = lastPlay && state.lastPlayerId !== playerId;
     let plays = needBeat ? getAllValidPlays(hand, lastPlay) : getAllValidPlays(hand, null);
+    let ctx = { nodes: 0, limit: 40000, tt: new Map(), truncated: false };
     for (let p of plays) {
         let simState = JSON.parse(JSON.stringify(state));
         let pIds = new Set(p.map(c => c.id));
@@ -910,14 +911,42 @@ function solveEndgame(state, playerId) {
         simState.lastPlay = getCardType(p);
         simState.lastPlayerId = playerId;
         simState.passCount = 0;
-        let win = minimaxEndgame(simState, (playerId + 1) % 3, playerId, 0, 20);
+        let win = minimaxEndgame(simState, (playerId + 1) % 3, playerId, 0, 20, -999, 999, ctx);
         if (win > bestScore) { bestScore = win; bestPlay = p; }
+        if (ctx.truncated) break;
     }
     return bestPlay;
 }
 
-function minimaxEndgame(state, currentPlayer, myId, depth, maxDepth, alpha = -999, beta = 999) {
-    if (depth > maxDepth) return 0;
+function _endgameStaticEval(state, myId) {
+    let isLord = (myId === state.landlord);
+    let score = 0;
+    for (let i = 0; i < 3; i++) {
+        let sign = (i === state.landlord) ? (isLord ? -1 : 1) : (isLord ? 1 : -1);
+        let p = state.players[i];
+        for (let j = 0; j < p.length; j++) {
+            let v = p[j].value;
+            score += sign * (1 + (v >= 12 ? 2 : 0));
+        }
+    }
+    return Math.max(-60, Math.min(60, score));
+}
+
+function _endgameKey(state, currentPlayer) {
+    let k = currentPlayer + '|' + state.lastPlayerId + '|' + state.passCount + '|'
+        + (state.lastPlay ? state.lastPlay.type + ':' + state.lastPlay.value + ':' + (state.lastPlay.length || '') : '-') + '|';
+    for (let i = 0; i < 3; i++) {
+        k += state.players[i].map(c => c.id).sort().join(',') + ';';
+    }
+    return k;
+}
+
+function minimaxEndgame(state, currentPlayer, myId, depth, maxDepth, alpha = -999, beta = 999, ctx) {
+    if (!ctx) ctx = { nodes: 0, limit: Infinity, tt: null, truncated: false };
+    ctx.nodes++;
+    if (ctx.nodes > ctx.limit) { ctx.truncated = true; return _endgameStaticEval(state, myId); }
+    if (depth > maxDepth) return _endgameStaticEval(state, myId);
+
     let mySide = (myId === state.landlord) ? [myId] : [0,1,2].filter(i => i !== state.landlord);
     for (let i = 0; i < 3; i++) {
         if (state.players[i].length === 0) return mySide.includes(i) ? 100 - depth : -100 + depth;
@@ -931,16 +960,28 @@ function minimaxEndgame(state, currentPlayer, myId, depth, maxDepth, alpha = -99
     if (hand.length === 0) {
         return mySide.includes(currentPlayer) ? 100 - depth : -100 + depth;
     }
+    let key = null;
+    if (ctx.tt) {
+        key = _endgameKey(state, currentPlayer);
+        let ttEntry = ctx.tt.get(key);
+        if (ttEntry && ttEntry.depth >= maxDepth - depth) {
+            if (ttEntry.flag === 'exact') return ttEntry.value;
+            if (ttEntry.flag === 'lower' && ttEntry.value >= beta) return ttEntry.value;
+            if (ttEntry.flag === 'upper' && ttEntry.value <= alpha) return ttEntry.value;
+        }
+    }
     let needBeat = state.lastPlay && state.lastPlayerId !== currentPlayer;
     let plays = needBeat ? getAllValidPlays(hand, state.lastPlay) : getAllValidPlays(hand, null);
     if (plays.length === 0) {
         let s2 = JSON.parse(JSON.stringify(state));
         s2.passCount++;
-        return minimaxEndgame(s2, (currentPlayer + 1) % 3, myId, depth + 1, maxDepth, alpha, beta);
+        return minimaxEndgame(s2, (currentPlayer + 1) % 3, myId, depth + 1, maxDepth, alpha, beta, ctx);
     }
     let isMax = mySide.includes(currentPlayer);
     plays.sort((a,b) => isMax ? getPlayPower(b) - getPlayPower(a) : getPlayPower(a) - getPlayPower(b));
     let best = isMax ? -999 : 999;
+    let flag = 'exact';
+    let nodeTruncated = false;
     for (let p of plays) {
         let s2 = JSON.parse(JSON.stringify(state));
         let pIds = new Set(p.map(c => c.id));
@@ -949,10 +990,19 @@ function minimaxEndgame(state, currentPlayer, myId, depth, maxDepth, alpha = -99
         s2.lastPlay = getCardType(p);
         s2.lastPlayerId = currentPlayer;
         s2.passCount = 0;
-        let val = minimaxEndgame(s2, (currentPlayer + 1) % 3, myId, depth + 1 + bombDepth, maxDepth, alpha, beta);
-        if (isMax) { best = Math.max(best, val); alpha = Math.max(alpha, val); }
-        else { best = Math.min(best, val); beta = Math.min(beta, val); }
-        if (alpha >= beta) break;
+        let val = minimaxEndgame(s2, (currentPlayer + 1) % 3, myId, depth + 1 + bombDepth, maxDepth, alpha, beta, ctx);
+        if (isMax) {
+            if (val > best) best = val;
+            if (best > alpha) alpha = best;
+        } else {
+            if (val < best) best = val;
+            if (best < beta) beta = best;
+        }
+        if (alpha >= beta) { flag = isMax ? 'lower' : 'upper'; break; }
+        if (ctx.truncated) { nodeTruncated = true; break; }
+    }
+    if (ctx.tt && !ctx.truncated && !nodeTruncated) {
+        ctx.tt.set(key, { value: best, depth: maxDepth - depth, flag });
     }
     return best;
 }
