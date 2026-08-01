@@ -918,8 +918,10 @@ function solveEndgame(state, playerId) {
 
 function minimaxEndgame(state, currentPlayer, myId, depth, maxDepth, alpha = -999, beta = 999) {
     if (depth > maxDepth) return 0;
-    if (state.players[myId].length === 0) return 100 - depth;
-    if (state.players.map((p,i)=>i!==myId && p.length===0).some(x=>x)) return -100 + depth;
+    let mySide = (myId === state.landlord) ? [myId] : [0,1,2].filter(i => i !== state.landlord);
+    for (let i = 0; i < 3; i++) {
+        if (state.players[i].length === 0) return mySide.includes(i) ? 100 - depth : -100 + depth;
+    }
     if (state.passCount >= 2) {
         state.lastPlay = null;
         state.lastPlayerId = -1;
@@ -927,8 +929,7 @@ function minimaxEndgame(state, currentPlayer, myId, depth, maxDepth, alpha = -99
     }
     let hand = state.players[currentPlayer];
     if (hand.length === 0) {
-        if (currentPlayer === myId) return 100 - depth;
-        return -100 + depth;
+        return mySide.includes(currentPlayer) ? 100 - depth : -100 + depth;
     }
     let needBeat = state.lastPlay && state.lastPlayerId !== currentPlayer;
     let plays = needBeat ? getAllValidPlays(hand, state.lastPlay) : getAllValidPlays(hand, null);
@@ -937,12 +938,8 @@ function minimaxEndgame(state, currentPlayer, myId, depth, maxDepth, alpha = -99
         s2.passCount++;
         return minimaxEndgame(s2, (currentPlayer + 1) % 3, myId, depth + 1, maxDepth, alpha, beta);
     }
-    if (currentPlayer === myId) {
-        plays.sort((a,b) => getPlayPower(b) - getPlayPower(a));
-    } else {
-        plays.sort((a,b) => getPlayPower(a) - getPlayPower(b));
-    }
-    let isMax = (currentPlayer === myId);
+    let isMax = mySide.includes(currentPlayer);
+    plays.sort((a,b) => isMax ? getPlayPower(b) - getPlayPower(a) : getPlayPower(a) - getPlayPower(b));
     let best = isMax ? -999 : 999;
     for (let p of plays) {
         let s2 = JSON.parse(JSON.stringify(state));
@@ -964,10 +961,12 @@ function minimaxEndgame(state, currentPlayer, myId, depth, maxDepth, alpha = -99
 function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministic) {
     let s = JSON.parse(JSON.stringify(state));
     let cp = startPlayer;
+    let mySide = (myId === s.landlord) ? [myId] : [0,1,2].filter(i => i !== s.landlord);
     let hp = paramGet('heuristicPlayout');
     for (let step = 0; step < hp.stepLimit; step++) {
-        if (s.players[myId].length === 0) return true;
-        if (s.players.map((p,i)=>i!==myId && p.length===0).some(x=>x)) return false;
+        for (let i = 0; i < 3; i++) {
+            if (s.players[i].length === 0) return mySide.includes(i);
+        }
         if (s.passCount >= 2) { s.lastPlay = null; s.lastPlayerId = -1; s.passCount = 0; }
         let hand = s.players[cp];
         if (hand.length === 0) { cp = (cp + 1) % 3; continue; }
@@ -990,8 +989,7 @@ function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministi
         s.lastPlay = getCardType(chosenPlay);
         s.lastPlayerId = cp;
         s.passCount = 0;
-        if (s.players[cp].length === 0 && cp === myId) return true;
-        if (s.players[cp].length === 0 && cp !== myId) return false;
+        if (s.players[cp].length === 0) return mySide.includes(cp);
         cp = (cp + 1) % 3;
     }
     return false;
@@ -1012,8 +1010,7 @@ class MCTSNode {
     }
     get isTerminal() {
         return this.state.phase === 'gameover' ||
-            (this.state.players && this.state.players.some((p, i) => i !== this.myId && p && p.length === 0)) ||
-            (this.state.players[this.myId] && this.state.players[this.myId].length === 0);
+            (this.state.players && this.state.players.some((p, i) => p && p.length === 0));
     }
     get isFullyExpanded() {
         if (this.unexpandedPlays === null) return false;
@@ -1080,8 +1077,8 @@ function mctsSearch(state, playerId, iterations, memory, timeLimit) {
         if (!node.isTerminal && !node.isFullyExpanded) node = node.expand();
         let result;
         if (node.isTerminal) {
-            result = node.state.players[playerId] && node.state.players[playerId].length > 0
-                && !node.state.players.some((p, i) => i !== playerId && p && p.length === 0);
+            let mySide = (playerId === node.state.landlord) ? [playerId] : [0,1,2].filter(i => i !== node.state.landlord);
+            result = node.state.players.some((p, i) => mySide.includes(i) && p && p.length === 0);
         } else {
             result = heuristicPlayoutWithMode(node.state, node.playerToMove, playerId, memory, false);
         }
