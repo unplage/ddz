@@ -1277,6 +1277,8 @@ class MiniMasterAI {
                 (state.players[(state.currentPlayer + 1) % 3] || {length:20}).length,
                 (state.players[(state.currentPlayer + 2) % 3] || {length:20}).length
             );
+            let nextId = (state.currentPlayer + 1) % 3;
+            let nextClose = ((state.players[nextId] || {length:20}).length) <= 2;
             let dpLimit = paramGet('endgameThresholds.' + this.difficulty) || 12;
             let sl = paramGet('selectLead.landlord');
             if (hand.length <= dpLimit) {
@@ -1296,9 +1298,13 @@ class MiniMasterAI {
                         if (type && (type.type === CardType.PLANE_WITH_SINGLE || type.type === CardType.PLANE_WITH_PAIR)) score += sl.planeWithBonus;
                         if (type && (type.type === CardType.TRIPLE_WITH_SINGLE || type.type === CardType.TRIPLE_WITH_PAIR)) score += sl.tripleWithBonus;
                         let val = p[0].value;
-                        if (val <= 6) score += sl.smallValLe6;
-                        if (val >= 12 && p.length <= 2) score += sl.controlValGe12LenLe2;
-                        if (_oppMin <= 2 && p.length <= 2 && val < 12) score -= 500;
+                        if (nextClose && p.length === 1 && val < 12) {
+                            score = -500 + val * 3;
+                        } else {
+                            if (val <= 6) score += sl.smallValLe6;
+                            if (val >= 12 && p.length <= 2) score += sl.controlValGe12LenLe2;
+                            if (_oppMin <= 2 && p.length <= 2 && val < 12) score -= 500;
+                        }
                         if (score > bestLeadScore) { bestLeadScore = score; bestLead = p; }
                     }
                     if (bestLead) return bestLead;
@@ -1326,6 +1332,12 @@ class MiniMasterAI {
                     return rest.length === 0 || restPlays.some(rp => rp.length === rest.length);
                 });
                 if (twoPlay) return twoPlay;
+            }
+            if (nextClose) {
+                let singles = plays.filter(p => p.length === 1);
+                if (singles.length > 0 && plays.every(p => p.length === 1)) {
+                    return singles.sort((a,b)=>getPlayPower(b)-getPlayPower(a))[0];
+                }
             }
             if (_oppMin <= 2) {
                 let safe = plays.filter(p => p.length !== 1 || p[0].value >= 10);
