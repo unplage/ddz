@@ -2474,19 +2474,21 @@
             callScores: GameState.callScores, lordCards: GameState.lordCards,
             seq: ++GameState.stateSeq
         };
-        GameState.connections.forEach((conn, i) => {
+        GameState.connections.forEach((conn) => {
+            let myIdx = conn.playerIdx !== undefined ? conn.playerIdx : GameState.connections.indexOf(conn) + 1;
             let safeState = JSON.parse(JSON.stringify(base));
             safeState.players = base.players.map((p, idx) => {
-                if (idx === i + 1) return [...p]; 
+                if (idx === myIdx) return [...p]; 
                 return p.map(c => ({ suit: 'back', rank: '?', value: 0, id: 'back_' + Math.random().toString(36).substr(2, 9) }));
             });
             if (safeState.phase === 'calling') {
                 safeState.lordCards = safeState.lordCards.map(c => ({ suit: 'back', rank: '?', value: 0, id: 'back' }));
             }
-            conn.send({ type: 'sync', state: { ...safeState, myIndex: i + 1 } });
+            conn.send({ type: 'sync', state: { ...safeState, myIndex: myIdx } });
         });
     }
     function handleSync(state) {
+        GameState.myIndex = state.myIndex !== undefined ? state.myIndex : GameState.myIndex;
         let prevPhase = GameState.phase;
         let prevLastPlay = GameState.lastPlay;
         let prevLastPlayerId = GameState.lastPlayerId;
@@ -2505,7 +2507,6 @@
         GameState.farmerPlayed = state.farmerPlayed;
         GameState.callScores = state.callScores || [0,0,0];
         GameState.lordCards = state.lordCards || [];
-        GameState.myIndex = state.myIndex;
         GameState.selectedCards.clear();
         let hasPlay = state.lastPlay && state.lastPlay.cards && state.lastPlay.cards.length > 0;
         if (hasPlay) {
