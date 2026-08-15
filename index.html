@@ -187,6 +187,7 @@
     let audioCtx = null;
     let prevLastPlayId = -1;
     let prevLastPlayType = null;
+    let prevPassIdx = -1;
     let bottomCardsShown = false;
 
     function changeSpeed(val) { aiSpeed = val; }
@@ -1767,7 +1768,7 @@
     const GameState = {
         phase: 'idle', mode: 'single',
         deck: [], players: [[],[],[]], lordCards: [], landlord: -1, currentPlayer: 0,
-        lastPlay: null, lastPlayerId: -1, baseScore: 1, selectedCards: new Set(), bombCount: 0,
+        lastPlay: null, lastPlayerId: -1, lastPassIdx: -1, baseScore: 1, selectedCards: new Set(), bombCount: 0,
         difficulty: 'hard', coins: 1000, stats: { total: 0, win: 0 }, passCount: 0,
         firstPlayMade: false, lordPlayCount: 0, farmerPlayed: false,
         cardMemory: null, aiList: [], history: [], processing: false,
@@ -1839,6 +1840,7 @@
         GameState.firstPlayMade = false; GameState.lordPlayCount = 0; GameState.farmerPlayed = false;
         GameState.passCount = 0;
         GameState.lastPlayerId = -1;
+        GameState.lastPassIdx = -1;
         GameState.processing = false;
         singleCallCount = 0;
         GameState.history = [];
@@ -2112,7 +2114,9 @@
         let isPlay = (cards && cards.length > 0);
         if (!isPlay) {
             GameState.passCount++;
-
+            GameState.lastPassIdx = player;
+            document.getElementById('lastPlayer').textContent = getPlayerName(player) + ' 不出';
+            speakNow(getPlayerName(player) + ' 不出');
         } else {
             let type = getCardType(cards);
             if (!type) { showToast('牌型非法'); GameState.passCount++; GameState.currentPlayer = (player+1)%3; nextPlayStep(); return; }
@@ -2120,6 +2124,7 @@
             GameState.players[player] = GameState.players[player].filter(c => !playedIds.has(c.id));
             GameState.lastPlay = type;
             GameState.lastPlayerId = player;
+            GameState.lastPassIdx = -1;
             GameState.passCount = 0;
             
             if (!GameState.firstPlayMade) GameState.firstPlayMade = true;
@@ -2458,9 +2463,9 @@
     function sendEmoji(emoji) {
         let msg = { type:'emoji', from:GameState.myIndex, emoji };
         if (GameState.myRole === 'host') {
-            for (let c of GameState.connections) c.send(msg);
+            for (let c of GameState.connections) { try { c.send(msg); } catch (e) {} }
         } else if (GameState.connections[0]) {
-            GameState.connections[0].send(msg);
+            try { GameState.connections[0].send(msg); } catch (e) {}
         }
         showToast(`你: ${emoji}`);
     }
@@ -2471,7 +2476,7 @@
         else if (data.type === 'emoji') {
             showToast(`${getPlayerName(data.from)}: ${data.emoji}`);
             if (GameState.myRole === 'host') {
-                GameState.connections.forEach(c => { if (c !== conn) c.send(data); });
+                GameState.connections.forEach(c => { if (c !== conn) { try { c.send(data); } catch (e) {} } });
             }
         }
     }
@@ -2482,6 +2487,7 @@
             phase: GameState.phase, players: GameState.players.map(p=>[...p]),
             landlord: GameState.landlord, currentPlayer: GameState.currentPlayer,
             lastPlay: GameState.lastPlay, lastPlayerId: GameState.lastPlayerId,
+            lastPassIdx: GameState.lastPassIdx,
             baseScore: GameState.baseScore, bombCount: GameState.bombCount,
             passCount: GameState.passCount, firstPlayMade: GameState.firstPlayMade,
             lordPlayCount: GameState.lordPlayCount, farmerPlayed: GameState.farmerPlayed,
@@ -2498,7 +2504,7 @@
             if (safeState.phase === 'calling') {
                 safeState.lordCards = safeState.lordCards.map(c => ({ suit: 'back', rank: '?', value: 0, id: 'back' }));
             }
-            conn.send({ type: 'sync', state: { ...safeState, myIndex: myIdx } });
+            try { conn.send({ type: 'sync', state: { ...safeState, myIndex: myIdx } }); } catch (e) {}
         });
     }
     function handleSync(state) {
@@ -2507,6 +2513,9 @@
         let prevLastPlay = GameState.lastPlay;
         let prevLastPlayerId = GameState.lastPlayerId;
         GameState.phase = state.phase;
+        if (prevPhase === 'gameover' && GameState.phase !== 'gameover') {
+            document.getElementById('gameOverScreen').classList.add('hidden');
+        }
         GameState.players = state.players.map(p=>[...p]);
         GameState.players[GameState.myIndex].sort((a,b)=>a.value-b.value);
         GameState.landlord = state.landlord;
@@ -2516,6 +2525,7 @@
         GameState.baseScore = state.baseScore;
         GameState.bombCount = state.bombCount;
         GameState.passCount = state.passCount;
+        GameState.lastPassIdx = state.lastPassIdx !== undefined ? state.lastPassIdx : -1;
         GameState.firstPlayMade = state.firstPlayMade;
         GameState.lordPlayCount = state.lordPlayCount;
         GameState.farmerPlayed = state.farmerPlayed;
@@ -2529,10 +2539,19 @@
                 bottomCardsShown = false;
                 updateActionLog(state.lastPlayerId, state.lastPlay.cards);
                 speakPlay(state.lastPlay.cards);
+                document.getElementById('lastPlayer').textContent = '';
                 if (state.lastPlay.type === CardType.BOMB || state.lastPlay.type === CardType.ROCKET) {
                     playSound('bomb');
                 }
             }
+        }
+        if (GameState.lastPassIdx >= 0 && GameState.lastPassIdx !== prevPassIdx) {
+            prevPassIdx = GameState.lastPassIdx;
+            updateActionLog(GameState.lastPassIdx, []);
+            document.getElementById('lastPlayer').textContent = getPlayerName(GameState.lastPassIdx) + ' 不出';
+            speakNow(getPlayerName(GameState.lastPassIdx) + ' 不出');
+        } else if (GameState.lastPassIdx === -1) {
+            prevPassIdx = -1;
         }
         renderUI();
         if (GameState.phase === 'calling') processOnlineCallTurn();
@@ -2582,8 +2601,6 @@
                 screen.classList.remove('hidden');
                 document.getElementById('playArea').innerHTML = '<span class="text-gray-500 text-[10px]">等待出牌...</span>';
             }
-        } else if (prevPhase === 'gameover') {
-            document.getElementById('gameOverScreen').classList.add('hidden');
         }
     }
 
