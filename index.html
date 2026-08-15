@@ -1712,14 +1712,27 @@
                     let midPlay = plays.find(p => p.length >= 3 && getPlayPower(p) <= 60);
                     if (midPlay) return midPlay;
                 } else {
-                    // 地主上家：出小牌逼地主消耗大牌，自己留大牌卡地主
+                    // 地主上家：地主（下家）紧接其后，残局(≤4张)时严禁出小牌送地主顺走
+                    let nextLordClose = ((state.players[(state.currentPlayer + 1) % 3] || {length:20}).length) <= 4;
+                    if (nextLordClose) {
+                        let combos = plays.filter(p => {
+                            let t = getCardType(p);
+                            return p.length >= 3 && t && t.type !== CardType.BOMB && t.type !== CardType.ROCKET;
+                        });
+                        if (combos.length > 0) return combos.reduce((a,b) => getPlayPower(a) > getPlayPower(b) ? a : b);
+                        return plays.reduce((a,b) => getPlayPower(a) > getPlayPower(b) ? a : b);
+                    }
+                    // 出中等单张（先于小牌，避免地主轻松顺小牌）
+                    let midSingle = plays.find(p => p.length === 1 && p[0].value >= 7 && p[0].value <= 10);
+                    if (midSingle) return midSingle;
+                    // 出中等对子
+                    let midPair = plays.find(p => p.length === 2 && getCardType(p).value >= 7 && getCardType(p).value <= 10);
+                    if (midPair) return midPair;
+                    // 只有小牌时再出小牌
                     let smallSingle = plays.find(p => p.length === 1 && p[0].value <= 6);
                     if (smallSingle) return smallSingle;
                     let smallPair = plays.find(p => p.length === 2 && getCardType(p).value <= 8);
                     if (smallPair) return smallPair;
-                    // 出中等单张
-                    let midSingle = plays.find(p => p.length === 1 && p[0].value >= 7 && p[0].value <= 10);
-                    if (midSingle) return midSingle;
                 }
 
                 // DP 计划：出结构好的小牌
@@ -1993,6 +2006,7 @@
             document.getElementById('playArea').innerHTML = '<span class="text-gray-500 text-[10px]">自由出牌</span>';
             GameState.passCount = 0;
             bottomCardsShown = false;
+            if (GameState.mode === 'online') broadcastFullState();
         }
         if (GameState.mode === 'online') {
             processOnlinePlay(id);
@@ -2512,6 +2526,8 @@
         if (hasPlay) {
             let isNew = !prevLastPlay || !prevLastPlay.cards || prevLastPlay.cards.length === 0 || prevLastPlayerId !== state.lastPlayerId;
             if (isNew) {
+                bottomCardsShown = false;
+                updateActionLog(state.lastPlayerId, state.lastPlay.cards);
                 speakPlay(state.lastPlay.cards);
                 if (state.lastPlay.type === CardType.BOMB || state.lastPlay.type === CardType.ROCKET) {
                     playSound('bomb');
@@ -2527,26 +2543,47 @@
             processOnlinePlay(GameState.currentPlayer);
         } else if (GameState.phase === 'gameover') {
             clearTimer();
-            let isWin = false;
-            if (GameState.landlord === GameState.myIndex) isWin = GameState.lastPlayerId === GameState.myIndex;
-            else isWin = GameState.lastPlayerId !== GameState.landlord;
-            let screen = document.getElementById('gameOverScreen'), title = document.getElementById('resultTitle'), content = document.getElementById('resultContent');
-            let remainingHtml = '<div style="margin-top:8px;border-top:1px solid #555;padding-top:6px;font-size:10px;color:#aaa;text-align:left;">';
-            for (let i = 0; i < 3; i++) {
-                let name = getPlayerName(i);
-                let role = i === GameState.landlord ? '(地主)' : '(农民)';
-                let cards = formatRemainingCards(i);
-                remainingHtml += name + role + ': ' + cards + '<br>';
+            if (prevPhase !== 'gameover') {
+                let isWin = false;
+                if (GameState.landlord === GameState.myIndex) isWin = GameState.lastPlayerId === GameState.myIndex;
+                else isWin = GameState.lastPlayerId !== GameState.landlord;
+                let isLordWin = (GameState.lastPlayerId === GameState.landlord);
+                let multiplier = GameState.baseScore;
+                let isSpring = false, isAntiSpring = false;
+                if (isLordWin && !GameState.farmerPlayed && GameState.firstPlayMade) isSpring = true;
+                if (!isLordWin && GameState.lordPlayCount === 1 && GameState.firstPlayMade) isAntiSpring = true;
+                if (isSpring) multiplier *= 2;
+                if (isAntiSpring) multiplier *= 2;
+                let amount = Math.min(100 * multiplier, 9999);
+                let oldCoins = GameState.coins;
+                if (isWin) { GameState.stats.win++; GameState.coins += amount; playSound('win'); }
+                else { GameState.coins = Math.max(0, GameState.coins - amount); }
+                let delta = GameState.coins - oldCoins;
+                let actualAmount = isWin ? delta : oldCoins - GameState.coins;
+                addMatchRecord(isWin ? 'win' : 'lose', multiplier, delta, GameState.coins);
+                updateStats();
+                let screen = document.getElementById('gameOverScreen'), title = document.getElementById('resultTitle'), content = document.getElementById('resultContent');
+                let remainingHtml = '<div style="margin-top:8px;border-top:1px solid #555;padding-top:6px;font-size:10px;color:#aaa;text-align:left;">';
+                for (let i = 0; i < 3; i++) {
+                    let name = getPlayerName(i);
+                    let role = i === GameState.landlord ? '(地主)' : '(农民)';
+                    let p = GameState.players[i];
+                    let cards = (p && p.every(c => c.suit === 'back')) ? '剩' + p.length + '张' : formatRemainingCards(i);
+                    remainingHtml += name + role + ': ' + cards + '<br>';
+                }
+                remainingHtml += '</div>';
+                if (isWin) {
+                    title.textContent = '🎉 胜利！'; title.className = 'text-xl retro-text mb-4 text-yellow-400 text-center';
+                    content.innerHTML = `赢得 ${actualAmount} 筹码<br>余额：${GameState.coins}${isSpring?'<br>🌸春天加成':''}${isAntiSpring?'<br>⚡反春天加成':''}${remainingHtml}`;
+                } else {
+                    title.textContent = '💔 失败'; title.className = 'text-xl retro-text mb-4 text-gray-400 text-center';
+                    content.innerHTML = `失去 ${actualAmount} 筹码<br>余额：${GameState.coins}${remainingHtml}`;
+                }
+                screen.classList.remove('hidden');
+                document.getElementById('playArea').innerHTML = '<span class="text-gray-500 text-[10px]">等待出牌...</span>';
             }
-            remainingHtml += '</div>';
-            if (isWin) {
-                title.textContent = '🎉 胜利！'; title.className = 'text-xl retro-text mb-4 text-yellow-400 text-center';
-                content.innerHTML = `对局结束${remainingHtml}`;
-            } else {
-                title.textContent = '💔 失败'; title.className = 'text-xl retro-text mb-4 text-gray-400 text-center';
-                content.innerHTML = `对局结束${remainingHtml}`;
-            }
-            screen.classList.remove('hidden');
+        } else if (prevPhase === 'gameover') {
+            document.getElementById('gameOverScreen').classList.add('hidden');
         }
     }
 
@@ -2605,7 +2642,7 @@
     }
     function executeCall(player, score) {
         if (score === 0) GameState.callScores[player] = -1;
-        else { GameState.callScores[player] = score; GameState.baseScore = Math.max(GameState.baseScore, score); GameState.landlord = player; }
+        else { GameState.callScores[player] = score; GameState.baseScore = Math.max(GameState.baseScore, score); GameState.landlord = player; document.getElementById('scoreDisplay').textContent = '底分: '+GameState.baseScore; }
         let allFinished = GameState.callScores.every(s => s !== 0);
         if (score === 3 || allFinished) {
             if (GameState.landlord < 0) { showToast("无人叫地主，重新发牌"); initGame(); return; }
@@ -2762,7 +2799,7 @@
         clearTimer();
         let isPlayerWin = (GameState.mode === 'single')
             ? ((winner === GameState.myIndex) || (winner !== GameState.myIndex && GameState.landlord !== GameState.myIndex && winner !== GameState.landlord))
-            : (winner === GameState.myIndex);
+            : ((GameState.landlord === GameState.myIndex) ? (winner === GameState.landlord) : (winner !== GameState.landlord));
         let isLordWin = (winner === GameState.landlord);
         let multiplier = GameState.baseScore;
         let isSpring = false, isAntiSpring = false;

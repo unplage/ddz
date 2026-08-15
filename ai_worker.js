@@ -1368,12 +1368,23 @@ class MiniMasterAI {
                 let midPlay = plays.find(p => p.length >= 3 && getPlayPower(p) <= 60);
                 if (midPlay) return midPlay;
             } else {
+                let nextLordClose = ((state.players[(state.currentPlayer + 1) % 3] || {length:20}).length) <= 4;
+                if (nextLordClose) {
+                    let combos = plays.filter(p => {
+                        let t = getCardType(p);
+                        return p.length >= 3 && t && t.type !== CardType.BOMB && t.type !== CardType.ROCKET;
+                    });
+                    if (combos.length > 0) return combos.reduce((a,b) => getPlayPower(a) > getPlayPower(b) ? a : b);
+                    return plays.reduce((a,b) => getPlayPower(a) > getPlayPower(b) ? a : b);
+                }
+                let midSingle = plays.find(p => p.length === 1 && p[0].value >= 7 && p[0].value <= 10);
+                if (midSingle) return midSingle;
+                let midPair = plays.find(p => p.length === 2 && getCardType(p).value >= 7 && getCardType(p).value <= 10);
+                if (midPair) return midPair;
                 let smallSingle = plays.find(p => p.length === 1 && p[0].value <= 6);
                 if (smallSingle) return smallSingle;
                 let smallPair = plays.find(p => p.length === 2 && getCardType(p).value <= 8);
                 if (smallPair) return smallPair;
-                let midSingle = plays.find(p => p.length === 1 && p[0].value >= 7 && p[0].value <= 10);
-                if (midSingle) return midSingle;
             }
             let dpLimit = paramGet('endgameThresholds.' + this.difficulty) || 12;
             let sl = paramGet('selectLead.farmer');
