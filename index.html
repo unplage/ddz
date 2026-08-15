@@ -129,8 +129,15 @@
         </div>
         <div id="connectPanel" class="connect-panel hidden">
             <h2 class="text-yellow-400 text-sm mb-2">🃏 斗地主联机</h2>
-            <div class="text-[10px] text-gray-400 mb-2">房主创建房间，其余两人输入房主房间码加入</div>
-            <div class="peer-id">🔑 房间码：<span id="myPeerId">生成中...</span><button onclick="copyPeerId()" class="ml-2 text-[8px] pixel-btn py-0 px-2 inline-flex">复制</button></div>
+            <div class="text-[10px] text-gray-400 mb-2">房主创建房间，其余两人输入房间码加入</div>
+            <div id="createRoomSection">
+                <div class="text-[10px] text-yellow-400 mb-1">── 创建房间 ──</div>
+                <div class="input-group"><input type="text" id="roomCodeInput" placeholder="自定义房间码（2-20字符）" maxlength="20"><button onclick="createRoom()" class="pixel-btn bg-blue-500 w-full mt-1">创建房间</button></div>
+            </div>
+            <div id="myPeerSection" class="hidden mt-2">
+                <div class="peer-id">🔑 房间码：<span id="myPeerId">生成中...</span><button onclick="copyPeerId()" class="ml-2 text-[8px] pixel-btn py-0 px-2 inline-flex">复制</button></div>
+            </div>
+            <div class="text-[10px] text-gray-400 mt-2 mb-1">── 加入房间 ──</div>
             <div class="input-group"><input type="text" id="targetPeerId" placeholder="输入对方房间码"><button onclick="joinGame()" class="pixel-btn bg-green-500 w-full mt-1">加入房间</button></div>
             <button onclick="hideOnlinePanel()" class="pixel-btn bg-gray-600 w-full mt-2 text-[10px]">返回</button>
         </div>
@@ -1769,11 +1776,17 @@
     function showOnlinePanel() {
         document.getElementById('startScreen').classList.add('hidden');
         document.getElementById('connectPanel').classList.remove('hidden');
-        initPeer();
+        document.getElementById('createRoomSection').classList.remove('hidden');
+        document.getElementById('myPeerSection').classList.add('hidden');
+        document.getElementById('connStatus').classList.add('hidden');
+        document.getElementById('roomCodeInput').value = '';
+        document.getElementById('targetPeerId').value = '';
     }
     function hideOnlinePanel() {
         document.getElementById('connectPanel').classList.add('hidden');
         document.getElementById('startScreen').classList.remove('hidden');
+        document.getElementById('createRoomSection').classList.remove('hidden');
+        document.getElementById('myPeerSection').classList.add('hidden');
         if (GameState.peer) { GameState.peer.destroy(); GameState.peer = null; }
         GameState.connections = [];
     }
@@ -2316,39 +2329,77 @@
     }
 
     // ======================== 联机模式 ========================
-    function initPeer() {
-        GameState.peer = new Peer();
-        let peerConnected = false;
-        let peerTimeout = trackTimeout(() => {
-            if (!peerConnected) {
-                showToast('连接超时，请检查网络');
-                if (GameState.peer) { GameState.peer.destroy(); GameState.peer = null; }
-            }
-        }, 10000);
-        GameState.peer.on('open', id => {
-            peerConnected = true;
-            clearTimeout(peerTimeout);
-            document.getElementById('myPeerId').innerText = id;
-            document.getElementById('connStatus').classList.remove('hidden');
-            document.getElementById('connStatus').innerHTML = `📡 房间码:${id}`;
-        });
-        GameState.peer.on('connection', conn => {
-            let idx = GameState.connections.length + 1;
-            conn.playerIdx = idx;
-            GameState.connections.push(conn);
-            conn.on('data', d => onConnectionData(conn, d));
-            conn.on('close', () => {
-                let dcIdx = conn.playerIdx;
-                GameState.connections = GameState.connections.filter(c => c !== conn);
-                handleDisconnect(dcIdx);
+    function initPeer(customId) {
+        if (GameState.peer) { GameState.peer.destroy(); GameState.peer = null; }
+        return new Promise((resolve, reject) => {
+            GameState.peer = customId ? new Peer(customId) : new Peer();
+            let peerConnected = false;
+            let peerTimeout = trackTimeout(() => {
+                if (!peerConnected) {
+                    showToast('连接超时，请检查网络');
+                    reject(new Error('peer connection timeout'));
+                    if (GameState.peer) { GameState.peer.destroy(); GameState.peer = null; }
+                }
+            }, 10000);
+            GameState.peer.on('open', id => {
+                peerConnected = true;
+                clearTimeout(peerTimeout);
+                document.getElementById('myPeerId').innerText = id;
+                document.getElementById('connStatus').classList.remove('hidden');
+                document.getElementById('connStatus').innerHTML = `📡 房间码:${id}`;
+                document.getElementById('createRoomSection').classList.add('hidden');
+                document.getElementById('myPeerSection').classList.remove('hidden');
+                resolve(id);
             });
-            if (GameState.connections.length === 2 && (!GameState.phase || GameState.phase === 'waiting' || GameState.phase === 'idle')) startOnlineGame();
+            GameState.peer.on('connection', conn => {
+                if (GameState.connections.length >= 2) {
+                    try { conn.send({ type: 'full' }); } catch (e) {}
+                    conn.close();
+                    return;
+                }
+                let usedIdx = new Set(GameState.connections.map(c => c.playerIdx));
+                let idx = 1; while (usedIdx.has(idx)) idx++;
+                conn.playerIdx = idx;
+                GameState.connections.push(conn);
+                conn.on('data', d => onConnectionData(conn, d));
+                conn.on('close', () => {
+                    let dcIdx = conn.playerIdx;
+                    GameState.connections = GameState.connections.filter(c => c !== conn);
+                    handleDisconnect(dcIdx);
+                });
+                if (GameState.connections.length === 2 && (!GameState.phase || GameState.phase === 'waiting' || GameState.phase === 'idle')) startOnlineGame();
+            });
+            GameState.peer.on('error', e => {
+                console.warn(e);
+                if (e.type === 'unavailable-id') {
+                    showToast('房间码已被使用，请换一个');
+                    if (GameState.peer) { GameState.peer.destroy(); GameState.peer = null; }
+                    document.getElementById('createRoomSection').classList.remove('hidden');
+                    document.getElementById('myPeerSection').classList.add('hidden');
+                    reject(e);
+                } else if (e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error') {
+                    showToast('网络连接失败，请检查网络');
+                    reject(e);
+                }
+            });
         });
-        GameState.peer.on('error', e => console.warn(e));
+    }
+    function createRoom() {
+        if (GameState.myRole === 'host' || GameState.myRole === 'client') return;
+        let code = document.getElementById('roomCodeInput').value.trim();
+        if (!code) { showToast('请输入房间码'); return; }
+        if (code.length < 2 || code.length > 20) { showToast('房间码需要2-20个字符'); return; }
+        if (!/^[a-zA-Z0-9\u4e00-\u9fff_-]+$/.test(code)) { showToast('仅支持中英文、数字、下划线和短横线'); return; }
+        initPeer(code).catch(() => {});
     }
     function joinGame() {
+        if (GameState.myRole === 'host' || GameState.myRole === 'client') return;
         let target = document.getElementById('targetPeerId').value.trim();
         if (!target) return;
+        if (GameState.peer) { connectToHost(target); return; }
+        initPeer(null).catch(() => {}).then(() => { if (GameState.peer) connectToHost(target); });
+    }
+    function connectToHost(target) {
         let conn = GameState.peer.connect(target);
         let joinTimeout = setTimeout(() => {
             if (conn.open) return;
@@ -2402,6 +2453,7 @@
     function onConnectionData(conn, data) {
         if (data.type === 'action') handleAction({ ...data.action, from: data.from });
         else if (data.type === 'sync' && GameState.myRole !== 'host') handleSync(data.state);
+        else if (data.type === 'full') showToast('房间已满，最多3人');
         else if (data.type === 'emoji') {
             showToast(`${getPlayerName(data.from)}: ${data.emoji}`);
             if (GameState.myRole === 'host') {
@@ -2503,9 +2555,16 @@
     }
     function handleAction(action) {
         let player = action.from !== undefined ? action.from : GameState.myIndex;
-        if (action.type === 'call') executeCall(player, action.score);
-        else if (action.type === 'play') executePlayCards(player, action.cards);
-        else if (action.type === 'pass') executePlayCards(player, []);
+        if (action.type === 'call') {
+            if (GameState.phase !== 'calling' || GameState.currentPlayer !== player) return;
+            executeCall(player, action.score);
+        } else if (action.type === 'play') {
+            if (GameState.phase !== 'playing' || GameState.currentPlayer !== player) return;
+            executePlayCards(player, action.cards);
+        } else if (action.type === 'pass') {
+            if (GameState.phase !== 'playing' || GameState.currentPlayer !== player) return;
+            executePlayCards(player, []);
+        }
     }
 
     function processOnlineCallTurn() {
@@ -2517,7 +2576,18 @@
             startOnlineTimer(10, () => { if (GameState.phase === 'calling' && GameState.currentPlayer === GameState.myIndex) makeCall(0); }, id);
         } else {
             document.getElementById('controls').innerHTML = '<button class="pixel-btn bg-gray-600" disabled>等待叫分</button>';
-            startOnlineTimer(10, null, id);
+            startOnlineTimer(10, () => {
+                if (GameState.phase === 'calling' && GameState.currentPlayer === id && GameState.myRole === 'host') {
+                    let ai = new MasterAI(id, GameState.difficulty, GameState.cardMemory || new MasterMemory());
+                    let result = ai.think('call', GameState);
+                    let doCall = (score) => {
+                        if (GameState.phase !== 'calling' || GameState.currentPlayer !== id) return;
+                        executeCall(id, score);
+                    };
+                    if (result && typeof result.then === 'function') result.then(doCall).catch(() => doCall(0));
+                    else doCall(result);
+                }
+            }, id);
         }
     }
     function renderOnlineCallButtons() {
@@ -2579,7 +2649,7 @@
                         }
                         executePlayCards(id, []);
                     };
-                    if (result && typeof result.then === 'function') result.then(doPlay);
+                    if (result && typeof result.then === 'function') result.then(doPlay).catch(() => doPlay([]));
                     else doPlay(result);
                 }
             }, id);
