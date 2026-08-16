@@ -125,7 +125,7 @@
                 <p class="text-[10px] leading-6 mb-6 text-gray-300">选择模式开始游戏</p>
                 <button onclick="startSingleMode()" class="pixel-btn start-btn bg-green-500 block w-full mb-3">🎮 单机模式</button>
                 <button onclick="showOnlinePanel()" class="pixel-btn start-btn bg-blue-500 block w-full">🌐 联机模式</button>
-                <div class="mt-3 text-[8px] text-gray-500 text-center">v61 · 联机同步防断修复</div>
+                <div class="mt-3 text-[8px] text-gray-500 text-center">v62 · 断线感知+心跳修复</div>
             </div>
         </div>
         <div id="connectPanel" class="connect-panel hidden">
@@ -152,6 +152,7 @@
             </div>
         </div>
     </div>
+    <div id="debugStrip" class="fixed bottom-0 left-0 right-0 z-[70] bg-black/70 text-[8px] text-green-300 px-2 py-0.5 leading-tight font-mono" style="display:none;pointer-events:none"></div>
 </div>
 <script>
     // ======================== 全局设置 ========================
@@ -190,6 +191,9 @@
     let prevLastPlayType = null;
     let prevPassIdx = -1;
     let bottomCardsShown = false;
+    let hbTimer = null;
+    let debugErrCount = 0;
+    let lastSyncInfo = '未收到同步';
 
     function changeSpeed(val) { aiSpeed = val; }
     function toggleSound() { 
@@ -1822,6 +1826,8 @@
         document.getElementById('connStatus').classList.add('hidden');
         document.getElementById('emojiBtn').classList.add('hidden');
         clearTimer();
+        stopHeartbeat();
+        document.getElementById('debugStrip').style.display = 'none';
         if (GameState.mode === 'online' && GameState.peer) {
             GameState.peer.destroy();
             GameState.peer = null;
@@ -2155,6 +2161,10 @@
             if (GameState.cardMemory) GameState.cardMemory.recordPlayerPlay(player, cards);
             displayPlayed(cards);
             speakPlay(cards);
+            if (player !== GameState.myIndex) {
+                document.getElementById('lastPlayer').textContent = getPlayerName(player) + ': ' + describePlay(cards);
+                showToast(getPlayerName(player) + ': ' + describePlay(cards));
+            }
             
             if (player === GameState.myIndex) renderPlayerHand();
             else updateOpponentCount(player);
@@ -2397,6 +2407,9 @@
                     GameState.connections = GameState.connections.filter(c => c !== conn);
                     handleDisconnect(dcIdx);
                 });
+                conn.on('error', () => {
+                    dropConnection(conn);
+                });
                 if (GameState.connections.length === 2 && (!GameState.phase || GameState.phase === 'waiting' || GameState.phase === 'idle')) startOnlineGame();
             });
             GameState.peer.on('error', e => {
@@ -2444,10 +2457,16 @@
             GameState.hostPeerId = target;
             document.getElementById('connectPanel').style.display = 'none';
             document.getElementById('connStatus').innerHTML = '🔗 已连接房主';
+            document.getElementById('debugStrip').style.display = 'block';
+            updateDebugStrip('已连接，等待房主开局...');
             showToast("加入成功，等待房主开局");
         });
         conn.on('close', () => {
             showToast('房主已断开连接，返回菜单');
+            trackTimeout(backToMenu, 2000);
+        });
+        conn.on('error', () => {
+            showToast('连接异常，返回菜单');
             trackTimeout(backToMenu, 2000);
         });
         conn.on('error', () => showToast("连接失败"));
@@ -2465,6 +2484,9 @@
         document.getElementById('startScreen').classList.add('hidden');
         showToast("两人已满，游戏开始");
         GameState.stats.total++;
+        startHeartbeat();
+        updateDebugStrip('👑 房主 · ' + GameState.connections.map(c => 'P' + (c.playerIdx || '?') + '已连').join(' '));
+        document.getElementById('debugStrip').style.display = 'block';
         initGame();
     }
     function copyPeerId() {
@@ -2484,6 +2506,8 @@
         if (data.type === 'action') handleAction({ ...data.action, from: data.from });
         else if (data.type === 'sync' && GameState.myRole !== 'host') handleSync(data.state);
         else if (data.type === 'full') showToast('房间已满，最多3人');
+        else if (data.type === 'ping') { try { conn.send({ type: 'pong' }); } catch (e) {} }
+        else if (data.type === 'pong' && GameState.myRole === 'host') { conn._hbWait = 0; }
         else if (data.type === 'emoji') {
             showToast(`${getPlayerName(data.from)}: ${data.emoji}`);
             if (GameState.myRole === 'host') {
@@ -2492,7 +2516,7 @@
         }
     }
 
-    function broadcastFullState() {
+function broadcastFullState() {
         if (GameState.myRole !== 'host') return;
         let base = {
             phase: GameState.phase, players: GameState.players.map(p=>[...p]),
@@ -2509,15 +2533,57 @@
             let myIdx = conn.playerIdx !== undefined ? conn.playerIdx : GameState.connections.indexOf(conn) + 1;
             let safeState = JSON.parse(JSON.stringify(base));
             safeState.players = base.players.map((p, idx) => {
-                if (idx === myIdx) return [...p]; 
+                if (idx === myIdx) return [...p];
                 return p.map(c => ({ suit: 'back', rank: '?', value: 0, id: 'back_' + Math.random().toString(36).substr(2, 9) }));
             });
             if (safeState.phase === 'calling') {
                 safeState.lordCards = safeState.lordCards.map(c => ({ suit: 'back', rank: '?', value: 0, id: 'back' }));
             }
-            try { conn.send({ type: 'sync', state: { ...safeState, myIndex: myIdx } }); } catch (e) {}
+            safeSend(conn, { type: 'sync', state: { ...safeState, myIndex: myIdx } });
         });
+        updateDebugStrip('👑 房主 · ' + GameState.connections.map(c => {
+            let st = (c._sendFail || 0) > 0 ? '发送失败x' + c._sendFail : '正常';
+            return 'P' + (c.playerIdx || '?') + ':' + st;
+        }).join(' ') + ' · 广播#' + GameState.stateSeq);
     }
+    function updateDebugStrip(text) {
+        let el = document.getElementById('debugStrip');
+        if (el) el.textContent = text;
+    }
+    function safeSend(conn, msg) {
+        if (!conn) return false;
+        try {
+            conn.send(msg);
+            conn._sendFail = 0;
+            return true;
+        } catch (e) {
+            conn._sendFail = (conn._sendFail || 0) + 1;
+            if (GameState.myRole === 'host' && conn._sendFail >= 2 && GameState.phase !== 'gameover') {
+                dropConnection(conn);
+            } else {
+                updateDebugStrip('发送失败 x' + conn._sendFail);
+            }
+            return false;
+        }
+    }
+    function dropConnection(conn) {
+        if (!GameState.connections.includes(conn)) return;
+        let dcIdx = conn.playerIdx !== undefined ? conn.playerIdx : GameState.connections.indexOf(conn) + 1;
+        GameState.connections = GameState.connections.filter(c => c !== conn);
+        handleDisconnect(dcIdx);
+    }
+    function startHeartbeat() {
+        stopHeartbeat();
+        hbTimer = setInterval(() => {
+            if (GameState.myRole !== 'host') return;
+            GameState.connections.forEach(conn => {
+                conn._hbWait = (conn._hbWait || 0) + 1;
+                if (conn._hbWait > 2) { dropConnection(conn); return; }
+                safeSend(conn, { type: 'ping' });
+            });
+        }, 5000);
+    }
+    function stopHeartbeat() { if (hbTimer) { clearInterval(hbTimer); hbTimer = null; } }
     function handleSync(state) {
         GameState.myIndex = state.myIndex !== undefined ? state.myIndex : GameState.myIndex;
         let prevPhase = GameState.phase;
@@ -2551,11 +2617,17 @@
                     bottomCardsShown = false;
                     updateActionLog(state.lastPlayerId, state.lastPlay.cards);
                     speakPlay(state.lastPlay.cards);
-                    document.getElementById('lastPlayer').textContent = '';
+                    if (state.lastPlayerId !== GameState.myIndex) {
+                        let desc = describePlay(state.lastPlay.cards);
+                        document.getElementById('lastPlayer').textContent = getPlayerName(state.lastPlayerId) + ': ' + desc;
+                        showToast(getPlayerName(state.lastPlayerId) + ': ' + desc);
+                    } else {
+                        document.getElementById('lastPlayer').textContent = '';
+                    }
                     if (state.lastPlay.type === CardType.BOMB || state.lastPlay.type === CardType.ROCKET) {
                         playSound('bomb');
                     }
-                } catch (e) { console.error('[同步-新出牌段] 被忽略:', e); }
+                } catch (e) { debugErrCount++; console.error('[同步-新出牌段] 被忽略:', e); }
             }
         }
         try {
@@ -2567,10 +2639,10 @@
             } else if (GameState.lastPassIdx === -1) {
                 prevPassIdx = -1;
             }
-        } catch (e) { console.error('[同步-不出段] 被忽略:', e); }
+        } catch (e) { debugErrCount++; console.error('[同步-不出段] 被忽略:', e); }
         try {
             renderUI();
-        } catch (e) { console.error('[同步-渲染段] 被忽略:', e); }
+        } catch (e) { debugErrCount++; console.error('[同步-渲染段] 被忽略:', e); }
         try {
             if (GameState.phase === 'calling') processOnlineCallTurn();
             else if (GameState.phase === 'playing') {
@@ -2579,7 +2651,10 @@
                 }
                 processOnlinePlay(GameState.currentPlayer);
             }
-        } catch (e) { console.error('[同步-回合推进段] 被忽略:', e); }
+        } catch (e) { debugErrCount++; console.error('[同步-回合推进段] 被忽略:', e); }
+        lastSyncInfo = '同步#' + (state.seq || '?') + ' ' + GameState.phase + ' 出牌者:' + GameState.lastPlayerId + (GameState.lastPlay ? ' ' + GameState.lastPlay.type + ':' + GameState.lastPlay.value : '') + ' 不出:' + GameState.lastPassIdx + (debugErrCount > 0 ? ' 异常x' + debugErrCount : '');
+        document.getElementById('debugStrip').style.display = 'block';
+        updateDebugStrip(lastSyncInfo);
         if (GameState.phase === 'gameover') {
             clearTimer();
             if (prevPhase !== 'gameover') {
@@ -2626,7 +2701,10 @@
 
     function sendAction(action) {
         if (GameState.myRole === 'host') handleAction(action);
-        else if (GameState.connections[0]) GameState.connections[0].send({ type: 'action', action, from: GameState.myIndex });
+        else if (GameState.connections[0]) {
+            try { GameState.connections[0].send({ type: 'action', action, from: GameState.myIndex }); }
+            catch (e) { showToast('连接已断开，无法操作'); }
+        }
     }
     function handleAction(action) {
         let player = action.from !== undefined ? action.from : GameState.myIndex;
