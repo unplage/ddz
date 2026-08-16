@@ -125,7 +125,7 @@
                 <p class="text-[10px] leading-6 mb-6 text-gray-300">选择模式开始游戏</p>
                 <button onclick="startSingleMode()" class="pixel-btn start-btn bg-green-500 block w-full mb-3">🎮 单机模式</button>
                 <button onclick="showOnlinePanel()" class="pixel-btn start-btn bg-blue-500 block w-full">🌐 联机模式</button>
-                <div class="mt-3 text-[8px] text-gray-500 text-center">v64 · AI托管可见+30秒时限</div>
+                <div class="mt-3 text-[8px] text-gray-500 text-center">v65 · 单机无AI托管</div>
             </div>
         </div>
         <div id="connectPanel" class="connect-panel hidden">
@@ -1922,7 +1922,7 @@
         updateCallStatusText(id);
         updateCallBtns();
         if (id === GameState.myIndex) {
-            startOnlineTimer(10, () => { if (GameState.phase === 'calling' && GameState.currentPlayer === GameState.myIndex) callScore(0); }, GameState.myIndex);
+            startOnlineTimer(10, null, GameState.myIndex);
             return;
         }
         startOnlineTimer(3, null, id);
@@ -2042,15 +2042,7 @@
         if (id === GameState.myIndex) {
             if (playBtn) playBtn.disabled = (GameState.selectedCards.size === 0);
             if (passBtn) passBtn.disabled = (!GameState.lastPlay || GameState.lastPlayerId === GameState.myIndex);
-            startOnlineTimer(15, () => {
-                if (GameState.phase === 'playing' && GameState.currentPlayer === GameState.myIndex) {
-                    if (GameState.lastPlay && GameState.lastPlayerId !== GameState.myIndex) passTurn();
-                    else {
-                        let hand = GameState.players[GameState.myIndex];
-                        if (hand && hand.length > 0) { GameState.selectedCards.clear(); GameState.selectedCards.add(hand[0]); playCards(); }
-                    }
-                }
-            }, GameState.myIndex);
+            startOnlineTimer(15, null, GameState.myIndex);
         } else {
             if (playBtn) playBtn.disabled = true; if (passBtn) passBtn.disabled = true;
             GameState.processing = true;
@@ -2898,7 +2890,7 @@ function broadcastFullState() {
             document.getElementById('playerTimerFill').style.width = pct + '%';
             if (remainingSeconds <= 3 && remainingSeconds >= 1 && lastWarnSec !== remainingSeconds && GameState.phase !== 'gameover') {
                 lastWarnSec = remainingSeconds;
-                try { showToast(remainingSeconds + '秒后AI将自动托管！'); } catch (e) {}
+                try { showToast(GameState.mode === 'online' ? remainingSeconds + '秒后AI将自动托管！' : '还剩' + remainingSeconds + '秒'); } catch (e) {}
             }
         } else if (timerPlayerId === leftIdx) {
             document.getElementById('leftTimerFill').style.width = pct + '%';
