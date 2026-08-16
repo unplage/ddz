@@ -125,7 +125,7 @@
                 <p class="text-[10px] leading-6 mb-6 text-gray-300">选择模式开始游戏</p>
                 <button onclick="startSingleMode()" class="pixel-btn start-btn bg-green-500 block w-full mb-3">🎮 单机模式</button>
                 <button onclick="showOnlinePanel()" class="pixel-btn start-btn bg-blue-500 block w-full">🌐 联机模式</button>
-                <div class="mt-3 text-[8px] text-gray-500 text-center">v63 · JSON传输+消息瘦身</div>
+                <div class="mt-3 text-[8px] text-gray-500 text-center">v64 · AI托管可见+30秒时限</div>
             </div>
         </div>
         <div id="connectPanel" class="connect-panel hidden">
@@ -1788,7 +1788,8 @@
         firstPlayMade: false, lordPlayCount: 0, farmerPlayed: false,
         cardMemory: null, aiList: [], history: [], processing: false,
         myRole: null, myIndex: -1, hostPeerId: null,
-        peer: null, connections: [], callScores: [0,0,0], stateSeq: 0
+        peer: null, connections: [], callScores: [0,0,0], stateSeq: 0,
+        autoTakeover: -1
     };
     function addHistory(msg) { GameState.history.unshift(msg); if (GameState.history.length > 5) GameState.history.pop(); document.getElementById('historyLog').innerHTML = '📜 ' + GameState.history.join(' · '); }
 
@@ -1844,6 +1845,7 @@
             if (!selectedVoice) selectedVoice = getChineseVoice();
         }
         GameState.selectedCards.clear();
+        GameState.autoTakeover = -1;
         updateStats();
         GameState.phase = 'dealing';
         GameState.deck = createDeck();
@@ -2345,6 +2347,8 @@
         if (!canBeat(type, GameState.lastPlay)) { showToast('需要大过上一手'); document.getElementById('handContainer').classList.add('ani-shake'); trackTimeout(()=>document.getElementById('handContainer').classList.remove('ani-shake'),300); return; }
         if (GameState.mode === 'online') {
             clearTimer();
+            displayPlayed(cards);
+            document.getElementById('lastPlayer').textContent = '你: ' + describePlay(cards);
             sendAction({ type: 'play', cards });
             let playBtn = document.getElementById('playBtn'); if (playBtn) playBtn.disabled = true;
             GameState.selectedCards.clear();
@@ -2358,7 +2362,11 @@
         if (GameState.processing) { showToast('请等待AI思考...'); return; }
         if (GameState.phase !== 'playing' || GameState.currentPlayer !== GameState.myIndex) return;
         if (!GameState.lastPlay || GameState.lastPlayerId === GameState.myIndex) { showToast('你必须出牌'); return; }
-        if (GameState.mode === 'online') { clearTimer(); sendAction({ type: 'pass' }); }
+        if (GameState.mode === 'online') {
+            clearTimer();
+            document.getElementById('lastPlayer').textContent = '你 不出';
+            sendAction({ type: 'pass' });
+        }
         else executePlayCards(GameState.myIndex, []);
     }
     function resetSelection() { GameState.selectedCards.clear(); renderPlayerHand(); let btn = document.getElementById('playBtn'); if(btn) btn.disabled = true; }
@@ -2520,6 +2528,7 @@
 
 function broadcastFullState() {
         if (GameState.myRole !== 'host') return;
+        let takeOver = GameState.autoTakeover;
         let base = {
             phase: GameState.phase, players: GameState.players.map(p=>[...p]),
             landlord: GameState.landlord, currentPlayer: GameState.currentPlayer,
@@ -2529,8 +2538,10 @@ function broadcastFullState() {
             passCount: GameState.passCount, firstPlayMade: GameState.firstPlayMade,
             lordPlayCount: GameState.lordPlayCount, farmerPlayed: GameState.farmerPlayed,
             callScores: GameState.callScores, lordCards: GameState.lordCards,
+            autoTakeover: takeOver,
             seq: ++GameState.stateSeq
         };
+        GameState.autoTakeover = -1;
         GameState.connections.forEach((conn) => {
             let myIdx = conn.playerIdx !== undefined ? conn.playerIdx : GameState.connections.indexOf(conn) + 1;
             let safeState = JSON.parse(JSON.stringify(base));
@@ -2642,6 +2653,12 @@ function broadcastFullState() {
                 prevPassIdx = -1;
             }
         } catch (e) { debugErrCount++; console.error('[同步-不出段] 被忽略:', e); }
+        if (state.autoTakeover !== undefined && state.autoTakeover >= 0 && state.autoTakeover !== GameState.myIndex) {
+            try {
+                document.getElementById('lastPlayer').textContent = getPlayerName(state.autoTakeover) + ' 超时未操作，AI托管';
+                showToast(getPlayerName(state.autoTakeover) + ' 超时未操作，AI托管');
+            } catch (e) { debugErrCount++; }
+        }
         try {
             renderUI();
         } catch (e) { debugErrCount++; console.error('[同步-渲染段] 被忽略:', e); }
@@ -2781,7 +2798,7 @@ function broadcastFullState() {
             let playBtn = document.getElementById('playBtn'), passBtn = document.getElementById('passBtn');
             if (playBtn) playBtn.disabled = (GameState.selectedCards.size === 0);
             if (passBtn) passBtn.disabled = (!GameState.lastPlay || GameState.lastPlayerId === GameState.myIndex);
-            startOnlineTimer(15, () => {
+            startOnlineTimer(30, () => {
                 if (GameState.phase === 'playing' && GameState.currentPlayer === GameState.myIndex) {
                     if (GameState.lastPlay && GameState.lastPlayerId !== GameState.myIndex) sendAction({ type: 'pass' });
                     else {
@@ -2792,8 +2809,11 @@ function broadcastFullState() {
             }, id);
         } else {
             document.getElementById('controls').innerHTML = '<button class="pixel-btn bg-gray-600" disabled>等待出牌</button>';
-            startOnlineTimer(15, () => {
+            startOnlineTimer(30, () => {
                 if (GameState.currentPlayer === id && GameState.phase === 'playing' && GameState.myRole === 'host') {
+                    GameState.autoTakeover = id;
+                    document.getElementById('lastPlayer').textContent = getPlayerName(id) + ' 超时未操作，AI托管';
+                    showToast(getPlayerName(id) + ' 超时未操作，AI托管');
                     let ai = new MasterAI(id, GameState.difficulty, GameState.cardMemory || new MasterMemory());
                     let result = ai.think('play', GameState);
                     let doPlay = (cards) => {
@@ -2839,14 +2859,16 @@ function broadcastFullState() {
         document.getElementById('coins').textContent = GameState.coins;
     }
 
+    let lastWarnSec = null;
     function startOnlineTimer(seconds, onTimeout, playerId) {
         clearTimer();
+        lastWarnSec = null;
         timerTotalSeconds = seconds; // 记录总时间
         remainingSeconds = seconds;
         timerTarget = onTimeout;
         timerPlayerId = playerId !== undefined ? playerId : GameState.currentPlayer;
         timerInterval = setInterval(() => {
-            if (remainingSeconds <= 0) { clearTimer(); if (timerTarget) timerTarget(); }
+            if (remainingSeconds <= 0) { let cb = timerTarget; clearTimer(); if (cb) cb(); }
             else { remainingSeconds--; updateTimerBars(); }
         }, 1000);
         updateTimerBars();
@@ -2854,6 +2876,7 @@ function broadcastFullState() {
     function clearTimer() {
         if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
         timerTarget = null;
+        lastWarnSec = null;
         document.getElementById('playerTimerBar').style.display = 'none';
         document.getElementById('playerTimerFill').style.width = '0';
         document.getElementById('leftTimerFill').style.width = '0';
@@ -2873,6 +2896,10 @@ function broadcastFullState() {
         if (timerPlayerId === myIdx) {
             document.getElementById('playerTimerBar').style.display = 'block';
             document.getElementById('playerTimerFill').style.width = pct + '%';
+            if (remainingSeconds <= 3 && remainingSeconds >= 1 && lastWarnSec !== remainingSeconds && GameState.phase !== 'gameover') {
+                lastWarnSec = remainingSeconds;
+                try { showToast(remainingSeconds + '秒后AI将自动托管！'); } catch (e) {}
+            }
         } else if (timerPlayerId === leftIdx) {
             document.getElementById('leftTimerFill').style.width = pct + '%';
         } else if (timerPlayerId === rightIdx) {
