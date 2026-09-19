@@ -56,7 +56,6 @@
         .quick-actions { display: flex; gap: 10px; margin-bottom: 8px; justify-content: center; }
         .icon-btn { width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,0.2); border: 2px solid #fff; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: pointer; touch-action: manipulation; }
         .icon-btn:active { background: rgba(255,255,255,0.4); transform: scale(0.9); }
-        .history-log { position: fixed; bottom: 200px; left: 10px; background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 5px; font-size: 8px; z-index: 45; pointer-events: none; max-width: 150px; }
         .scanlines { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.05) 50%, rgba(0,0,0,0.05)); background-size: 100% 4px; pointer-events: none; z-index: 9999; opacity: 0.2; }
         .safe-area-top { padding-top: env(safe-area-inset-top); }
         .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom); }
@@ -103,7 +102,6 @@
         <div class="opponent-top opponent-left"><div class="opponent-avatar bg-blue-600 pixel-border">🧑‍🌾<div class="card-count" id="leftCount">0</div></div><div class="text-[10px] bg-black/50 px-2 py-1 rounded">农民A</div><div class="text-[10px] text-yellow-400 h-4" id="leftStatus"></div><div class="timer-bar w-16"><div id="leftTimerFill" class="timer-fill" style="width:0"></div></div></div>
         <div class="opponent-top opponent-right"><div class="opponent-avatar bg-blue-600 pixel-border">👩‍🌾<div class="card-count" id="rightCount">0</div></div><div class="text-[10px] bg-black/50 px-2 py-1 rounded">农民B</div><div class="text-[10px] text-yellow-400 h-4" id="rightStatus"></div><div class="timer-bar w-16"><div id="rightTimerFill" class="timer-fill" style="width:0"></div></div></div>
         <div class="play-area"><div id="playTable" class="flex flex-col items-center gap-2 w-full"><div class="text-[10px] text-yellow-400 mb-1" id="scoreDisplay">底分: 1</div><div class="flex gap-1 justify-center min-h-[50px] items-center bg-black/20 rounded-lg p-2 w-full" id="playArea"><span class="text-gray-500 text-[10px]">等待出牌...</span></div><div class="text-[10px] text-white/70" id="actionLog"></div><div class="text-[10px] text-white/70" id="lastPlayer"></div></div></div>
-        <div class="history-log" id="historyLog">📜 出牌记录</div>
         <div class="player-area safe-area-bottom">
             <div class="text-yellow-400 text-[11px] retro-text text-center mb-1 h-5" id="playerStatus">点击选牌，拖动排序（桌面端）</div>
             <div class="quick-actions">
@@ -138,7 +136,7 @@
                 <p class="text-[10px] leading-6 mb-6 text-gray-300">选择模式开始游戏</p>
                 <button onclick="startSingleMode()" class="pixel-btn start-btn bg-green-500 block w-full mb-3">🎮 单机模式</button>
                 <button onclick="showOnlinePanel()" class="pixel-btn start-btn bg-blue-500 block w-full">🌐 联机模式</button>
-                <div class="mt-3 text-[8px] text-gray-500 text-center">v66 · 共享AI内核 · 断线重连</div>
+                <div class="mt-3 text-[8px] text-gray-500 text-center">v67 · 共享AI内核 · 断线重连</div>
             </div>
         </div>
         <div id="connectPanel" class="connect-panel hidden">
@@ -456,12 +454,11 @@
         lastPlay: null, lastPlayerId: -1, lastPassIdx: -1, baseScore: 1, selectedCards: new Set(), bombCount: 0,
         difficulty: 'hard', coins: 1000, stats: { total: 0, win: 0 }, passCount: 0,
         firstPlayMade: false, lordPlayCount: 0, farmerPlayed: false,
-        cardMemory: null, aiList: [], history: [], processing: false,
+        cardMemory: null, aiList: [], processing: false,
         myRole: null, myIndex: -1, hostPeerId: null,
         peer: null, connections: [], callScores: [0,0,0], stateSeq: 0,
         autoTakeover: -1
     };
-    function addHistory(msg) { GameState.history.unshift(msg); if (GameState.history.length > 5) GameState.history.pop(); document.getElementById('historyLog').innerHTML = '📜 ' + GameState.history.join(' · '); }
 
     function createDeck() {
         const suits = ['♠','♥','♣','♦'], ranks = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
@@ -537,9 +534,7 @@
         GameState.lastPassIdx = -1;
         GameState.processing = false;
         singleCallCount = 0;
-        GameState.history = [];
         bottomCardsShown = false;
-        addHistory('游戏开始');
         GameState.cardMemory = new MasterMemory();
         GameState.aiList = [null, new MasterAI(1, GameState.difficulty, GameState.cardMemory), new MasterAI(2, GameState.difficulty, GameState.cardMemory)];
         dealCards();
@@ -849,7 +844,6 @@
                 document.getElementById('scoreDisplay').textContent = '底分: '+GameState.baseScore;
                 playSound('bomb');
                 triggerBombFlash(); 
-                addHistory(`💣 炸弹！倍数x2`);
             } else {
                 playSound('play');
             }
@@ -1814,7 +1808,6 @@ function broadcastFullState() {
             title.textContent = '💔 失败'; title.className = 'text-xl retro-text mb-4 text-gray-400 text-center';
             content.innerHTML = `失去 ${actualAmount} 筹码<br>余额：${GameState.coins}${remainingHtml}`;
         }
-        addHistory(isPlayerWin ? '🎉胜利！' : '💔失败');
         GameState.processing = false;
         const playBtn = document.getElementById('playBtn');
         const passBtn = document.getElementById('passBtn');
