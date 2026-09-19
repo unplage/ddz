@@ -2,103 +2,7 @@
 // Load this before the main script in index.html
 
 // ======================== 1. PARAM CONFIG ========================
-const DEFAULT_PARAMS = {
-    version: 3,
-    weights: {
-        playPower: 1.0, isBomb: -30, isRocket: -50,
-        remainTotal: -2, remainSingle: -1.5, remainPair: -2,
-        remainTriple: -4, remainBomb: 15, remainMaxStraight: 3,
-        remainBigCards: 1, hasRocket: 10, isLandlord: 5, isFarmer: 0,
-        opponentHandCount: -1, partnerHandCount: 3, outsideBombCount: -5,
-        isCritical: 40, needBeat: 25
-    },
-    evalCoeffs: {
-        bomb: 50, triple: 10, pair: 3,
-        bothJokers: 50, bigJokerOnly: 18, smallJokerOnly: 10,
-        ace: 9, king: 7, queen: 5, straightLenFactor: 4,
-        singlePenalty: -3, pairExtra: 2, tripleExtra: 3,
-        bombOutsideBonus: 8, position2Bonus: 8, landlordBonus: 20
-    },
-    callThresholds: {
-        easy: { one: 28 },
-        medium: { one: 22, two: 32, three: 42 },
-        hard: { one: 20, two: 30, three: 42, bombBonus: 20, bothJokersBonus: 20, singlePenaltyFactor: 3, positionBonus: 8 },
-        grandmaster: { one: 20, two: 30, three: 42, bombBonus: 20, bothJokersBonus: 20, singlePenaltyFactor: 3, positionBonus: 8 },
-        legendary: null
-    },
-    endgameThresholds: { legendary: 14, grandmaster: 12, hard: 10, medium: 10, easy: 10 },
-    mcts: {
-        ucbC: 1.4,
-        iterations: { legendary: 10000, grandmaster: 3000, hard: 1000, medium: 0, easy: 0 },
-        handLimit: { legendary: 17, grandmaster: 14, hard: 12, medium: 0, easy: 0 },
-        timeLimit: 3000
-    },
-    simulation: {
-        depth: { legendary: 2, grandmaster: 1, hard: 1, medium: 0, easy: 0 },
-        handLimit: { legendary: 17, grandmaster: 15, hard: 15, medium: 0, easy: 0 },
-        dpBonusFactor: { legendary: 0.3 },
-        oppSampleSize: { depth1: 8, depth2: 15 }
-    },
-    randomFactors: { legendary: 0, grandmaster: 0.05, hard: 0.1, medium: 0.3, easy: 0.6 },
-    playHeuristics: {
-        partnerPlay: { handLe3: -200, lastPowerGe40: -80, lastPowerLe20: -50 },
-        lordBeatPartner: { needBeat: 80, handLe4: 120 },
-        farmerAssist: { partnerHandLe2PlayLe2: 60 },
-        farmerBeatSmallSingle: { diffLe3: 40 },
-        needBeatLastHighRemain: { lastPowerGe13: -40 },
-        landlordLeadSingle: { le6: 20 },
-        suppressSingle: { diffLe4: 80, diffLe7: 50, diffLe10: -20, diffGt10: -40 },
-        suppressPair: { diffLe4: 60, diffLe7: 35, diffLe10: -10, diffGt10: -30 },
-        farmerOppLowCards: { handLe6LastPowerLe10: 100 },
-        farmerVsLord: { lastPowerLe8: 40, lastPowerLe11: 20 },
-        landlordLeadLowPower: { powerLe6: 30, powerGe12: -40 },
-        farmerLeadHigh: { powerGe12: -40, power1114PartnerLe4: -60 },
-        bombUrgent: { oppAboutToWin: 150, landlordRemainLe4: 120, remainLe2: 200 },
-        bombStrategic: { fewOutside: 40, rocketBonus: 30 },
-        bombWasted: { lowLastPower: -120, highLastPower: -60, notCritical: -80 },
-        nearWin: { remainLe3: 100 },
-        kickerPenalty: { ge11: -60, ge13: -100, hasSmallerAlternative: -120 },
-        overkill: { singleLe12: -250, pairLe10: -200 }
-    },
-    passScores: {
-        farmerPartnerBase: 200, farmerPartnerHandLe3: -50,
-        lordHandLe2: -999, lordHandLe4: -150, lordHandGt4: 20,
-        landlordFarmerPlayed: -50, landlordFarmerHandLe3: -200,
-        passCountGe1: -40
-    },
-    selectLead: {
-        landlord: {
-            bombPenalty: 100, longGte5: 20, longGte3: 10, pairPlay: 5,
-            straightBonus: 15, straightPairBonus: 10, tripleWithBonus: 8,
-            planeBonus: 12, planeWithBonus: 10,
-            smallValLe6: 15, controlValGe12LenLe2: 30
-        },
-        farmer: {
-            bombPenalty: -200, comboGte3: 10, partnerLow: 50, lordNext: 10
-        }
-    },
-    dpScores: {
-        rocket: 60, bomb: 50, straight: 30, straightLenFactor: 2,
-        straightPair: 25, straightPairLenFactor: 2, tripleWith: 20,
-        plane: 40, planeLenFactor: 3, planeWith: 30,
-        pair: 5, triple: 8, single: -5, completeBonus: 100
-    },
-    heuristicPlayout: {
-        bestProb: 0.80, top2Prob: 0.95, stepLimit: 60
-    },
-    endgame: {
-        maxDepth: 20, bombDepthPenalty: 1
-    },
-        aiTiming: {
-            thinkingSeconds: { legendary: 4, grandmaster: 3, hard: 2, medium: 2, easy: 2 },
-            delayMs: { fast: 300, normal: 700, slow: 1200 }
-        },
-    analysis: {
-        maxGames: -1,
-        deterministic: true,
-        minGameInterval: 2000
-    }
-};
+// DEFAULT_PARAMS 定义已统一到 ai_core.js（浏览器需先加载 ai_core.js，Worker 侧 importScripts 引入）
 
 const ParamConfig = {
     _overrides: null,
@@ -969,6 +873,109 @@ const CorrectionRules = {
     }
 };
 
+// ======================== 6.5 SELF-PLAY EVALUATOR ========================
+// 用中等难度 AI 跑成对自对弈（同一副牌、候选参数分别打地主/农民），
+// 为参数更新提供"不劣于当前"的接受门禁，避免坏更新永久污染参数。
+const SelfPlayEval = {
+    _rngState: 0x2545f491,
+    _rand() { this._rngState = (Math.imul(this._rngState, 1664525) + 1013904223) >>> 0; return this._rngState / 4294967296; },
+    _shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(this._rand() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; },
+    _deal() {
+        const suits = ['♠', '♥', '♣', '♦'];
+        const ranks = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2'];
+        const deck = [];
+        for (const s of suits) for (let i = 0; i < ranks.length; i++) deck.push({ suit: s, rank: ranks[i], value: i, id: s + ranks[i] });
+        deck.push({ suit: 'JOKER', rank: '小王', value: 13, id: 'joker1' }, { suit: 'JOKER', rank: '大王', value: 14, id: 'joker2' });
+        this._shuffle(deck);
+        const hands = [[], [], []];
+        for (let i = 0; i < 51; i++) hands[i % 3].push(deck.pop());
+        const lordCards = deck.slice(0, 3);
+        hands.forEach(h => h.sort((a, b) => a.value - b.value));
+        return { hands, lordCards };
+    },
+    _decide(seat, state, memory, candSeat, cand, base) {
+        const prev = ParamConfig._overrides;
+        ParamConfig._overrides = (seat === candSeat) ? cand : base;
+        try { return new AICore(seat, 'medium', memory).playDecision(state); }
+        finally { ParamConfig._overrides = prev; }
+    },
+    _playDeal(deal, landlord, candSeat, cand, base) {
+        const players = deal.hands.map(p => p.map(c => ({ ...c })));
+        players[landlord].push(...deal.lordCards);
+        players[landlord].sort((a, b) => a.value - b.value);
+        const memory = new MasterMemory();
+        const state = {
+            players, landlord, currentPlayer: landlord, lastPlay: null, lastPlayerId: -1, passCount: 0,
+            baseScore: 1, bombCount: 0, firstPlayMade: false, lordPlayCount: 0, farmerPlayed: false,
+            lordCards: deal.lordCards, callScores: [0, 0, 0], phase: 'playing',
+        };
+        let winner = -1;
+        for (let guard = 0; guard < 300; guard++) {
+            for (let i = 0; i < 3; i++) if (state.players[i].length === 0) { winner = i; break; }
+            if (winner >= 0) break;
+            if (state.passCount >= 2) { state.lastPlay = null; state.lastPlayerId = -1; state.passCount = 0; }
+            const cp = state.currentPlayer;
+            const hand = state.players[cp];
+            const needBeat = state.lastPlay && state.lastPlayerId !== cp;
+            const plays = needBeat ? getAllValidPlays(hand, state.lastPlay) : getAllValidPlays(hand, null);
+            let chosen = null;
+            if (plays.length === 0) chosen = [];
+            else {
+                try { chosen = this._decide(cp, state, memory, candSeat, cand, base); } catch (e) { chosen = null; }
+                if (!Array.isArray(chosen)) chosen = null;
+                if (chosen && chosen.length > 0) {
+                    const ids = new Set(chosen.map(c => c.id));
+                    if (!plays.find(p => p.length === chosen.length && p.every(c => ids.has(c.id)))) chosen = null;
+                } else if (chosen && chosen.length === 0 && !needBeat) chosen = null;
+                if (chosen === null) chosen = plays[0];
+            }
+            if (!chosen || chosen.length === 0) { state.passCount++; }
+            else {
+                const ids = new Set(chosen.map(c => c.id));
+                state.players[cp] = state.players[cp].filter(c => !ids.has(c.id));
+                state.lastPlay = getCardType(chosen);
+                state.lastPlayerId = cp;
+                state.passCount = 0;
+                if (cp === landlord) state.lordPlayCount++; else state.farmerPlayed = true;
+                if (!state.firstPlayMade) state.firstPlayMade = true;
+                memory.recordPlayerPlay(cp, chosen);
+                if (state.players[cp].length === 0) { winner = cp; break; }
+            }
+            state.currentPlayer = (cp + 1) % 3;
+        }
+        if (winner < 0) {
+            let b = 0, bl = 99;
+            for (let i = 0; i < 3; i++) if (state.players[i].length < bl) { bl = state.players[i].length; b = i; }
+            winner = b;
+        }
+        return winner;
+    },
+    // 返回 Promise<胜率>；每局之间让出主线程，避免自对弈验证阻塞界面
+    async evaluate(cand, base, deals, timeBudgetMs) {
+        if (typeof AICore === 'undefined' || typeof getAllValidPlays === 'undefined') return null;
+        const t0 = Date.now();
+        const budget = timeBudgetMs || 6000;
+        let games = 0, wins = 0;
+        const yieldToUI = () => new Promise(r => setTimeout(r, 0));
+        for (let d = 0; d < deals; d++) {
+            const deal = this._deal();
+            let landlord = 0, best = -1e9;
+            for (let i = 0; i < 3; i++) {
+                const s = evaluateHandStrength(deal.hands[i], null, false, i) + this._rand() * 6;
+                if (s > best) { best = s; landlord = i; }
+            }
+            for (const cfg of [{ seat: landlord }, { seat: (landlord + 1) % 3 }]) {
+                const w = this._playDeal(deal, landlord, cfg.seat, cand, base);
+                const candWon = (cfg.seat === landlord) ? (w === landlord) : (w !== landlord);
+                games++; if (candWon) wins++;
+                if (Date.now() - t0 > budget) return games > 0 ? wins / games : null;
+                await yieldToUI();
+            }
+        }
+        return games > 0 ? wins / games : null;
+    }
+};
+
 // ======================== 7. TRUE SKILL LEARNER ========================
 // 基于真实对局 replay + minimax/rollout 最优解搜索的权重学习引擎
 const GodViewLearner = {
@@ -1009,22 +1016,20 @@ const GodViewLearner = {
         }
     },
 
-    _run(game) {
+    async _run(game) {
         try {
             let stats = { checked: 0, corrected: 0, totalDelta: 0 };
             let corrections = this._analyzeGame(game, stats);
             if (corrections.length > 0) {
                 this._saveCorrections(corrections);
-                this._applyAdjustments(corrections, stats);
-            }
-            if (stats.corrected > 0) {
-                ParamConfig._persist();
+                await this._applyAdjustments(corrections, stats); // 内部完成候选构建→自对弈验证→按需持久化
             }
         } catch (e) {
             console.warn('GodViewLearner error:', e.message);
+        } finally {
+            this._running = false;
+            if (this._queue.length > 0) this.learn(this._queue.shift());
         }
-        this._running = false;
-        if (this._queue.length > 0) this.learn(this._queue.shift());
     },
 
     _analyzeGame(game, stats) {
@@ -1111,7 +1116,7 @@ const GodViewLearner = {
         let actualType = actualPlay.length > 0 ? getCardType(actualPlay) : null;
 
         // Step 5: Extract feature vectors for weight update
-        let memory = new MasterMemory();
+        let memory = this._buildMemoryFromState(state);
         let optFeat = null;
         if (bestPlay.length > 0) {
             optFeat = extractPlayFeatures(bestPlay, hand, state.lastPlay, aiRole, memory, state);
@@ -1171,7 +1176,7 @@ const GodViewLearner = {
     },
 
     _solveRollout(state, playerId, allPlays) {
-        let memory = new MasterMemory();
+        let memory = this._buildMemoryFromState(state);
         let role = playerId === state.landlord ? 'landlord' : 'farmer';
         let scored = allPlays.map(p => {
             let feat = extractPlayFeatures(p, state.players[playerId], state.lastPlay, role, memory, state);
@@ -1222,9 +1227,25 @@ const GodViewLearner = {
         return wins / trials;
     },
 
-    _simulateGame(startState, startPlayer, aiPlayerId, lordIdx) {
+    _buildMemoryFromState(state) {
+        const mem = new MasterMemory();
+        // 将已经打出的牌（54 张里不在任何手牌中的牌）标记为可见，使 rollout 的记牌信息与当前局面一致
+        const suits = ['♠', '♥', '♣', '♦'];
+        const ranks = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2'];
+        const inHand = new Set();
+        for (const p of state.players) for (const c of p) inHand.add(c.id);
+        const all = [];
+        for (const suit of suits) for (let i = 0; i < ranks.length; i++) all.push({ suit, rank: ranks[i], value: i, id: suit + ranks[i] });
+        all.push({ suit: 'JOKER', rank: '小王', value: 13, id: 'joker1' });
+        all.push({ suit: 'JOKER', rank: '大王', value: 14, id: 'joker2' });
+        for (const c of all) if (!inHand.has(c.id)) mem.record([c]);
+        return mem;
+    },
+
+    _simulateGame(startState, startPlayer, aiPlayerId, lordIdx, memory) {
         let s = JSON.parse(JSON.stringify(startState));
         let cp = startPlayer;
+        if (!memory) memory = this._buildMemoryFromState(s);
         let limit = 50;
         for (let step = 0; step < limit; step++) {
             for (let i = 0; i < 3; i++) {
@@ -1234,15 +1255,14 @@ const GodViewLearner = {
             }
             if (s.passCount >= 2) { s.lastPlay = null; s.lastPlayerId = -1; s.passCount = 0; }
             let hand = s.players[cp];
-            if (!hand || hand.length === 0) { cp = (cp+1)%3; continue; }
+            if (!hand || hand.length === 0) { cp = (cp + 1) % 3; continue; }
             let needBeat = s.lastPlay && s.lastPlayerId !== cp;
             let plays = needBeat ? getAllValidPlays(hand, s.lastPlay) : getAllValidPlays(hand, null);
-            if (plays.length === 0) { s.passCount++; cp = (cp+1)%3; continue; }
+            if (plays.length === 0) { s.passCount++; cp = (cp + 1) % 3; continue; }
             let role = cp === s.landlord ? 'landlord' : 'farmer';
-            let mem = new MasterMemory();
             let scored = plays.map(p => {
-                let feat = extractPlayFeatures(p, hand, s.lastPlay, role, mem, s);
-                return { play: p, score: scorePlay(feat, role, mem, s, hand) };
+                let feat = extractPlayFeatures(p, hand, s.lastPlay, role, memory, s);
+                return { play: p, score: scorePlay(feat, role, memory, s, hand) };
             });
             scored.sort((a, b) => b.score - a.score);
             let chosen = scored[0].play;
@@ -1250,10 +1270,11 @@ const GodViewLearner = {
                 chosen = scored[1].play;
             }
             s.players[cp] = s.players[cp].filter(c => !chosen.includes(c));
+            memory.recordPlayerPlay(cp, chosen);
             s.lastPlay = getCardType(chosen);
             s.lastPlayerId = cp;
             s.passCount = 0;
-            cp = (cp+1)%3;
+            cp = (cp + 1) % 3;
         }
         return false;
     },
@@ -1286,14 +1307,41 @@ const GodViewLearner = {
         this._statsCache.total += entries.length;
     },
 
-    _applyAdjustments(corrections, stats) {
+    _FEATURE_SCALE: {
+        playPower: 1000, isBomb: 1, isRocket: 1, remainTotal: 20, remainSingle: 8, remainPair: 8,
+        remainTriple: 6, remainBomb: 4, remainMaxStraight: 12, remainBigCards: 8, hasRocket: 1,
+        isLandlord: 1, isFarmer: 1, opponentHandCount: 20, partnerHandCount: 20, outsideBombCount: 8,
+        isCritical: 1, needBeat: 1
+    },
+
+    _effectiveParams() {
+        return ParamConfig._overrides
+            ? JSON.parse(JSON.stringify(ParamConfig._overrides))
+            : JSON.parse(JSON.stringify(ParamConfig._defaults));
+    },
+
+    _defaultWeight(key) {
+        const w = ParamConfig._defaults.weights;
+        return (w && typeof w[key] === 'number') ? w[key] : 0;
+    },
+
+    _setNested(obj, path, value) {
+        const parts = path.split('.');
+        let o = obj;
+        for (let i = 0; i < parts.length - 1; i++) {
+            if (!o[parts[i]] || typeof o[parts[i]] !== 'object') o[parts[i]] = {};
+            o = o[parts[i]];
+        }
+        o[parts[parts.length - 1]] = value;
+    },
+
+    async _applyAdjustments(corrections, stats) {
         let now = Date.now();
         if (now - this._lastAdjustTime < this._ADJUST_INTERVAL) return;
         this._lastAdjustTime = now;
 
-        // 学习率随调整次数衰减
-        let lr = 0.02 / (1 + 0.001 * this._adjustCount);
-        if (lr < 0.001) return;
+        let lr = 0.05 / (1 + 0.002 * this._adjustCount);
+        if (lr < 0.002) return;
 
         let weightDeltas = {};
         let heuristicDeltas = {};
@@ -1301,7 +1349,7 @@ const GodViewLearner = {
         for (let corr of corrections) {
             if (corr.diff < 0.25) continue;
 
-            // --- A: 线性权重更新（成对特征差）---
+            // --- A: 线性权重更新（特征差按量纲归一化，避免 playPower 等大尺度特征主导）---
             if (corr.optFeat && corr.actualFeat) {
                 for (let key of this._WEIGHT_KEYS) {
                     let vOpt = corr.optFeat[key];
@@ -1309,8 +1357,9 @@ const GodViewLearner = {
                     if (vOpt === undefined || vAct === undefined) continue;
                     let delta = vOpt - vAct;
                     if (Math.abs(delta) < 0.01) continue;
+                    let scale = this._FEATURE_SCALE[key] || 10;
                     if (!weightDeltas[key]) weightDeltas[key] = 0;
-                    weightDeltas[key] += delta * lr;
+                    weightDeltas[key] += (delta / scale) * lr;
                 }
             }
 
@@ -1332,30 +1381,48 @@ const GodViewLearner = {
             }
         }
 
-        // 应用权重更新
+        // 构建候选参数（权重按默认值附近的有界窗口裁剪，防止漂移失控）
+        let candidate = this._effectiveParams();
+        let changed = 0;
         for (let key in weightDeltas) {
-            this._adjust('weights.' + key, weightDeltas[key]);
+            let path = 'weights.' + key;
+            let cur = ParamConfig.get(path);
+            if (typeof cur !== 'number') continue;
+            let def = this._defaultWeight(key);
+            let range = Math.max(2, Math.abs(def) * 1.5);
+            let nv = Math.max(def - range, Math.min(def + range, cur + weightDeltas[key]));
+            if (Math.abs(nv - cur) < 0.0005) continue;
+            this._setNested(candidate, path, Math.round(nv * 10000) / 10000);
+            changed++;
         }
-        // 应用启发式更新
         for (let path in heuristicDeltas) {
-            this._adjust(path, heuristicDeltas[path]);
+            let cur = ParamConfig.get(path);
+            if (typeof cur !== 'number') continue;
+            let nv = Math.max(-999, Math.min(999, cur + heuristicDeltas[path]));
+            if (Math.abs(nv - cur) < 0.0005) continue;
+            this._setNested(candidate, path, Math.round(nv * 10000) / 10000);
+            changed++;
+        }
+        if (changed === 0) return;
+
+        // 自我对弈 A/B 验证：候选参数必须不劣于当前参数才采纳（0.45 容忍小样本噪声）
+        let base = this._effectiveParams();
+        let wr = null;
+        try { wr = await SelfPlayEval.evaluate(candidate, base, 6, 5000); } catch (e) { wr = null; }
+        stats.validated = true;
+        stats.validationWinRate = wr;
+        if (wr !== null && wr < 0.45) {
+            this._statsCache.rejected = (this._statsCache.rejected || 0) + 1;
+            this._statsCache.lastValidation = wr;
+            return;
         }
 
-        let totalAdj = Object.keys(weightDeltas).length + Object.keys(heuristicDeltas).length;
-        if (totalAdj > 0) {
-            this._adjustCount++;
-            this._statsCache.totalAdjustments = this._adjustCount;
-        }
-    },
-
-    _adjust(path, delta) {
-        if (Math.abs(delta) < 0.001) return;
-        let current = ParamConfig.get(path);
-        if (current === undefined || current === null) return;
-        let minClamp = -500, maxClamp = 500;
-        if (path.startsWith('passScores')) { minClamp = -999; maxClamp = 999; }
-        let newVal = Math.max(minClamp, Math.min(maxClamp, current + delta));
-        if (Math.abs(newVal - current) > 0.001) ParamConfig.set(path, Math.round(newVal * 10000) / 10000);
+        ParamConfig._overrides = candidate;
+        ParamConfig._persist();
+        this._adjustCount++;
+        this._statsCache.totalAdjustments = this._adjustCount;
+        this._statsCache.accepted = (this._statsCache.accepted || 0) + 1;
+        this._statsCache.lastValidation = wr;
     },
 
     getStats() { return this._statsCache; },
