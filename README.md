@@ -39,7 +39,7 @@ python3 -m http.server 8080
 | `ai_learner.js` | AI 自学习、参数优化、复盘分析、纠错规则引擎、自我对弈验证 |
 | `sw.js` | Service Worker，离线缓存 |
 | `manifest.json` | PWA 清单 |
-| `bench/` | Node 自对弈基准（配对测评 / 求解器探针 / 冒烟测试，不参与部署） |
+| `bench/` | Node 自对弈基准（配对测评 / 求解器探针 / AI 规则探针 `ai_probe` / 联机冒烟，不参与部署） |
 
 无构建工具、无包管理器、无模块系统。纯内联 HTML+CSS+JS，零框架。
 

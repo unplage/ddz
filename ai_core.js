@@ -206,6 +206,7 @@ const DEFAULT_PARAMS = {
         farmerLeadHigh: { powerGe12: -40, power1114PartnerLe4: -60 },
         bombUrgent: { oppAboutToWin: 150, landlordRemainLe4: 120, remainLe2: 200 },
         bombStrategic: { fewOutside: 40, rocketBonus: 30 },
+        bombLead: { bomb: -500, rocket: -1000 },
         bombWasted: { lowLastPower: -120, highLastPower: -60, notCritical: -80 },
         nearWin: { remainLe3: 100 },
         kickerPenalty: { ge11: -60, ge13: -100, hasSmallerAlternative: -120 },
@@ -286,41 +287,23 @@ class MasterMemory {
         }
         return 0;
     }
-    getCriticalAbove(threshold) {
-        for (let v=14; v>=threshold; v--) if (this.getRemain(v) > 0) return v;
-        return null;
-    }
     isBombPossible() {
         for (let v=0; v<=12; v++) if (this.getRemain(v) >= 4) return true;
         return false;
     }
-    getOutsideBombCount() {
+    getRemainingCounts() { return [...this.remain]; }
+    _outsideCount(value, myHand) {
+        let mine = 0;
+        if (myHand) for (let c of myHand) if (c.value === value) mine++;
+        return this.getRemain(value) - mine;
+    }
+    getOutsideBombCount(myHand) {
         let cnt = 0;
-        for (let v=0; v<=12; v++) if (this.getRemain(v) >= 4) cnt++;
+        for (let v=0; v<=12; v++) if (this._outsideCount(v, myHand) >= 4) cnt++;
         return cnt;
     }
-    getOutsideRocketPossible() {
-        return this.getRemain(13) >= 1 && this.getRemain(14) >= 1;
-    }
-    getRemainingCounts() { return [...this.remain]; }
-    getProbOpponentHas(value, minCount, opponentId, myHand) {
-        let outside = this.getRemain(value);
-        if (outside === 0) return 0;
-        let myCount = myHand.filter(c=>c.value===value).length;
-        let totalOutside = outside - myCount;
-        if (totalOutside <= 0) return 0;
-        let oppTotal = opponentId >= 0 ? Math.max(1, 17 - (this.totalCardsPlayed[opponentId] || 0)) : 10;
-        let totalOppCards = 0;
-        for (let i = 0; i < 3; i++) {
-            if (i !== opponentId) totalOppCards += this.totalCardsPlayed[i] || 0;
-        }
-        let otherPlayersRemaining = Math.max(1, 34 - totalOppCards);
-        let shareRatio = Math.min(1, oppTotal / otherPlayersRemaining);
-        return Math.min(1, totalOutside / (totalOutside + 1)) * shareRatio;
-    }
-    getOpponentHandSize(playerId, isLandlord) {
-        let base = isLandlord ? 20 : 17;
-        return Math.max(0, base - (this.totalCardsPlayed[playerId] || 0));
+    getOutsideRocketPossible(myHand) {
+        return this._outsideCount(13, myHand) >= 1 && this._outsideCount(14, myHand) >= 1;
     }
 }
 
@@ -422,7 +405,7 @@ function extractPlayFeatures(play, hand, lastPlay, role, memory, state) {
         opponentHandCount: state.lastPlayerId !== -1 ? state.players[state.lastPlayerId].length : 0,
         nextPlayerHandCount: state.players[nextPlayerId] ? state.players[nextPlayerId].length : 17,
         partnerHandCount: (role === 'farmer' && partnerId !== -1) ? (state.players[partnerId]?.length || 0) : 0,
-        outsideBombCount: memory.getOutsideBombCount(), isCritical: (newHand.length <= 3) ? 1 : 0,
+        outsideBombCount: memory.getOutsideBombCount(hand), isCritical: (newHand.length <= 3) ? 1 : 0,
         needBeat: needBeat ? 1 : 0, lastPlayType: lastPlay ? lastPlay.type : 'none', lastPlayPower: lastPlay ? lastPlay.value : 0,
         playType: playType.type, kickerValue, mainValue: playType.value
     };
@@ -570,7 +553,7 @@ function scorePlay(features, role, memory, state, playerHand) {
     }
     if (features.isFarmer && features.partnerHandCount <= 2 && features.playLength <= 2) score += ph.farmerAssist.partnerHandLe2PlayLe2;
     if (features.isFarmer && features.needBeat && features.lastPlayType === 'single' && features.lastPlayPower <= 10 && features.playPower > features.lastPlayPower && features.playPower - features.lastPlayPower <= 3) score += ph.farmerBeatSmallSingle.diffLe3;
-    if (features.needBeat && features.lastPlayPower >= 13 && features.remainTotal > 3 && features.playPower > features.lastPlayPower && features.playPower < 14) score += ph.needBeatLastHighRemain.lastPowerGe13;
+    if (features.needBeat && features.lastPlayPower >= 13 && features.remainTotal > 3 && features.playPower > features.lastPlayPower) score += ph.needBeatLastHighRemain.lastPowerGe13;
     if (features.isLandlord && !features.needBeat && features.playLength === 1 && features.playPower <= 6) score += ph.landlordLeadSingle.le6;
     if (features.needBeat && features.lastPlayType === 'single' && features.lastPlayPower <= 8 && features.playPower > features.lastPlayPower) {
         let efficiency = features.playPower - features.lastPlayPower;
@@ -579,8 +562,8 @@ function scorePlay(features, role, memory, state, playerHand) {
         else if (efficiency <= 10) score += ph.suppressSingle.diffLe10;
         else score += ph.suppressSingle.diffGt10;
     }
-    if (features.needBeat && features.lastPlayType === 'pair' && features.lastPlayPower <= 8 && features.playPower > features.lastPlayPower) {
-        let efficiency = features.playPower - features.lastPlayPower;
+    if (features.needBeat && features.lastPlayType === 'pair' && features.lastPlayPower <= 8 && features.playPower - 20 > features.lastPlayPower) {
+        let efficiency = features.playPower - 20 - features.lastPlayPower;
         if (efficiency <= 4) score += ph.suppressPair.diffLe4;
         else if (efficiency <= 7) score += ph.suppressPair.diffLe7;
         else if (efficiency <= 10) score += ph.suppressPair.diffLe10;
@@ -597,7 +580,7 @@ function scorePlay(features, role, memory, state, playerHand) {
     if (features.needBeat && features.nextPlayerHandCount <= 2 && !features.isBomb && !features.isRocket) {
         if (features.playPower <= 12) score -= 200;
     }
-    if (!features.needBeat && features.isLandlord && features.playLength <= 2) {
+    if (!features.needBeat && features.isLandlord && features.playLength <= 2 && features.playType === CardType.SINGLE) {
         if (features.playPower <= 6) score += ph.landlordLeadLowPower.powerLe6;
         if (features.playPower >= 12) score += ph.landlordLeadLowPower.powerGe12;
     }
@@ -616,8 +599,9 @@ function scorePlay(features, role, memory, state, playerHand) {
     if ((features.isBomb || features.isRocket) && oppAboutToWin) score += ph.bombUrgent.oppAboutToWin;
     if ((features.isBomb || features.isRocket) && role === 'landlord' && features.remainTotal <= 4) score += ph.bombUrgent.landlordRemainLe4;
     if ((features.isBomb || features.isRocket) && features.remainTotal <= 2) score += ph.bombUrgent.remainLe2;
-    if (features.isBomb && memory.getOutsideBombCount() <= 1 && !memory.getOutsideRocketPossible()) score += ph.bombStrategic.fewOutside;
+    if (features.isBomb && memory.getOutsideBombCount(playerHand) <= 1 && !memory.getOutsideRocketPossible(playerHand)) score += ph.bombStrategic.fewOutside;
     if (features.isRocket) score += ph.bombStrategic.rocketBonus;
+    if (!features.needBeat && (features.isBomb || features.isRocket)) score += features.isRocket ? ph.bombLead.rocket : ph.bombLead.bomb;
     if ((features.isBomb || features.isRocket) && features.needBeat && features.remainTotal > 5) {
         if (features.lastPlayPower < 40) score += ph.bombWasted.lowLastPower;
         if (features.lastPlayPower >= 40 && features.remainTotal > 8) score += ph.bombWasted.highLastPower;
@@ -719,63 +703,36 @@ function simulateOpponentResponseV2(play, hand, state, role, memory, depth = 1) 
             let sameRole = (pid === s.landlord) === (myRoleId === 'landlord');
             return sameRole ? str : -str;
         }
-        let next = (pid + 1) % 3;
-        if (s.players[next].length === 0) {
-            let wRole = next === s.landlord ? 'landlord' : 'farmer';
-            return wRole === myRoleId ? 100 : -100;
-        }
-        let samples = sampleOpponentPlays(s.players[next], s.lastPlay);
+        let samples = sampleOpponentPlays(s.players[pid], s.lastPlay);
         if (!samples) {
             s.passCount++;
             if (s.passCount >= 2) { s.lastPlay = null; s.lastPlayerId = -1; s.passCount = 0; }
-            return evalState(s, (next+1)%3, myRoleId, depth-1);
+            return evalState(s, (pid + 1) % 3, myRoleId, depth - 1);
         }
         let total = 0, count = 0;
         for (let sp of samples) {
             let s2 = JSON.parse(JSON.stringify(s));
             let spIds = new Set(sp.map(c => c.id));
-            s2.players[next] = s2.players[next].filter(c => !spIds.has(c.id));
+            s2.players[pid] = s2.players[pid].filter(c => !spIds.has(c.id));
             s2.lastPlay = getCardType(sp);
-            s2.lastPlayerId = next;
+            s2.lastPlayerId = pid;
             s2.passCount = 0;
-            if (s2.players[next].length === 0) {
-                let wRole = next === s2.landlord ? 'landlord' : 'farmer';
+            if (s2.players[pid].length === 0) {
+                let wRole = pid === s2.landlord ? 'landlord' : 'farmer';
                 total += wRole === myRoleId ? 100 : -100;
-                count++;
             } else {
-                let third = (next+1)%3;
-                let thirdSamples = sampleOpponentPlays(s2.players[third], s2.lastPlay);
-                if (!thirdSamples) {
-                    s2.passCount++;
-                    total += evalState(s2, (third+1)%3, myRoleId, depth-1);
-                    count++;
-                } else {
-                    for (let tp of thirdSamples) {
-                        let s3 = JSON.parse(JSON.stringify(s2));
-                        let tpIds = new Set(tp.map(c => c.id));
-                        s3.players[third] = s3.players[third].filter(c => !tpIds.has(c.id));
-                        s3.lastPlay = getCardType(tp);
-                        s3.lastPlayerId = third;
-                        s3.passCount = 0;
-                        if (s3.players[third].length === 0) {
-                            let wRole = third === s3.landlord ? 'landlord' : 'farmer';
-                            total += wRole === myRoleId ? 100 : -100;
-                        } else {
-                            total += evalState(s3, (third+1)%3, myRoleId, depth-1);
-                        }
-                        count++;
-                    }
-                }
+                total += evalState(s2, (pid + 1) % 3, myRoleId, depth - 1);
             }
+            count++;
         }
         return count > 0 ? total / count : 0;
     }
     let score = 0;
     let opponentPlays = getAllValidPlays(newState.players[nextPlayer], lastType);
     if (!opponentPlays || opponentPlays.length === 0) {
-        let thirdPlayer = (nextPlayer + 1) % 3;
-        if (newState.players[thirdPlayer].length === 0) score = -100;
-        else score = evalState(newState, thirdPlayer, role, depth);
+        newState.passCount = (newState.passCount || 0) + 1;
+        if (newState.passCount >= 2) { newState.lastPlay = null; newState.lastPlayerId = -1; newState.passCount = 0; }
+        score = evalState(newState, (nextPlayer + 1) % 3, role, depth);
     } else {
         let n = depth >= 2 ? 15 : 8;
         let samples = opponentPlays.length <= n ? opponentPlays :
@@ -787,6 +744,7 @@ function simulateOpponentResponseV2(play, hand, state, role, memory, depth = 1) 
             s2.players[nextPlayer] = s2.players[nextPlayer].filter(c => !spIds.has(c.id));
             s2.lastPlay = getCardType(sp);
             s2.lastPlayerId = nextPlayer;
+            s2.passCount = 0;
             if (s2.players[nextPlayer].length === 0) {
                 let wRole = nextPlayer === s2.landlord ? 'landlord' : 'farmer';
                 weighted += wRole === role ? 100 : -100;
@@ -1136,6 +1094,7 @@ function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministi
             if (s.players[i].length === 0) return mySide.includes(i);
         }
         if (s.passCount >= 2) { s.lastPlay = null; s.lastPlayerId = -1; s.passCount = 0; }
+        s.currentPlayer = cp;
         let hand = s.players[cp];
         if (hand.length === 0) { cp = (cp + 1) % 3; continue; }
         let needBeat = s.lastPlay && s.lastPlayerId !== cp;
@@ -1325,7 +1284,7 @@ class AICore {
                 let wins = 0, trials = 200;
                 for (let i = 0; i < trials; i++) {
                     let rs = JSON.parse(JSON.stringify(sim));
-                    if (heuristicPlayoutWithMode(rs, (this.id + 1) % 3, this.id, this.memory, false)) wins++;
+                    if (heuristicPlayoutWithMode(rs, this.id, this.id, this.memory, false)) wins++;
                 }
                 let winRate = wins / trials;
                 let ev = winRate * bid - (1 - winRate) * bid * 2;
@@ -1342,7 +1301,6 @@ class AICore {
         strength += bombBonus;
         let singlePenalty = Object.values(cnt).filter(c => c === 1).length * (ct.singlePenaltyFactor || 3);
         strength -= singlePenalty;
-        if (this.id === 2) strength += (ct.positionBonus || 8);
         if (strength > (ct.three || 42) && curr < 3) return 3;
         if (strength > (ct.two || 30) && curr < 2) return 2;
         if (strength > (ct.one || 20) && curr < 1) return 1;
@@ -1524,7 +1482,7 @@ class AICore {
             let isLordNext = (state.landlord + 1) % 3 === this.id;
             let partnerCount = state.players[partnerId !== null ? partnerId : -1]?.length || 20;
             let lordCards = state.players[state.landlord] ? state.players[state.landlord].length : 20;
-            if (partnerCount <= 2 && lordCards > 2) {
+            if (isLordNext && partnerCount <= 2 && lordCards > 2) {
                 return plays.reduce((a,b) => getPlayPower(a) < getPlayPower(b) ? a : b);
             }
             if (lordCards <= 2) {

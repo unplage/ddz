@@ -7,7 +7,10 @@ const BASE_PATH = self.location.pathname.replace(/[^/]+$/, '');
 // 构建带项目标识的缓存名称，避免多项目冲突
 // 例如 '/ddz/' -> 'pwa-cache-ddz-v1'
 const PROJECT_PREFIX = `pwa-cache${BASE_PATH.replace(/\//g, '-').replace(/--/g, '-').replace(/(^-|-$)/g, '')}`;
-const CACHE_NAME = `${PROJECT_PREFIX}v67`;
+const CACHE_VERSION = 'v68';
+const CACHE_NAME = `${PROJECT_PREFIX}${CACHE_VERSION}`;
+// 用于 activate 阶段的精确清理：只删本项目自己的缓存（根路径下 'pwa-cache' 是其它子项目的前缀，不能用 startsWith）
+const OWN_CACHE_RE = new RegExp('^' + PROJECT_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + 'v\\d+$');
 
 // 预缓存资源列表（全部使用相对于当前 sw.js 的路径）
 const PRECACHE_URLS = [
@@ -58,7 +61,7 @@ self.addEventListener('activate', (event) => {
       return Promise.all(
         cacheNames.map(cache => {
           // 只删除以 'pwa-cache-' 开头且不属于当前项目的缓存
-          if (cache.startsWith(PROJECT_PREFIX) && cache !== CACHE_NAME) {
+          if (cache !== CACHE_NAME && OWN_CACHE_RE.test(cache)) {
             console.log('[SW] 删除旧缓存:', cache);
             return caches.delete(cache);
           }
@@ -81,7 +84,11 @@ self.addEventListener('fetch', (event) => {
   // ----- 5.1 导航请求（HTML）：网络优先，失败回退缓存 -----
   if (isNavigateRequest(request)) {
     event.respondWith(
-      fetch(request)
+      // 弱网/切网时 fetch 可能挂数十秒才失败；4s 内立刻回退缓存，避免联机切网瞬间长时间白屏
+      Promise.race([
+        fetch(request),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('nav-timeout')), 4000)),
+      ])
         .then(networkResponse => {
           if (networkResponse && networkResponse.status === 200) {
             const responseClone = networkResponse.clone();
