@@ -72,12 +72,21 @@ self.onmessage = function (e) {
                 break;
             }
             case 'think': {
+                // Worker 内也标定一次设备速度（移动端自动缩小时间预算）
+                try { if (typeof calibrateAiSpeed === 'function') calibrateAiSpeed(); } catch (e) {}
                 let state = msg.state;
                 let memory = rebuildMemory(msg.memory);
                 let ai = new AICore(msg.playerId, msg.difficulty, memory);
                 let result;
                 if (msg.phase === 'mcts') {
-                    let mctsResult = mctsSearch(state, msg.playerId, msg.iterations, memory);
+                    // 盲 MCTS：对手手牌不可见，跨可能世界聚合
+                    let belief = new HandBelief(msg.playerId, state, memory);
+                    let mctsResult = mctsSearchBlind(state, msg.playerId, belief, {
+                        iterations: msg.iterations,
+                        worlds: 3,
+                        timeBudgetMs: 1000,
+                        memory
+                    });
                     result = mctsResult ? { play: mctsResult.play, visits: mctsResult.visits, wins: mctsResult.wins } : { play: [], visits: 0, wins: 0 };
                 } else {
                     result = ai.think(msg.phase, state);
@@ -98,7 +107,13 @@ self.onmessage = function (e) {
             case 'mcts': {
                 let state = msg.state;
                 let memory = rebuildMemory(msg.memory);
-                let mctsResult = mctsSearch(state, msg.playerId, msg.iterations, memory);
+                let belief = new HandBelief(msg.playerId, state, memory);
+                let mctsResult = mctsSearchBlind(state, msg.playerId, belief, {
+                    iterations: msg.iterations,
+                    worlds: 3,
+                    timeBudgetMs: 1000,
+                    memory
+                });
                 self.postMessage({
                     taskId: msg.taskId,
                     play: mctsResult ? mctsResult.play : [],
@@ -110,13 +125,16 @@ self.onmessage = function (e) {
             case 'simulate': {
                 let memory = rebuildMemory(msg.memory);
                 let state = msg.state;
+                // 盲模拟：对手手牌不可见 → 在可能世界里推演应对
+                let belief = new HandBelief(msg.playerId, state, memory);
+                let worlds = belief.sampleWorlds(Math.max(1, msg.worlds || 2));
                 let scores = msg.plays.map(play => {
                     let cards = play.map(c => ({ ...c }));
                     let features = extractPlayFeatures(cards, msg.hand, state.lastPlay, msg.role, memory, state);
                     let baseScore = scorePlay(features, msg.role, memory, state, msg.hand);
                     let simScore = 0;
                     if (msg.depth > 0) {
-                        simScore = simulateOpponentResponseV2(cards, msg.hand, state, msg.role, memory, msg.depth);
+                        simScore = simulateOpponentResponseBlind(cards, msg.hand, state, msg.role, memory, belief, msg.depth, worlds);
                     }
                     return baseScore + simScore * 0.4;
                 });

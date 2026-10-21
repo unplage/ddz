@@ -9,6 +9,19 @@ const fast = {
     mcts: { iterations: { legendary: 200, grandmaster: 200, hard: 200 }, timeLimit: 500 },
     simulation: { depth: { legendary: 1, grandmaster: 1, hard: 1 } },
     endgame: { timeBudgetMs: 200, nodeLimit: 30000 },
+    blind: {
+        worlds: {
+            endgame: { easy: 1, medium: 1, hard: 2, grandmaster: 2, legendary: 2 },
+            mcts: { easy: 0, medium: 0, hard: 1, grandmaster: 1, legendary: 1 },
+            sim: { easy: 0, medium: 0, hard: 1, grandmaster: 1, legendary: 1 },
+            call: { easy: 0, medium: 0, hard: 0, grandmaster: 0, legendary: 2 }
+        },
+        endgameTimeBudgetMs: { easy: 60, medium: 80, hard: 150, grandmaster: 150, legendary: 150 },
+        mctsTimeBudgetMs: { easy: 0, medium: 0, hard: 150, grandmaster: 150, legendary: 150 },
+        beatProbSamples: { easy: 0, medium: 0, hard: 2, grandmaster: 2, legendary: 2 },
+        beatProbCandidates: { easy: 0, medium: 0, hard: 2, grandmaster: 2, legendary: 2 },
+        callTrials: { legendary: 10 }
+    },
 };
 const mod = loadAI('ai_core.js', SYMBOLS, makeRng(7), fast);
 const { AICore, MasterMemory, getAllValidPlays, getCardType } = mod;

@@ -7,7 +7,7 @@ const BASE_PATH = self.location.pathname.replace(/[^/]+$/, '');
 // 构建带项目标识的缓存名称，避免多项目冲突
 // 例如 '/ddz/' -> 'pwa-cache-ddz-v1'
 const PROJECT_PREFIX = `pwa-cache${BASE_PATH.replace(/\//g, '-').replace(/--/g, '-').replace(/(^-|-$)/g, '')}`;
-const CACHE_VERSION = 'v68';
+const CACHE_VERSION = 'v69';
 const CACHE_NAME = `${PROJECT_PREFIX}${CACHE_VERSION}`;
 // 用于 activate 阶段的精确清理：只删本项目自己的缓存（根路径下 'pwa-cache' 是其它子项目的前缀，不能用 startsWith）
 const OWN_CACHE_RE = new RegExp('^' + PROJECT_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + 'v\\d+$');
@@ -20,8 +20,13 @@ const PRECACHE_URLS = [
   `${BASE_PATH}ai_learner.js`,
   `${BASE_PATH}ai_worker.js`,
   `${BASE_PATH}manifest.json`,
+  `${BASE_PATH}icons/favicon.png`,
+  `${BASE_PATH}icons/apple-touch-icon.png`,
+  `${BASE_PATH}icons/icon-64.png`,
+  `${BASE_PATH}icons/icon-128.png`,
   `${BASE_PATH}icons/icon-192.png`,
   `${BASE_PATH}icons/icon-512.png`,
+  `${BASE_PATH}icons/icon-512-maskable.png`,
 ];
 
 // 静态资源扩展名（用于判断是否缓存优先）

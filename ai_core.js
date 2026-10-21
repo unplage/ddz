@@ -176,6 +176,34 @@ const DEFAULT_PARAMS = {
         legendary: null
     },
     endgameThresholds: { legendary: 17, grandmaster: 17, hard: 15, medium: 9, easy: 7 },
+    // ======================== 隐藏信息（Blind AI）参数 ========================
+    // 公平性：AI 只使用公开信息（自己手牌 / 各家张数 / 已出牌 / 地主底牌），
+    // 对手手牌一律不可见；搜索在采样出的"可能世界"里进行并跨世界聚合。
+    blind: {
+        enabled: true,
+        // 各环节采样多少个可能世界（0 = 关闭该环节的世界采样）
+        worlds: {
+            endgame: { easy: 2, medium: 3, hard: 6, grandmaster: 8, legendary: 10 },
+            mcts:    { easy: 0, medium: 0, hard: 3, grandmaster: 5, legendary: 6 },
+            sim:     { easy: 0, medium: 0, hard: 2, grandmaster: 3, legendary: 4 },
+            call:    { easy: 0, medium: 0, hard: 0, grandmaster: 0, legendary: 6 }
+        },
+        // 单次决策的时间预算（毫秒）
+        endgameTimeBudgetMs: { easy: 120, medium: 200, hard: 700, grandmaster: 1100, legendary: 1500 },
+        mctsTimeBudgetMs:    { easy: 0, medium: 0, hard: 900, grandmaster: 1400, legendary: 1900 },
+        // 跨世界聚合的鲁棒系数：均值 − λ×标准差（压制"赌对手手牌"的走法）
+        robustness: 0.25,
+        // 领出被压概率的估计（样本数 / 权重 / 候选数）
+        beatProbSamples:   { easy: 0, medium: 0, hard: 6, grandmaster: 8, legendary: 10 },
+        beatProbWeight:    { easy: 0, medium: 0, hard: 10, grandmaster: 14, legendary: 18 },
+        beatProbCandidates:{ easy: 0, medium: 0, hard: 4, grandmaster: 4, legendary: 5 },
+        // 对手握炸概率的修正权重（对手很可能有炸时，降低我方用炸的优先级）
+        bombRiskWeight: { easy: 0, medium: 0, hard: 40, grandmaster: 40, legendary: 40 },
+        // 盲 MCTS 是否使用启发式根先验（1 = 开启）
+        mctsRootPriors: { easy: 0, medium: 0, hard: 1, grandmaster: 1, legendary: 1 },
+        // 叫分模拟次数（传奇难度）
+        callTrials: { legendary: 60 }
+    },
     mcts: {
         ucbC: 1.4,
         rootBranch: 12, branch: 8,
@@ -304,6 +332,179 @@ class MasterMemory {
     }
     getOutsideRocketPossible(myHand) {
         return this._outsideCount(13, myHand) >= 1 && this._outsideCount(14, myHand) >= 1;
+    }
+}
+
+// ======================== 设备速度标定（移动端自动降档） ========================
+// 用 AI 自身最典型的计算（枚举一手 17 张牌的所有合法出牌）做一次轻量基准，
+// 估算当前设备相对基准机的速度；AI 的时间预算按此比例缩放：
+//   桌面 ≈ 1.0（预算不变）；中端手机 ≈ 0.4；低端机 ≈ 0.15
+// 目的：移动端既不会因为算太久而"卡住不动"，也不会被看门狗判超时而丢弃着法。
+const AI_PERF = { factor: 1, calibrated: false, refMs: 0 };
+function _calibrationHand() {
+    // 固定的一手 17 张牌（覆盖各种牌型），保证每次标定的负载一致
+    const defs = [['3',0],['3',0],['4',1],['5',2],['6',3],['7',4],['8',5],['9',6],['10',7],
+        ['J',8],['Q',9],['K',10],['A',11],['2',12],['2',12],['小王',13],['大王',14]];
+    const suits = ['♠','♥','♣','♦'];
+    return defs.map((d, i) => ({ suit: suits[i % 4], rank: d[0], value: d[1], id: suits[i % 4] + d[0] + (i > 13 ? '_' + i : '') }));
+}
+function calibrateAiSpeed(force) {
+    if (AI_PERF.calibrated && !force) return AI_PERF.factor;
+    AI_PERF.calibrated = true;
+    try {
+        const hand = _calibrationHand();
+        getAllValidPlays(hand, null);            // 预热（JIT）
+        let t0 = Date.now();
+        for (let i = 0; i < 3; i++) getAllValidPlays(hand, null);
+        let dt = Date.now() - t0;
+        if (!(dt > 0)) dt = 1;
+        AI_PERF.refMs = dt;
+        const REF = 8;                            // 基准机（常见桌面）约 8ms
+        AI_PERF.factor = Math.max(0.12, Math.min(1, REF / dt));
+    } catch (e) { AI_PERF.factor = 1; }
+    return AI_PERF.factor;
+}
+
+// ======================== 隐藏信息信念模型（Blind AI：对手手牌不可见） ========================
+// 公平性红线：AI 只能使用【公开信息】——自己的手牌、各家剩余张数、已打出的牌、地主底牌。
+// 对手手牌的具体牌面一律不可见；所有搜索在"由公开信息采样出的可能世界"里进行，并跨世界聚合估值。
+// 新增搜索代码请统一走 HandBelief.sampleWorld()，禁止直接读取 state.players[对手]。
+function allCards() {
+    if (allCards._cache) return allCards._cache;
+    const suits = ['♠', '♥', '♣', '♦'];
+    const ranks = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2'];
+    const cards = [];
+    for (const s of suits) for (let i = 0; i < ranks.length; i++) cards.push({ suit: s, rank: ranks[i], value: i, id: s + ranks[i] });
+    cards.push({ suit: 'JOKER', rank: '小王', value: 13, id: 'joker1' });
+    cards.push({ suit: 'JOKER', rank: '大王', value: 14, id: 'joker2' });
+    allCards._cache = cards;
+    return cards;
+}
+function comb(n, k) { if (k < 0 || k > n || n < 0) return 0; let r = 1; for (let i = 1; i <= k; i++) r = r * (n - k + i) / i; return r; }
+
+class HandBelief {
+    constructor(playerId, state, memory) {
+        this.playerId = playerId;
+        this.landlord = (state.landlord === undefined || state.landlord === null || state.landlord < 0) ? -1 : state.landlord;
+        this.phase = state.phase || 'playing';
+        const rawPlayers = state.players || [];
+        const ownRaw = Array.isArray(rawPlayers[playerId]) ? rawPlayers[playerId] : [];
+        this.ownHand = ownRaw.map(c => ({ ...c }));
+        this.counts = [0, 0, 0];
+        for (let i = 0; i < 3; i++) {
+            const p = rawPlayers[i];
+            // 对手可能以三种形式出现：完整手牌数组 / 张数 / {length:n}（Worker 侧的瘦身形式）
+            if (Array.isArray(p)) this.counts[i] = p.length;
+            else if (typeof p === 'number') this.counts[i] = p;
+            else if (p && typeof p.length === 'number') this.counts[i] = p.length;
+            else this.counts[i] = 0;
+        }
+
+        const ownIds = new Set(this.ownHand.map(c => c.id));
+        // 地主底牌是公开信息：地主确定后所有人都知道这 3 张在谁手里
+        this.knownByPlayer = [[], [], []];
+        const lordCards = state.lordCards || [];
+        const lordHasBottom = this.landlord >= 0 && (this.phase === 'playing' || this.counts[this.landlord] >= 20);
+        if (lordHasBottom) for (const c of lordCards) if (!ownIds.has(c.id)) this.knownByPlayer[this.landlord].push({ ...c });
+        const knownIds = new Set();
+        for (const list of this.knownByPlayer) for (const c of list) knownIds.add(c.id);
+
+        // 已打出的牌 = 公开信息（记牌器）
+        const playedSet = new Set();
+        if (memory && memory.seen) for (const id of memory.seen) if (!ownIds.has(id) && !knownIds.has(id)) playedSet.add(id);
+
+        // 张数校准：自己手牌 + 对手手牌(按张数) + 已打出的牌 <= 54
+        let oppNeed = 0;
+        for (let i = 0; i < 3; i++) if (i !== playerId) oppNeed += this.counts[i];
+        const maxPlayed = Math.max(0, 54 - this.ownHand.length - oppNeed);
+        if (playedSet.size > maxPlayed) {
+            const arr = [...playedSet];
+            while (arr.length > maxPlayed) playedSet.delete(arr.pop());
+        }
+        // 未见牌池（对手手牌 + 未分配的底牌）
+        const pool = [];
+        for (const c of allCards()) {
+            if (ownIds.has(c.id) || knownIds.has(c.id) || playedSet.has(c.id)) continue;
+            pool.push(c);
+        }
+        // 牌池不足以填满对手手牌（记牌器滞后）→ 从"已打出"里回收，保持世界划分完整
+        if (pool.length < oppNeed) {
+            const arr = [...playedSet];
+            while (pool.length < oppNeed && arr.length > 0) {
+                const id = arr.pop();
+                playedSet.delete(id);
+                const card = allCards().find(c => c.id === id);
+                if (card) pool.push(card);
+            }
+        }
+        this.playedIds = playedSet;
+        this.pool = pool;
+        this.poolCounts = new Array(15).fill(0);
+        for (const c of pool) this.poolCounts[c.value]++;
+    }
+
+    // 采样一个"可能世界"：自己的手牌精确，对手手牌按未见牌池随机分配（保留地主底牌归属）
+    sampleWorld() {
+        const pool = this.pool.slice();
+        for (let i = pool.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            const t = pool[i]; pool[i] = pool[j]; pool[j] = t;
+        }
+        const players = [[], [], []];
+        players[this.playerId] = this.ownHand.map(c => ({ ...c }));
+        let ptr = 0;
+        for (let i = 0; i < 3; i++) {
+            if (i === this.playerId) continue;
+            const hand = this.knownByPlayer[i].map(c => ({ ...c }));
+            const need = this.counts[i] - hand.length;
+            for (let k = 0; k < need && ptr < pool.length; k++) hand.push(pool[ptr++]);
+            hand.sort((a, b) => a.value - b.value);
+            players[i] = hand;
+        }
+        return players;
+    }
+    sampleWorlds(n) {
+        const out = [];
+        for (let i = 0; i < n; i++) out.push(this.sampleWorld());
+        return out;
+    }
+    // 某对手握有炸弹的概率（超几何分布，只依赖未见牌池）
+    bombRiskFor(oppId) {
+        const n = this.counts[oppId] || 0;
+        const poolSize = this.pool.length;
+        if (n < 4 || poolSize < 4) return 0;
+        const denom = comb(poolSize, 4);
+        if (!denom) return 0;
+        let risk = 0;
+        for (let v = 0; v <= 12; v++) {
+            if (this.poolCounts[v] < 4) continue;
+            risk += comb(n, 4) / denom;
+        }
+        return Math.min(1, risk);
+    }
+    // 某对手握有王炸的概率
+    rocketRiskFor(oppId) {
+        const n = this.counts[oppId] || 0;
+        const poolSize = this.pool.length;
+        if (n < 2 || poolSize < 2) return 0;
+        if (this.poolCounts[13] < 1 || this.poolCounts[14] < 1) return 0;
+        return Math.min(1, comb(n, 2) / comb(poolSize, 2));
+    }
+    // 估计某对手能压过 play 的概率（采样其可能手牌 → 检查是否存在合法应对）
+    beatProbability(play, oppId, samples) {
+        const type = getCardType(play);
+        if (!type) return 0;
+        let hit = 0, total = 0;
+        for (let s = 0; s < samples; s++) {
+            const players = this.sampleWorld();
+            const hand = players[oppId];
+            total++;
+            if (!hand || hand.length === 0) continue;
+            let can = false;
+            try { can = getAllValidPlays(hand, type).length > 0; } catch (e) { can = false; }
+            if (can) hit++;
+        }
+        return total > 0 ? hit / total : 0;
     }
 }
 
@@ -759,6 +960,22 @@ function simulateOpponentResponseV2(play, hand, state, role, memory, depth = 1) 
     return score;
 }
 
+// ======================== 盲对手响应模拟（多世界聚合） ========================
+// 对手手牌不可见 → 在采样出的可能世界里分别推演对手应对，再取期望。
+function simulateOpponentResponseBlind(play, hand, state, role, memory, belief, depth = 1, worlds) {
+    const list = (worlds && worlds.length) ? worlds : belief.sampleWorlds(1);
+    if (!list.length) return 0;
+    let total = 0, count = 0;
+    for (const worldPlayers of list) {
+        const ws = Object.assign({}, state, { players: worldPlayers.map(p => p.map(c => ({ ...c }))) });
+        try {
+            total += simulateOpponentResponseV2(play, hand, ws, role, memory, depth);
+            count++;
+        } catch (e) { /* 单个世界失败不影响整体 */ }
+    }
+    return count > 0 ? total / count : 0;
+}
+
 // ======================== DP 手牌分解 ========================
 function decomposeHandDP(hand) {
     if (!hand || hand.length === 0) return { plays: [], score: 0 };
@@ -847,6 +1064,15 @@ function decomposeHandDP(hand) {
     let remaining = hand.filter(c => !plays.flat().includes(c));
     for (let c of remaining) plays.push([c]);
     return { plays, score: bestScore };
+}
+
+// 轻量状态拷贝：牌对象只读，因此只需复制手牌数组与顶层字段，
+// 比 JSON 深拷贝快一个数量级（MCTS 每次 expand / 每次 playout 都要拷贝状态）。
+function _cloneStateShallow(state) {
+    const s = {};
+    for (const k in state) s[k] = state[k];
+    s.players = (state.players || []).map(p => (Array.isArray(p) ? p.slice() : p));
+    return s;
 }
 
 // ======================== 残局求解（快速 make/undo + 置换表 + 时间预算） ========================
@@ -1053,6 +1279,93 @@ function solveEndgame(state, playerId, opts) {
     return plays[0] || null;
 }
 
+// ======================== 盲残局求解（多世界聚合，公平且稳健） ========================
+// 思路：对手手牌不可见 → 从公开信息采样 K 个"可能世界"，每个世界内部做精确 minimax，
+//      跨世界用「均值 − 鲁棒系数×标准差」聚合，压制"赌对了对手手牌"的过拟合走法。
+function solveEndgameBlind(state, playerId, belief, opts) {
+    opts = opts || {};
+    const hand = state.players[playerId];
+    if (!hand || hand.length === 0) return null;
+    const totalCards = state.players.reduce((s, p) => s + p.length, 0);
+    const maxTotal = opts.maxTotalCards !== undefined ? opts.maxTotalCards : (cfg('endgame.maxTotalCards') || 20);
+    const maxHand = opts.maxHandCards !== undefined ? opts.maxHandCards : (cfg('endgame.maxHandCards') || 17);
+    if (hand.length > maxHand || totalCards > maxTotal) return null;
+
+    const needBeat = state.lastPlay && state.lastPlayerId !== playerId;
+    const plays = needBeat ? getAllValidPlays(hand, state.lastPlay) : getAllValidPlays(hand, null);
+    if (!plays.length) return null;
+    const options = plays.slice();
+    if (needBeat) options.push(null); // 过牌
+
+    const role = (playerId === state.landlord) ? 'landlord' : 'farmer';
+    const mem = opts.memory || null;
+    const scoreOf = (p) => {
+        if (p === null) return computePassScore(role, state);
+        try {
+            const f = extractPlayFeatures(p, hand, state.lastPlay, role, mem, state);
+            return scorePlay(f, role, mem, state, hand);
+        } catch (e) { return 0; }
+    };
+    options.sort((a, b) => scoreOf(b) - scoreOf(a));
+
+    const worlds = Math.max(1, opts.worlds || 4);
+    const budgetMs = opts.timeBudgetMs !== undefined ? opts.timeBudgetMs : (cfg('blind.endgameTimeBudgetMs') || 600);
+    const deadline = Date.now() + budgetMs;
+    const nodeLimit = opts.nodeLimit || (cfg('endgame.nodeLimit') || 200000);
+    const perWorldLimit = Math.max(20000, Math.floor(nodeLimit / worlds));
+    const lambda = opts.robustness !== undefined ? opts.robustness : (cfg('blind.robustness') !== undefined ? cfg('blind.robustness') : 0.25);
+    const mySide = (playerId === state.landlord) ? [playerId] : [0, 1, 2].filter(i => i !== state.landlord);
+    const keyOf = (p) => (p === null) ? 'pass' : p.map(c => c.id).sort().join(',');
+    const agg = new Map();
+
+    for (let w = 0; w < worlds; w++) {
+        if (Date.now() > deadline) break;
+        const worldPlayers = belief.sampleWorld();
+        const hands = worldPlayers.map(p => [...p]);
+        const ctx = {
+            nodes: 0, limit: perWorldLimit, tt: new Map(), truncated: false,
+            deadline: Math.min(deadline, Date.now() + Math.max(60, Math.floor(budgetMs / worlds)))
+        };
+        // 候选按启发式顺序评估：预算被截断时，优先保证"最想出的那几手"在每个世界里都被评估到
+        for (const p of options) {
+            if (Date.now() > deadline) break;
+            let val;
+            if (p === null) {
+                val = endgameMinimax(hands, (playerId + 1) % 3, state.lastPlay, state.lastPlayerId, (state.passCount || 0) + 1, mySide, ctx, -Infinity, Infinity);
+            } else {
+                _applyPlay(hands, playerId, p);
+                if (hands[playerId].length === 0) {
+                    // 自己的手牌是精确信息 → 打空手牌必胜，与对手手牌无关
+                    _undoPlay(hands, playerId, p);
+                    return p;
+                }
+                val = endgameMinimax(hands, (playerId + 1) % 3, getCardType(p), playerId, 0, mySide, ctx, -Infinity, Infinity);
+                _undoPlay(hands, playerId, p);
+            }
+            if (ctx.truncated) break;  // 该世界评估不可靠 → 丢弃剩余候选
+            const key = keyOf(p);
+            let e = agg.get(key);
+            if (!e) { e = { sum: 0, sq: 0, n: 0, play: p }; agg.set(key, e); }
+            e.sum += val; e.sq += val * val; e.n++;
+        }
+    }
+
+    // 只在"被同样多的世界评估过"的候选之间比较，避免样本数不同造成的偏差
+    let maxN = 0;
+    for (const e of agg.values()) maxN = Math.max(maxN, e.n);
+    let bestPlay = null, bestScore = -Infinity, found = false;
+    for (const e of agg.values()) {
+        if (e.n === 0 || e.n < maxN) continue;
+        const mean = e.sum / e.n;
+        const variance = Math.max(0, e.sq / e.n - mean * mean);
+        const score = mean - lambda * Math.sqrt(variance);
+        if (score > bestScore) { bestScore = score; bestPlay = e.play; found = true; }
+    }
+    if (found) return bestPlay;
+    for (const o of options) if (o && o.length > 0) return o;
+    return plays[0] || null;
+}
+
 // 精确计算某一步的胜率价值（god-view），供离线评估/自博弈使用。play=null 表示过牌。
 function endgameValue(state, playerId, play, opts) {
     opts = opts || {};
@@ -1085,7 +1398,7 @@ function endgameStats() {
 
 // ======================== 启发式模拟 ========================
 function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministic) {
-    let s = JSON.parse(JSON.stringify(state));
+    let s = _cloneStateShallow(state);
     let cp = startPlayer;
     let mySide = (myId === s.landlord) ? [myId] : [0,1,2].filter(i => i !== s.landlord);
     let hp = cfg('heuristicPlayout');
@@ -1123,8 +1436,10 @@ function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministi
 }
 
 // ======================== MCTS ========================
+// 根节点先验的虚拟访问次数：让启发式评分靠前的走法先被采样，提升有限迭代下的搜索效率
+const MCTS_PRIOR_VISITS = 8;
 class MCTSNode {
-    constructor(state, play, playerToMove, myId) {
+    constructor(state, play, playerToMove, myId, priors) {
         this.state = state;
         this.play = play;
         this.playerToMove = playerToMove;
@@ -1134,6 +1449,7 @@ class MCTSNode {
         this.parent = null;
         this.children = [];
         this.unexpandedPlays = null;
+        this.priors = priors || null;
     }
     get isTerminal() {
         return this.state.phase === 'gameover' ||
@@ -1187,7 +1503,7 @@ class MCTSNode {
             this.unexpandedPlays = plays.reverse();
         }
         let play = this.unexpandedPlays.pop();
-        let newState = JSON.parse(JSON.stringify(this.state));
+        let newState = _cloneStateShallow(this.state);
         let nextPlayer = (this.playerToMove + 1) % 3;
         if (!play || play.length === 0) {
             newState.passCount = (newState.passCount || 0) + 1;
@@ -1201,6 +1517,15 @@ class MCTSNode {
         }
         if (newState.passCount >= 2) { newState.lastPlay = null; newState.lastPlayerId = -1; newState.passCount = 0; }
         let child = new MCTSNode(newState, play || [], nextPlayer, this.myId);
+        // 根节点先验：虚拟访问把搜索预算导向启发式评分靠前的走法
+        if (this.parent === null && this.priors) {
+            const key = (play && play.length) ? play.map(c => c.id).sort().join(',') : 'pass';
+            const prior = this.priors.get(key);
+            if (prior !== undefined && prior !== null) {
+                child.visits += MCTS_PRIOR_VISITS;
+                child.wins += MCTS_PRIOR_VISITS * prior;
+            }
+        }
         child.parent = this;
         this.children.push(child);
         return child;
@@ -1222,11 +1547,11 @@ class MCTSNode {
     }
 }
 
-function mctsSearch(state, playerId, iterations, memory, timeLimit) {
+function mctsSearch(state, playerId, iterations, memory, timeLimit, opts) {
     if (timeLimit === undefined) timeLimit = cfg('mcts.timeLimit');
     let hand = state.players[playerId];
     if (!hand || hand.length === 0) return null;
-    let root = new MCTSNode(JSON.parse(JSON.stringify(state)), null, state.currentPlayer, playerId);
+    let root = new MCTSNode(_cloneStateShallow(state), null, state.currentPlayer, playerId, (opts && opts.rootPriors) || null);
     let startTime = Date.now();
     for (let i = 0; i < iterations; i++) {
         if (Date.now() - startTime > timeLimit) break;
@@ -1245,17 +1570,135 @@ function mctsSearch(state, playerId, iterations, memory, timeLimit) {
     let best = root.bestChild();
     if (best && Array.isArray(best.play)) {
         let needBeatRoot = state.lastPlay && state.lastPlayerId !== playerId;
-        if (best.play.length > 0 || needBeatRoot) return best;
+        if (best.play.length > 0 || needBeatRoot) {
+            if (opts && opts.collectStats) return Object.assign({}, best, { stats: _collectRootStats(root) });
+            return best;
+        }
     }
     let needBeat = state.lastPlay && state.lastPlayerId !== playerId;
     let fallbackPlays = needBeat ? getAllValidPlays(hand, state.lastPlay) : getAllValidPlays(hand, null);
     if (fallbackPlays.length > 0) return { play: fallbackPlays[0], visits: 0, wins: 0 };
     return null;
 }
+// 汇总 MCTS 根节点各走法的访问/胜出统计（供多世界聚合使用）
+function _collectRootStats(root) {
+    const stats = new Map();
+    for (const child of root.children) {
+        const key = (child.play && child.play.length) ? child.play.map(c => c.id).sort().join(',') : 'pass';
+        let e = stats.get(key);
+        if (!e) { e = { visits: 0, wins: 0, play: child.play || [] }; stats.set(key, e); }
+        e.visits += child.visits;
+        e.wins += child.wins;
+    }
+    return stats;
+}
+
+// ======================== 盲 MCTS（多世界聚合） ========================
+// 根节点先验：用启发式评分给每个根走法一个虚拟胜率（只依赖公开信息）
+function _buildRootPriors(state, playerId, memory) {
+    const hand = state.players[playerId];
+    if (!hand || !hand.length) return null;
+    const role = (playerId === state.landlord) ? 'landlord' : 'farmer';
+    const needBeat = state.lastPlay && state.lastPlayerId !== playerId;
+    const plays = needBeat ? getAllValidPlays(hand, state.lastPlay) : getAllValidPlays(hand, null);
+    if (!plays.length) return null;
+    const scored = plays.map(p => {
+        let s = 0;
+        try {
+            const f = extractPlayFeatures(p, hand, state.lastPlay, role, memory, state);
+            s = scorePlay(f, role, memory, state, hand);
+        } catch (e) { s = 0; }
+        return { p, s };
+    }).sort((a, b) => b.s - a.s);
+    const map = new Map();
+    const K = Math.min(scored.length, 12);
+    for (let i = 0; i < scored.length; i++) {
+        const key = scored[i].p.map(c => c.id).sort().join(',');
+        const rank = Math.min(i, K);
+        map.set(key, 0.5 + 0.3 * (1 - rank / Math.max(1, K)));
+    }
+    if (needBeat) map.set('pass', 0.35);
+    return map;
+}
+
+function mctsSearchBlind(state, playerId, belief, opts) {
+    opts = opts || {};
+    const hand = state.players[playerId];
+    if (!hand || hand.length === 0) return null;
+    const worlds = Math.max(1, opts.worlds || 3);
+    const iterations = opts.iterations || cfg('mcts.iterations.hard') || 600;
+    const budgetMs = opts.timeBudgetMs !== undefined ? opts.timeBudgetMs : (cfg('blind.mctsTimeBudgetMs.hard') || 1000);
+    const deadline = Date.now() + budgetMs;
+    const memory = opts.memory || null;
+    const priors = (cfg('blind.mctsRootPriors.' + (opts.difficulty || 'hard')) !== 0) ? _buildRootPriors(state, playerId, memory) : null;
+    const lambda = opts.robustness !== undefined ? opts.robustness : (cfg('blind.robustness') !== undefined ? cfg('blind.robustness') : 0.25);
+    const agg = new Map();
+    for (let w = 0; w < worlds; w++) {
+        if (Date.now() > deadline) break;
+        const worldPlayers = belief.sampleWorld();
+        const worldState = Object.assign({}, state, { players: worldPlayers });
+        const remainMs = deadline - Date.now();
+        const perWorldTime = Math.max(50, Math.floor(remainMs / Math.max(1, worlds - w)));
+        let res = null;
+        try {
+            res = mctsSearch(worldState, playerId, iterations, memory, perWorldTime, { collectStats: true, rootPriors: priors });
+        } catch (e) { res = null; }
+        if (!res || !res.stats) continue;
+        for (const [key, e] of res.stats) {
+            let a = agg.get(key);
+            if (!a) { a = { visits: 0, wins: 0, play: e.play, rates: [] }; agg.set(key, a); }
+            a.visits += e.visits;
+            a.wins += e.wins;
+            if (e.visits > 0) a.rates.push(e.wins / e.visits);   // 每个世界里的胜率，用于稳健聚合
+        }
+    }
+    if (!agg.size) return null;
+    let maxVisits = 0;
+    for (const a of agg.values()) maxVisits = Math.max(maxVisits, a.visits);
+    // 跨世界稳健聚合：均值 − λ×标准差（压制"赌对了某个世界"的走法），并对覆盖世界数不足的走法降权
+    let best = null, bestScore = -Infinity, bestRate = 0;
+    for (const a of agg.values()) {
+        if (a.visits < Math.max(1, maxVisits * 0.1)) continue;
+        const rate = a.visits > 0 ? a.wins / a.visits : 0;
+        let score = rate;
+        if (a.rates.length > 0) {
+            const mean = a.rates.reduce((x, y) => x + y, 0) / a.rates.length;
+            let std = 0;
+            if (a.rates.length > 1) {
+                const variance = a.rates.reduce((x, y) => x + (y - mean) * (y - mean), 0) / a.rates.length;
+                std = Math.sqrt(variance);
+            }
+            const coverage = a.rates.length / Math.max(1, worlds);
+            score = mean - lambda * std - 0.15 * (1 - coverage);
+        }
+        if (score > bestScore) { bestScore = score; best = a.play; bestRate = rate; }
+    }
+    if (!best) {
+        let top = null;
+        for (const a of agg.values()) if (!top || a.visits > top.visits) top = a;
+        best = top ? top.play : null;
+        bestRate = top && top.visits > 0 ? top.wins / top.visits : 0;
+    }
+    if (!best) return null;
+    const needBeatRoot = state.lastPlay && state.lastPlayerId !== playerId;
+    if (best.length > 0 || needBeatRoot) return { play: best, visits: maxVisits, wins: Math.round(bestRate * maxVisits) };
+    return null;
+}
 
 // ======================== 迷你 AI 引擎 (纯计算版) ========================
 class AICore {
-    constructor(id, difficulty, memory) { this.id = id; this.difficulty = difficulty; this.memory = memory; }
+    constructor(id, difficulty, memory) {
+        this.id = id; this.difficulty = difficulty; this.memory = memory;
+        // 额外预算缩放：主线程同步决策时由调用方调小（避免卡住 UI）
+        this.budgetScale = 1;
+    }
+    // 有效时间预算 = 标称值 × 设备速度系数 × 额外缩放（移动端自动降档）
+    budgetMs(path, fallback) {
+        let base = cfg(path);
+        if (base === undefined || base === null) base = fallback || 0;
+        const scale = (AI_PERF.factor || 1) * (this.budgetScale || 1);
+        return Math.max(50, Math.round(base * scale));
+    }
     think(phase, state) {
         if (phase === 'call') return this.callDecision(state);
         return this.playDecision(state);
@@ -1275,15 +1718,29 @@ class AICore {
             return 0;
         }
         if (this.difficulty === 'legendary') {
+            // 叫分评估同样走"信念世界"，不窥视他人手牌
+            const worlds = Math.max(1, cfg('blind.worlds.call.' + this.difficulty) || 6);
+            const trials = cfg('blind.callTrials.' + this.difficulty) || 60;
+            const lordCards = state.lordCards || [];
+            // 以"我当地主 + 拿底牌"为前提构造信念（底牌归属公开，因此从对手牌池中剔除）
+            const callState = Object.assign({}, state, {
+                landlord: this.id,
+                phase: 'playing',
+                players: state.players.map((p, i) => (i === this.id ? [...p, ...lordCards] : p))
+            });
+            const belief = new HandBelief(this.id, callState, this.memory);
             let bestBid = 0, bestEV = -999;
             for (let bid = 1; bid <= 3; bid++) {
                 if (bid <= curr) continue;
-                let sim = JSON.parse(JSON.stringify(state));
-                sim.players[this.id] = [...sim.players[this.id], ...sim.lordCards];
-                sim.landlord = this.id;
-                let wins = 0, trials = 200;
+                let wins = 0;
                 for (let i = 0; i < trials; i++) {
-                    let rs = JSON.parse(JSON.stringify(sim));
+                    const worldPlayers = belief.sampleWorld();
+                    // worldPlayers[this.id] 已经是"我当地主 + 拿底牌"后的 20 张手牌
+                    const rs = Object.assign({}, state, {
+                        landlord: this.id,
+                        phase: 'playing',
+                        players: worldPlayers.map(p => p.map(c => ({ ...c })))
+                    });
                     if (heuristicPlayoutWithMode(rs, this.id, this.id, this.memory, false)) wins++;
                 }
                 let winRate = wins / trials;
@@ -1318,15 +1775,26 @@ class AICore {
             }
         }
         let endgameLimit = cfg('endgameThresholds.' + this.difficulty) || 10;
+        // ===== 公平性：只使用公开信息建立信念模型（对手手牌不可见） =====
+        const belief = new HandBelief(this.id, state, this.memory);
         if (hand.length <= endgameLimit) {
-            let egResult = solveEndgame(state, this.id);
+            let egResult = solveEndgameBlind(state, this.id, belief, {
+                worlds: cfg('blind.worlds.endgame.' + this.difficulty) || 4,
+                timeBudgetMs: this.budgetMs('blind.endgameTimeBudgetMs.' + this.difficulty, 600),
+                memory: this.memory
+            });
             if (egResult !== null) return egResult;
         }
         let mctsLimit = cfg('mcts.handLimit.' + this.difficulty) || 0;
         let mctsIters = cfg('mcts.iterations.' + this.difficulty) || 0;
         if ((this.difficulty === 'hard' || this.difficulty === 'grandmaster' || this.difficulty === 'legendary') && hand.length <= mctsLimit) {
-            let mctsTime = cfg('mcts.timeLimitByDiff.' + this.difficulty) || cfg('mcts.timeLimit');
-            let mctsResult = mctsSearch(state, this.id, mctsIters, this.memory, mctsTime);
+            let mctsResult = mctsSearchBlind(state, this.id, belief, {
+                iterations: mctsIters,
+                worlds: cfg('blind.worlds.mcts.' + this.difficulty) || 3,
+                timeBudgetMs: this.budgetMs('blind.mctsTimeBudgetMs.' + this.difficulty, 1000),
+                memory: this.memory,
+                difficulty: this.difficulty
+            });
             if (mctsResult && Array.isArray(mctsResult.play)) {
                 let needBeatMcts = lastPlay && state.lastPlayerId !== this.id;
                 if (mctsResult.play.length > 0 || needBeatMcts) return mctsResult.play;
@@ -1341,10 +1809,13 @@ class AICore {
         }
         if (!lastPlay || state.lastPlayerId === this.id) {
             let allPlays = getAllValidPlays(hand, null);
-            return this.selectLeadSmart(allPlays, role, hand, state, partnerId);
+            let lead = this.selectLeadSmart(allPlays, role, hand, state, partnerId);
+            return this.refineLeadByBelief(lead, allPlays, hand, state, role, belief);
         }
         let beatable = getAllValidPlays(hand, lastPlay);
         if (beatable.length === 0) return [];
+        let simWorlds = Math.max(1, cfg('blind.worlds.sim.' + this.difficulty) || 3);
+        let simCache = null;
         let scored = beatable.map(play => {
             let features = extractPlayFeatures(play, hand, lastPlay, role, this.memory, state);
             let baseScore = scorePlay(features, role, this.memory, state, hand);
@@ -1353,7 +1824,8 @@ class AICore {
             let simHandLimit = cfg('simulation.handLimit.' + this.difficulty) || 0;
             let dpBonusFactor = cfg('simulation.dpBonusFactor.' + this.difficulty) || 0;
             if (simDepth > 0 && hand.length <= simHandLimit) {
-                simScore = simulateOpponentResponseV2(play, hand, state, role, this.memory, simDepth);
+                if (!simCache) simCache = belief.sampleWorlds(simWorlds);
+                simScore = simulateOpponentResponseBlind(play, hand, state, role, this.memory, belief, simDepth, simCache);
                 if (dpBonusFactor > 0) {
                     let newHand = hand.filter(c => !play.includes(c));
                     let dpPlan = decomposeHandDP(newHand);
@@ -1364,6 +1836,19 @@ class AICore {
         });
         let passScore = computePassScore(role, state);
         scored.push({ play: [], score: passScore });
+        // ===== 信念修正：对手很可能握着炸弹/王炸时，我方炸弹多半会被压穿 → 降低用炸优先级 =====
+        const bombRiskWeight = cfg('blind.bombRiskWeight.' + this.difficulty) || 0;
+        if (bombRiskWeight > 0 && state.lastPlayerId >= 0 && state.lastPlayerId !== this.id) {
+            let risk = Math.min(1, belief.bombRiskFor(state.lastPlayerId) + belief.rocketRiskFor(state.lastPlayerId));
+            if (risk > 0.05) {
+                for (const s of scored) {
+                    if (!s.play || s.play.length === 0) continue;
+                    const t = getCardType(s.play);
+                    if (!t) continue;
+                    if (t.type === CardType.BOMB || t.type === CardType.ROCKET) s.score -= risk * bombRiskWeight;
+                }
+            }
+        }
         scored.sort((a,b)=>b.score - a.score);
         if (scored[0].play.length === 0) return [];
         let isCritical = (hand.length <= 3) || (this.memory.getMaxOutside(hand) <= 12 && hand.length <= 5);
@@ -1399,6 +1884,37 @@ class AICore {
             };
         } catch (e) { this.lastReasoning = null; }
         return chosenPlay;
+    }
+    // 用信念模型评估"领出被压概率"，在启发式首选与更稳的领出之间做小幅取舍
+    // （只用公开信息：对手可能持有的牌来自未见牌池采样）
+    refineLeadByBelief(preferred, allPlays, hand, state, role, belief) {
+        if (!preferred || !allPlays || !allPlays.length) return preferred;
+        const samples = cfg('blind.beatProbSamples.' + this.difficulty) || 0;
+        const weight = cfg('blind.beatProbWeight.' + this.difficulty) || 0;
+        if (!samples || !weight) return preferred;
+        const nextId = (state.currentPlayer + 1) % 3;
+        // 只有"下一个是对手"时，被压才有代价（自己人或队友接牌不算损失）
+        const nextIsOpp = (role === 'landlord') ? (nextId !== state.landlord) : (nextId === state.landlord);
+        if (!nextIsOpp) return preferred;
+        const maxCands = cfg('blind.beatProbCandidates.' + this.difficulty) || 4;
+        const cands = [preferred];
+        const keyOf = (p) => p.map(c => c.id).sort().join(',');
+        const prefKey = keyOf(preferred);
+        for (const p of allPlays) {
+            if (cands.length >= maxCands) break;
+            if (p.length !== preferred.length) continue;
+            if (keyOf(p) === prefKey) continue;
+            cands.push(p);
+        }
+        let best = preferred, bestScore = -Infinity;
+        for (const p of cands) {
+            let prob = 0;
+            try { prob = belief.beatProbability(p, nextId, samples); } catch (e) { prob = 0; }
+            // 期望"能守住这手牌"的收益；非首选候选有轻微惩罚，保证不推翻手牌结构启发式
+            let s = (1 - prob) * weight - (p === preferred ? 0 : 2);
+            if (s > bestScore) { bestScore = s; best = p; }
+        }
+        return best || preferred;
     }
     selectLeadSmart(plays, role, hand, state, partnerId) {
         if (plays.length === 0) return [];

@@ -11,6 +11,11 @@
     <script src="ai_core.js"></script>
     <script src="ai_learner.js"></script>
     <link rel="manifest" href="./manifest.json">
+    <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon.png">
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+    <meta name="theme-color" content="#1a1a2e">
+    <meta name="description" content="像素风格斗地主：单机公平 AI 对战 + P2P 联机，离线可玩">
     <style>
         * { image-rendering: pixelated; font-family: 'Press Start 2P', cursive; -webkit-tap-highlight-color: transparent; touch-action: manipulation; box-sizing: border-box; }
         body { background-color: #1a1a2e; background-image: radial-gradient(circle at 50% 50%, #16213e 0%, #0f0f23 100%); overflow: hidden; position: fixed; width: 100%; height: 100%; overscroll-behavior: none; }
@@ -138,7 +143,7 @@
                 <p class="text-[10px] leading-6 mb-6 text-gray-300">选择模式开始游戏</p>
                 <button onclick="startSingleMode()" class="pixel-btn start-btn bg-green-500 block w-full mb-3">🎮 单机模式</button>
                 <button onclick="showOnlinePanel()" class="pixel-btn start-btn bg-blue-500 block w-full">🌐 联机模式</button>
-                <div class="mt-3 text-[8px] text-gray-500 text-center">v68 · 共享AI内核 · 断线重连</div>
+                <div class="mt-3 text-[8px] text-gray-500 text-center">v69 · 公平AI · 断线重连</div>
             </div>
         </div>
         <div id="connectPanel" class="connect-panel hidden">
@@ -463,7 +468,14 @@
                     if (res !== undefined && res !== null) return res;
                 } catch (e) { /* 回退本地内核 */ }
             }
-            return (phase === 'call') ? this.callDecision(state) : this.playDecision(state);
+            // 主线程同步决策：预算砍半，避免移动端无 Worker 时界面"卡住不动"
+            this._syncCore();
+            this.core.budgetScale = 0.5;
+            try {
+                return (phase === 'call') ? this.callDecision(state) : this.playDecision(state);
+            } finally {
+                this.core.budgetScale = 1;
+            }
         }
         callDecision(state) {
             this._syncCore();
@@ -822,11 +834,18 @@
             GameState.processing = true;
             let delay = getAIDelay();
             let at = ParamConfig.get('aiTiming');
-            let thinkingTime = at.thinkingSeconds[GameState.difficulty] || 3;
+            // 思考看门狗：取"标称思考上限"与"实际可用预算(已按设备速度缩放)+余量"的较大者。
+            // 固定 3/5 秒在移动端偏紧，会把 AI 算好的着法当超时丢弃（等价于强制过牌）。
+            let speedFactor = (typeof AI_PERF !== 'undefined' && AI_PERF.factor) ? AI_PERF.factor : 1;
+            let budgetSec = ((cfg('blind.endgameTimeBudgetMs.' + GameState.difficulty) || 0) +
+                              (cfg('blind.mctsTimeBudgetMs.' + GameState.difficulty) || 0)) / 1000 * speedFactor;
+            let thinkingTime = Math.max(at.thinkingSeconds[GameState.difficulty] || 3, budgetSec + 2.5);
+            setAiThinkingHint(id, true);
             // 倒计时必须覆盖 delay + 思考两段，否则慢速档会在 AI 还在算的时候判定"思考超时"强制过牌
             startOnlineTimer(thinkingTime + delay / 1000, () => {
                 if (GameState.processing && GameState.currentPlayer === id) {
                     showToast(getPlayerName(id)+' 思考超时');
+                    setAiThinkingHint(id, false);
                     executePlayCards(id, []);
                     GameState.processing = false;
                 }
@@ -845,6 +864,7 @@
                     }
                     GameState.processing = false;
                     clearTimer();
+                    setAiThinkingHint(id, false);
                     executePlayCards(id, cards || []);
                 };
                 let result = ai.think('play', GameState);
@@ -852,6 +872,19 @@
                 else processResult(result);
             }, delay);
         }
+    }
+
+    // AI 思考指示：让玩家看到"AI 正在算"，而不是以为界面卡死
+    function setAiThinkingHint(aiId, on) {
+        try {
+            let myIdx = GameState.myIndex;
+            let el = null;
+            if (aiId === (myIdx + 1) % 3) el = document.getElementById('rightStatus');
+            else if (aiId === (myIdx + 2) % 3) el = document.getElementById('leftStatus');
+            if (!el) return;
+            if (on) el.textContent = '思考中…';
+            else updatePlayStatusText(GameState.currentPlayer);
+        } catch (e) { /* 忽略 */ }
     }
 
     function describePlay(cards) {
@@ -2314,7 +2347,7 @@ function broadcastFullState() {
                 }
                 let taskId = ++this.taskId;
                 this.pending.set(taskId, { resolve, reject, timeout: null });
-                let serializedState = this._serializeState(state);
+                let serializedState = this._serializeState(state, playerId);
                 let serializedMemory = memoryToData(memory);
                 let worker = active[0];
                 worker._busy = true;
@@ -2351,9 +2384,15 @@ function broadcastFullState() {
             }
             entry.resolve(data.result);
         },
-        _serializeState(state) {
+        _serializeState(state, playerId) {
+            // 公平性加固：只把"自己的手牌"发给 AI Worker，对手只给张数（与联机同步的瘦身策略一致），
+            // 这样 AI 在 Worker 侧也**拿不到**对手手牌，物理上杜绝开天眼。
+            let players = state.players.map((p, idx) => {
+                if (idx === playerId) return p.map(c => ({ id: c.id, suit: c.suit, rank: c.rank, value: c.value }));
+                return { length: Array.isArray(p) ? p.length : (typeof p === 'number' ? p : 0) };
+            });
             let s = {
-                players: state.players.map(p => p.map(c => ({ id: c.id, suit: c.suit, rank: c.rank, value: c.value }))),
+                players,
                 landlord: state.landlord,
                 currentPlayer: state.currentPlayer,
                 lastPlay: state.lastPlay ? { type: state.lastPlay.type, value: state.lastPlay.value, length: state.lastPlay.length || undefined } : null,
@@ -2419,7 +2458,19 @@ function broadcastFullState() {
     }, false);
     window.addEventListener('offline', () => { if (isOnlineMode()) showToast('网络已断开，正在尝试恢复…'); }, false);
 
+    // PWA 快捷方式 / 外部链接可直接带 ?mode=single|online 进场
+    function applyLaunchMode() {
+        try {
+            let m = (new URLSearchParams(location.search)).get('mode');
+            if (m === 'online') showOnlinePanel();
+            else if (m === 'single') startSingleMode();
+        } catch (e) { /* 忽略 */ }
+    }
+
     window.onload = () => {
+        // 标定设备速度：移动端自动缩小 AI 时间预算（既不卡 UI，也不会被看门狗判超时）
+        try { if (typeof calibrateAiSpeed === 'function') calibrateAiSpeed(); } catch (e) {}
+        applyLaunchMode();
         loadHistory();
         AiWorkerPool.init();
         if (window.speechSynthesis) {
