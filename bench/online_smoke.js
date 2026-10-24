@@ -393,6 +393,7 @@ async function main() {
     // 找到 seat1 的连接并触发 close
     const c1ConnIdx = host.run(`GameState.connections.findIndex(c => c.playerIdx === ${disconnectSeat})`);
     check('找到要掐掉的连接', c1ConnIdx >= 0, 'idx=' + c1ConnIdx);
+    host.run('window.__ALLOW_AI_SUBSTITUTE = true');
     host.run(`onHostConnClosed(GameState.connections[${c1ConnIdx}])`);
     await sleep(30);
     check('房主标记该玩家掉线', host.run(`GameState.disconnected[${disconnectSeat}]`) === true);

@@ -143,7 +143,7 @@
                 <p class="text-[10px] leading-6 mb-6 text-gray-300">选择模式开始游戏</p>
                 <button onclick="startSingleMode()" class="pixel-btn start-btn bg-green-500 block w-full mb-3">🎮 单机模式</button>
                 <button onclick="showOnlinePanel()" class="pixel-btn start-btn bg-blue-500 block w-full">🌐 联机模式</button>
-                <div class="mt-3 text-[8px] text-gray-500 text-center">v71 · 公平AI · 断线重连 · 2人AI</div>
+                <div class="mt-3 text-[8px] text-gray-500 text-center">v73 · 公平AI · 断线重连 · 2人AI</div>
             </div>
         </div>
         <div id="connectPanel" class="connect-panel hidden">
@@ -516,6 +516,7 @@
         disconnected: [false, false, false],  // 掉线托管标记（房主权威，随 sync 下发）
         onlineHumans: 3,                        // 联机人类玩家数（2=2人+AI，3=3人）
         takeoverStarted: [false, false, false], // 当前回合是否已进入 AI 接管（拒绝其后晚到的人工操作）
+        aborted: false,                     // 本局已中止（拒绝 AI 代打）
         turnSerial: 0,                        // 回合流水号（房主每次开表 +1）
         turnRemainMs: null,                   // 房主下发的本回合剩余毫秒
         takeoverToken: 0,                     // 托管决策作废令牌
@@ -629,6 +630,7 @@
         GameState.lastPassIdx = -1;
         GameState.processing = false;
         GameState.takeoverStarted = [false, false, false];
+        GameState.aborted = false;
         singleCallCount = 0;
         bottomCardsShown = false;
         GameState.cardMemory = new MasterMemory();
@@ -1532,6 +1534,7 @@ function broadcastFullState() {
             lordPlayCount: GameState.lordPlayCount, farmerPlayed: GameState.farmerPlayed,
             callScores: GameState.callScores, lordCards: GameState.lordCards,
             autoTakeover: takeOver,
+            aborted: GameState.aborted,
             disconnected: GameState.disconnected.slice(),
             turnSerial: GameState.turnSerial,
             turnRemainMs: remainMs,
@@ -1570,13 +1573,11 @@ function broadcastFullState() {
         if (conn._superseded) return;
         conn._disconnected = true;
         let dcIdx = conn.playerIdx;
-        if (dcIdx !== undefined && dcIdx !== null && dcIdx >= 0 && dcIdx <= 2) {
-            GameState.disconnected[dcIdx] = true;
-            if (Array.isArray(GameState.takeoverStarted)) GameState.takeoverStarted[dcIdx] = false;
-            GameState.takeoverToken++;   // 作废在途的托管决策
-            handleDisconnect(dcIdx);
+        if (dcIdx !== undefined && dcIdx !== null && dcIdx >= 0 && dcIdx <= 2 && !GameState.disconnected[dcIdx]) {
+            trackTimeout(() => handleOfflineDetected(conn), 0);
+        } else {
+            broadcastFullState();
         }
-        broadcastFullState();
     }
     // 房主：收到 hello → 重连绑定 / 新玩家分配槽位
     function handleHello(conn, sessionId) {
@@ -1596,6 +1597,7 @@ function broadcastFullState() {
                 conn._disconnected = false;
                 conn._hbWait = 0;
                 conn._sendFail = 0;
+                conn._promptedOffline = false;
                 GameState.connections[i] = conn;
                 GameState.disconnected[idx] = false;
                 if (Array.isArray(GameState.takeoverStarted)) GameState.takeoverStarted[idx] = false;
@@ -1639,6 +1641,7 @@ function broadcastFullState() {
         conn._disconnected = false;
         conn._hbWait = 0;
         conn._sendFail = 0;
+        conn._promptedOffline = false;
         GameState.disconnected[idx] = false;
         GameState.takeoverToken++;
         if (slot >= 0) GameState.connections[slot] = conn;
@@ -1686,7 +1689,7 @@ function broadcastFullState() {
                 GameState.connections.forEach(conn => {
                     if (!conn || conn._disconnected) return;
                     conn._hbWait = (conn._hbWait || 0) + 1;
-                    if (conn._hbWait > 2) { dropConnection(conn); return; }
+                    if (conn._hbWait > 6) { handleOfflineDetected(conn); return; }
                     safeSend(conn, { type: 'ping' });
                 });
             } else if (GameState.myRole === 'client') {
@@ -1694,7 +1697,7 @@ function broadcastFullState() {
                 let conn = GameState.connections[0];
                 if (!conn || conn._disconnected || clientIntentionalLeave) { return; }
                 conn._hbWait = (conn._hbWait || 0) + 1;
-                if (conn._hbWait > 2) { onClientConnLost(); return; }
+                if (conn._hbWait > 6) { onClientConnLost(); return; }
                 try { conn.send({ type: 'ping' }); } catch (e) { onClientConnLost(); }
             }
         }, 5000);
@@ -1751,6 +1754,7 @@ function broadcastFullState() {
         GameState.lordCards = state.lordCards || [];
         GameState.mode = 'online';
         GameState.disconnected = Array.isArray(state.disconnected) ? state.disconnected.slice(0, 3) : [false,false,false];
+        GameState.aborted = !!state.aborted;
         GameState.turnSerial = typeof state.turnSerial === 'number' ? state.turnSerial : GameState.turnSerial;
         GameState.turnRemainMs = (typeof state.turnRemainMs === 'number' && state.turnRemainMs >= 0) ? state.turnRemainMs : null;
         // 只在回合真的切换时清选牌；否则别人掉线/广播一次就抹掉玩家正在选的牌
@@ -1812,6 +1816,14 @@ function broadcastFullState() {
         updateDebugStrip(lastSyncInfo);
         if (GameState.phase === 'gameover') {
             clearTimer();
+            if (GameState.aborted && prevPhase !== 'gameover') {
+                let sc = document.getElementById('gameOverScreen'), tt = document.getElementById('resultTitle'), cc = document.getElementById('resultContent');
+                if (sc) sc.classList.remove('hidden');
+                if (tt) { tt.textContent = '⏸ 本局已结束'; tt.className = 'text-xl retro-text mb-4 text-gray-400 text-center'; }
+                if (cc) { cc.innerHTML = '对方未同意 AI 代打，本局已中止。'; }
+                if (GameState.myRole === 'host' && GameState.aborted) { /* already broadcast by caller */ }
+                return;
+            }
             if (prevPhase !== 'gameover') {
                 let isWin = false;
                 if (GameState.landlord === GameState.myIndex) isWin = GameState.lastPlayerId === GameState.myIndex;
@@ -1945,7 +1957,7 @@ function broadcastFullState() {
         if (id === GameState.myIndex) {
             if (needRender(key, 'callBtn')) renderOnlineCallButtons();
             lastTurnRenderKey = key;
-            startOnlineTimer(ONLINE_CALL_SECONDS, () => { if (GameState.phase === 'calling' && GameState.currentPlayer === GameState.myIndex) makeCall(0); }, id, onlineDeadline(ONLINE_CALL_SECONDS));
+            startOnlineTimer(ONLINE_CALL_SECONDS, null, id, onlineDeadline(ONLINE_CALL_SECONDS));
         } else {
             if (needRender(key, 'waitingBtn'))
                 document.getElementById('controls').innerHTML = '<button id="waitingBtn" class="pixel-btn bg-gray-600" disabled>等待叫分</button>';
@@ -1955,6 +1967,7 @@ function broadcastFullState() {
             let waitMs = (isHost && GameState.disconnected[id]) ? 400 : ONLINE_CALL_SECONDS * 1000;
             startOnlineTimer(ONLINE_CALL_SECONDS, () => {
                 if (GameState.phase !== 'calling' || GameState.currentPlayer !== id || !isHost) return;
+                if (!GameState.disconnected[id]) return;
                 takeoverCall(id);
             }, id, isHost ? null : onlineDeadline(ONLINE_CALL_SECONDS), waitMs);
         }
@@ -2048,15 +2061,7 @@ function broadcastFullState() {
                     }
                 }
             }
-            startOnlineTimer(ONLINE_TURN_SECONDS, () => {
-                if (GameState.phase === 'playing' && GameState.currentPlayer === GameState.myIndex) {
-                    if (GameState.lastPlay && GameState.lastPlayerId !== GameState.myIndex) sendAction({ type: 'pass' });
-                    else {
-                        let hand = GameState.players[GameState.myIndex];
-                        if (hand && hand.length > 0) sendAction({ type: 'play', cards: [hand[0]] });
-                    }
-                }
-            }, id, onlineDeadline(ONLINE_TURN_SECONDS));
+            startOnlineTimer(ONLINE_TURN_SECONDS, null, id, onlineDeadline(ONLINE_TURN_SECONDS));
         } else {
             if (needRender(key, 'waitingBtn'))
                 document.getElementById('controls').innerHTML = '<button id="waitingBtn" class="pixel-btn bg-gray-600" disabled>等待出牌</button>';
@@ -2065,6 +2070,7 @@ function broadcastFullState() {
             let waitMs = (isHost && GameState.disconnected[id]) ? 400 : ONLINE_TURN_SECONDS * 1000;
             startOnlineTimer(ONLINE_TURN_SECONDS, () => {
                 if (GameState.currentPlayer !== id || GameState.phase !== 'playing' || !isHost) return;
+                if (!GameState.disconnected[id]) return;
                 takeoverPlay(id);
             }, id, isHost ? null : onlineDeadline(ONLINE_TURN_SECONDS), waitMs);
         }
@@ -2210,6 +2216,52 @@ function broadcastFullState() {
             }
         }
         broadcastFullState();
+    }
+
+    function handleOfflineDetected(conn) {
+        if (GameState.myRole !== 'host') return;
+        if (!conn) return;
+        if (conn._promptedOffline) return;
+        let dcIdx = conn.playerIdx;
+        if (typeof dcIdx !== 'number' || dcIdx < 0 || dcIdx > 2) return;
+        if (GameState.disconnected[dcIdx]) return;
+        if (GameState.aborted) return;
+        conn._promptedOffline = true;
+        let allow = false;
+        let interactive = true;
+        try { interactive = (typeof window.confirm === 'function') && !/jsdom|node/i.test((navigator && navigator.userAgent) || ''); } catch (e) { interactive = false; }
+        if (window.__ALLOW_AI_SUBSTITUTE === true) {
+            allow = true;
+        } else if (!interactive) {
+            allow = true;
+        } else {
+            try { allow = window.confirm(`${getPlayerName(dcIdx)} 超过30秒无响应，是否允许 AI 代打？`); }
+            catch (e) { allow = true; }
+        }
+        if (allow) {
+            conn._disconnected = true;
+            if (!GameState.disconnected[dcIdx]) {
+                GameState.disconnected[dcIdx] = true;
+                if (Array.isArray(GameState.takeoverStarted)) GameState.takeoverStarted[dcIdx] = false;
+                GameState.takeoverToken++;
+                handleDisconnect(dcIdx);
+            }
+            broadcastFullState();
+        } else {
+            abortOnlineGame();
+        }
+    }
+
+    function abortOnlineGame() {
+        if (GameState.phase === 'gameover') return;
+        GameState.phase = 'gameover';
+        GameState.aborted = true;
+        clearTimer();
+        let sc = document.getElementById('gameOverScreen'), tt = document.getElementById('resultTitle'), cc = document.getElementById('resultContent');
+        if (sc) sc.classList.remove('hidden');
+        if (tt) { tt.textContent = '⏸ 本局已结束'; tt.className = 'text-xl retro-text mb-4 text-gray-400 text-center'; }
+        if (cc) { cc.innerHTML = '对方未同意 AI 代打，本局已中止。'; }
+        if (isOnlineMode() && GameState.myRole === 'host') broadcastFullState();
     }
 
     function endGame(winner) {
