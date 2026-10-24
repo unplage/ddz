@@ -7,8 +7,15 @@ const BASE_PATH = self.location.pathname.replace(/[^/]+$/, '');
 // 构建带项目标识的缓存名称，避免多项目冲突
 // 例如 '/ddz/' -> 'pwa-cache-ddz-v1'
 const PROJECT_PREFIX = `pwa-cache${BASE_PATH.replace(/\//g, '-').replace(/--/g, '-').replace(/(^-|-$)/g, '')}`;
-const CACHE_VERSION = 'v69';
+const CACHE_VERSION = 'v71';
 const CACHE_NAME = `${PROJECT_PREFIX}${CACHE_VERSION}`;
+// 允许离线使用的跨域依赖（CDN）与主机白名单
+const OFFLINE_ASSET_URLS = [
+  'https://cdn.tailwindcss.com',
+  'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js',
+  'https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap'
+];
+const CDN_HOSTS = ['cdn.tailwindcss.com','unpkg.com','fonts.googleapis.com','fonts.gstatic.com'];
 // 用于 activate 阶段的精确清理：只删本项目自己的缓存（根路径下 'pwa-cache' 是其它子项目的前缀，不能用 startsWith）
 const OWN_CACHE_RE = new RegExp('^' + PROJECT_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + 'v\\d+$');
 
@@ -27,6 +34,7 @@ const PRECACHE_URLS = [
   `${BASE_PATH}icons/icon-192.png`,
   `${BASE_PATH}icons/icon-512.png`,
   `${BASE_PATH}icons/icon-512-maskable.png`,
+  ...OFFLINE_ASSET_URLS
 ];
 
 // 静态资源扩展名（用于判断是否缓存优先）
@@ -81,10 +89,13 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // 只处理同源 GET 请求
-  if (url.origin !== location.origin || request.method !== 'GET') {
-    return;
-  }
+  // 只处理 GET 请求（同源 + 必要的 CDN 资源）
+  if (request.method !== 'GET') return;
+  const sameOrigin = url.origin === location.origin;
+  const cdnHost = CDN_HOSTS.indexOf(url.hostname) >= 0;
+  const isPrecachedExternal = OFFLINE_ASSET_URLS.indexOf(request.url) >= 0;
+  if (!sameOrigin && !cdnHost) return;
+  if (!sameOrigin && !isStaticResource(url) && !isPrecachedExternal) return;
 
   // ----- 5.1 导航请求（HTML）：网络优先，失败回退缓存 -----
   if (isNavigateRequest(request)) {
@@ -95,7 +106,7 @@ self.addEventListener('fetch', (event) => {
         new Promise((_, reject) => setTimeout(() => reject(new Error('nav-timeout')), 4000)),
       ])
         .then(networkResponse => {
-          if (networkResponse && networkResponse.status === 200) {
+          if (networkResponse && (networkResponse.status === 200 || networkResponse.type === 'opaque')) {
             const responseClone = networkResponse.clone();
             caches.open(CACHE_NAME).then(cache => cache.put(request, responseClone)).catch(() => {});
           }
@@ -119,15 +130,15 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // ----- 5.2 静态资源请求：缓存优先，未命中则网络请求并缓存 -----
-  if (isStaticResource(url)) {
+  // ----- 5.2 静态资源/CDN 请求：缓存优先，未命中则网络请求并缓存 -----
+  if (isStaticResource(url) || isPrecachedExternal) {
     event.respondWith(
       caches.match(request).then(cachedResponse => {
         if (cachedResponse) {
           return cachedResponse;
         }
         return fetch(request).then(networkResponse => {
-          if (networkResponse && networkResponse.status === 200) {
+          if (networkResponse && (networkResponse.status === 200 || networkResponse.type === 'opaque')) {
             const responseClone = networkResponse.clone();
             caches.open(CACHE_NAME).then(cache => cache.put(request, responseClone)).catch(() => {});
           }

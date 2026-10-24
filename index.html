@@ -143,7 +143,7 @@
                 <p class="text-[10px] leading-6 mb-6 text-gray-300">选择模式开始游戏</p>
                 <button onclick="startSingleMode()" class="pixel-btn start-btn bg-green-500 block w-full mb-3">🎮 单机模式</button>
                 <button onclick="showOnlinePanel()" class="pixel-btn start-btn bg-blue-500 block w-full">🌐 联机模式</button>
-                <div class="mt-3 text-[8px] text-gray-500 text-center">v69 · 公平AI · 断线重连</div>
+                <div class="mt-3 text-[8px] text-gray-500 text-center">v71 · 公平AI · 断线重连 · 2人AI</div>
             </div>
         </div>
         <div id="connectPanel" class="connect-panel hidden">
@@ -151,6 +151,11 @@
             <div class="text-[10px] text-gray-400 mb-2">房主创建房间，其余两人输入房间码加入</div>
             <div id="createRoomSection">
                 <div class="text-[10px] text-yellow-400 mb-1">── 创建房间 ──</div>
+                <div class="text-[10px] text-gray-400 mb-1">人数模式</div>
+                <select id="onlineModeSelect" class="pixel-btn w-full mb-1 text-[10px] bg-gray-700">
+                    <option value="3">3人（全真人）</option>
+                    <option value="2">2人 + 1 AI</option>
+                </select>
                 <div class="input-group"><input type="text" id="roomCodeInput" placeholder="自定义房间码（2-20字符）" maxlength="20"><button onclick="createRoom()" class="pixel-btn bg-blue-500 w-full mt-1">创建房间</button></div>
             </div>
             <div id="myPeerSection" class="hidden mt-2">
@@ -509,6 +514,8 @@
         autoTakeover: -1,
         // 联机稳定性扩展字段
         disconnected: [false, false, false],  // 掉线托管标记（房主权威，随 sync 下发）
+        onlineHumans: 3,                        // 联机人类玩家数（2=2人+AI，3=3人）
+        takeoverStarted: [false, false, false], // 当前回合是否已进入 AI 接管（拒绝其后晚到的人工操作）
         turnSerial: 0,                        // 回合流水号（房主每次开表 +1）
         turnRemainMs: null,                   // 房主下发的本回合剩余毫秒
         takeoverToken: 0,                     // 托管决策作废令牌
@@ -517,6 +524,8 @@
     };
     // 是否处于联机对局：以会话角色为唯一真值源（mode 仅作兼容字段）
     function isOnlineMode() { return GameState.myRole === 'host' || GameState.myRole === 'client'; }
+    function isTwoPlayerOnlineMode() { return isOnlineMode() && (GameState.onlineHumans || 3) === 2; }
+    function onlineMaxClients() { return Math.max(1, (GameState.onlineHumans || 3) - 1); }
 
     function createDeck() {
         const suits = ['♠','♥','♣','♦'], ranks = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
@@ -619,6 +628,7 @@
         GameState.lastPlayerId = -1;
         GameState.lastPassIdx = -1;
         GameState.processing = false;
+        GameState.takeoverStarted = [false, false, false];
         singleCallCount = 0;
         bottomCardsShown = false;
         GameState.cardMemory = new MasterMemory();
@@ -928,6 +938,7 @@
     }
 
     function executePlayCards(player, cards) {
+        if (Array.isArray(GameState.takeoverStarted)) GameState.takeoverStarted[player] = false;
         clearTimer();
         updateActionLog(player, cards);
         let isPlay = (cards && cards.length > 0);
@@ -1287,6 +1298,8 @@
         GameState.myRole = 'host';
         GameState.myIndex = 0;
         GameState.mode = 'online';
+        let _om = document.getElementById('onlineModeSelect');
+        GameState.onlineHumans = (_om && parseInt(_om.value)) === 2 ? 2 : 3;
         initPeer(code).catch((e) => {
             GameState.myRole = null;
             GameState.mode = 'single';
@@ -1400,6 +1413,12 @@
         GameState.mode = 'online';
         GameState.myRole = 'host';
         GameState.myIndex = 0;
+        // 2 人模式：空出的 AI 席位从开局即视为掉线，交由主机 AI 接管
+        if ((GameState.onlineHumans || 3) === 2) {
+            GameState.disconnected = [false, false, true];
+        } else {
+            GameState.disconnected = [false, false, false];
+        }
         document.getElementById('topRightControls').classList.add('hidden');
         document.getElementById('connStatus').classList.remove('hidden');
         document.getElementById('connStatus').innerHTML = '👑 房主';
@@ -1408,7 +1427,7 @@
         if (_ap) { _ap.classList.remove('hidden'); _ap.style.background = autoPassEnabled ? 'rgba(74,222,128,0.5)' : 'rgba(255,255,255,0.2)'; }
         document.getElementById('connectPanel').style.display = 'none';
         document.getElementById('startScreen').classList.add('hidden');
-        showToast("两人已满，游戏开始");
+        showToast((GameState.onlineHumans || 3) === 2 ? "已连1人，AI补位，游戏开始" : "两人已满，游戏开始");
         startHeartbeat();
         updateDebugStrip('👑 房主 · ' + GameState.connections.map(c => 'P' + (c.playerIdx || '?') + '已连').join(' '));
         document.getElementById('debugStrip').style.display = 'block';
@@ -1476,7 +1495,7 @@
                 }
             }
             else if (data.type === 'sync' && GameState.myRole !== 'host') handleSync(data.state);
-            else if (data.type === 'full') { clientIntentionalLeave = true; showToast('房间已满，最多3人'); }
+            else if (data.type === 'full') { clientIntentionalLeave = true; showToast('房间已满，最多' + (data.humans || 3) + '人'); }
             else if (data.type === 'reject') showToast(data.reason || '操作被房主拒绝');
             else if (data.type === 'ping') { try { conn.send({ type: 'pong' }); } catch (e) {} }
             else if (data.type === 'pong') { if (conn) conn._hbWait = 0; }
@@ -1553,6 +1572,7 @@ function broadcastFullState() {
         let dcIdx = conn.playerIdx;
         if (dcIdx !== undefined && dcIdx !== null && dcIdx >= 0 && dcIdx <= 2) {
             GameState.disconnected[dcIdx] = true;
+            if (Array.isArray(GameState.takeoverStarted)) GameState.takeoverStarted[dcIdx] = false;
             GameState.takeoverToken++;   // 作废在途的托管决策
             handleDisconnect(dcIdx);
         }
@@ -1578,6 +1598,7 @@ function broadcastFullState() {
                 conn._sendFail = 0;
                 GameState.connections[i] = conn;
                 GameState.disconnected[idx] = false;
+                if (Array.isArray(GameState.takeoverStarted)) GameState.takeoverStarted[idx] = false;
                 GameState.takeoverToken++;   // 作废掉线期间的在途托管决策，避免双控
                 showToast(getPlayerName(idx) + ' 已重连');
                 updateDebugStrip(getPlayerName(idx) + ' 已重连');
@@ -1585,9 +1606,9 @@ function broadcastFullState() {
                 return;
             }
         }
-        // 2) 空闲槽位（含掉线占位）→ 新玩家
-        if (liveConnCount() >= 2) {
-            try { conn.send({ type: 'full' }); } catch (e) {}
+        // 2) 空闲槽位（含掉线占位）→ 新玩家（按人数模式限制连接数）
+        if (liveConnCount() >= onlineMaxClients()) {
+            try { conn.send({ type: 'full', humans: GameState.onlineHumans }); } catch (e) {}
             try { conn.close(); } catch (e) {}
             return;
         }
@@ -1609,7 +1630,7 @@ function broadcastFullState() {
             idx = 1; while (idx <= 2 && used.has(idx)) idx++;
         }
         if (typeof idx !== 'number' || idx < 1 || idx > 2) {
-            try { conn.send({ type: 'full' }); } catch (e) {}
+            try { conn.send({ type: 'full', humans: GameState.onlineHumans }); } catch (e) {}
             try { conn.close(); } catch (e) {}
             return;
         }
@@ -1627,7 +1648,7 @@ function broadcastFullState() {
             GameState.connections = GameState.connections.filter(c => c && c.playerIdx !== undefined && c.playerIdx !== idx).slice(0, 2);
             GameState.connections.push(conn);
         }
-        if (liveConnCount() === 2 && (!GameState.phase || GameState.phase === 'waiting' || GameState.phase === 'idle')) {
+        if (liveConnCount() === onlineMaxClients() && (!GameState.phase || GameState.phase === 'waiting' || GameState.phase === 'idle')) {
             startOnlineGame();
         } else if (GameState.phase && GameState.phase !== 'idle' && GameState.phase !== 'waiting') {
             broadcastFullState();
@@ -1861,6 +1882,7 @@ function broadcastFullState() {
         };
         if (action.type === 'call') {
             if (GameState.phase !== 'calling' || GameState.currentPlayer !== player) return reject('还没轮到你叫分');
+            if (GameState.takeoverStarted && GameState.takeoverStarted[player]) return reject('AI接管中，请稍候');
             let score = Number(action.score);
             if (!Number.isFinite(score)) score = 0;
             score = Math.max(0, Math.min(3, Math.floor(score)));
@@ -1869,6 +1891,7 @@ function broadcastFullState() {
         }
         if (action.type === 'play') {
             if (GameState.phase !== 'playing' || GameState.currentPlayer !== player) return reject('还没轮到你出牌');
+            if (GameState.takeoverStarted && GameState.takeoverStarted[player]) return reject('AI接管中，请稍候');
             let cards = action.cards;
             if (!Array.isArray(cards) || cards.length === 0) return reject('未选择牌');
             let hand = GameState.players[player];
@@ -1915,6 +1938,7 @@ function broadcastFullState() {
 
     function processOnlineCallTurn() {
         if (GameState.phase !== 'calling') return;
+        if (GameState.myRole === 'host') GameState.turnSerial = (GameState.turnSerial || 0) + 1;
         let id = GameState.currentPlayer;
         updateCallStatusText(id);
         let key = turnRenderKey('call');
@@ -1937,11 +1961,12 @@ function broadcastFullState() {
         if (GameState.myRole === 'host') broadcastFullState();
     }
     function takeoverCall(id) {
+        GameState.takeoverStarted[id] = true;
         let token = GameState.takeoverToken;
         let ai = new MasterAI(id, GameState.difficulty, GameState.cardMemory || new MasterMemory());
         let result = ai.think('call', GameState);
         let doCall = (score) => {
-            if (token !== GameState.takeoverToken) return;          // 已有玩家重连/行动，作废
+            if (token !== GameState.takeoverToken) { GameState.takeoverStarted[id] = false; return; }          // 已有玩家重连/行动，作废
             if (GameState.phase !== 'calling' || GameState.currentPlayer !== id) return;
             let s = Number(score);
             if (!Number.isFinite(s)) s = 0;
@@ -1963,6 +1988,7 @@ function broadcastFullState() {
         sendAction({ type: 'call', score });
     }
     function executeCall(player, score) {
+        GameState.takeoverStarted[player] = false;
         if (score === 0) GameState.callScores[player] = -1;
         else { GameState.callScores[player] = score; GameState.baseScore = Math.max(GameState.baseScore, score); GameState.landlord = player; document.getElementById('scoreDisplay').textContent = '底分: '+GameState.baseScore; }
         let allFinished = GameState.callScores.every(s => s !== 0);
@@ -1986,6 +2012,7 @@ function broadcastFullState() {
 
     function processOnlinePlay(id) {
         if (GameState.phase !== 'playing') return;
+        if (GameState.myRole === 'host') GameState.turnSerial = (GameState.turnSerial || 0) + 1;
         updatePlayStatusText(id);
         let key = turnRenderKey('play');
         if (id === GameState.myIndex) {
@@ -2045,6 +2072,7 @@ function broadcastFullState() {
     }
     let autoPassScheduledFor = null;
     function takeoverPlay(id) {
+        GameState.takeoverStarted[id] = true;
         if (!GameState.disconnected[id]) GameState.autoTakeover = id;
         document.getElementById('lastPlayer').textContent = getPlayerName(id) + ' 超时未操作，AI托管';
         showToast(getPlayerName(id) + ' 超时未操作，AI托管');
@@ -2052,7 +2080,7 @@ function broadcastFullState() {
         let ai = new MasterAI(id, GameState.difficulty, GameState.cardMemory || new MasterMemory());
         let result = ai.think('play', GameState);
         let doPlay = (cards) => {
-            if (token !== GameState.takeoverToken) return;          // 玩家已重连，作废在途决策，防双控
+            if (token !== GameState.takeoverToken) { GameState.takeoverStarted[id] = false; return; }          // 玩家已重连，作废在途决策，防双控
             if (GameState.currentPlayer !== id || GameState.phase !== 'playing') return;
             if (cards && cards.length > 0) {
                 let isValid = Array.isArray(GameState.players[id]) && cards.every(c => GameState.players[id].some(hc => hc.id === c.id));

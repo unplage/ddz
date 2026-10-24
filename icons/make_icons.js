@@ -214,9 +214,9 @@ for (const size of [64, 128, 192, 512]) {
     fs.writeFileSync(path.join(dir, `icon-${size}.png`), encodePNG(size, size, upscale(base, size)));
 }
 // maskable 版本：内容缩到 70% 居中，四周留出被圆形/异形裁切的安全区
-{
-    const size = 512;
-    fs.writeFileSync(path.join(dir, 'icon-512-maskable.png'), encodePNG(size, size, shrink(base, size, 0.70)));
+for (const msize of [192, 512]) {
+    const name = msize === 512 ? 'icon-512-maskable.png' : 'icon-192-maskable.png';
+    fs.writeFileSync(path.join(dir, name), encodePNG(msize, msize, shrink(base, msize, 0.70)));
 }
 // iOS apple-touch-icon（不透明、无圆角，交给系统裁切）
 {
@@ -228,4 +228,4 @@ for (const size of [64, 128, 192, 512]) {
     const size = 32;
     fs.writeFileSync(path.join(dir, 'favicon.png'), encodePNG(size, size, upscale(base, size)));
 }
-console.log('图标已生成：icon-64/128/192/512.png, icon-512-maskable.png, apple-touch-icon.png, favicon.png');
+console.log('图标已生成：icon-64/128/192/512.png, icon-192/512-maskable.png, apple-touch-icon.png, favicon.png');
