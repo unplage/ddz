@@ -67,6 +67,7 @@ self.onmessage = function (e) {
         switch (msg.cmd) {
             case 'init': {
                 if (msg.params) _params = msg.params;
+                if (typeof invalidateParamCache === 'function') invalidateParamCache();
                 if (msg.correctionRules) _correctionRules = msg.correctionRules;
                 self.postMessage({ status: 'ready' });
                 break;

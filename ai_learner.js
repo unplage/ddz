@@ -9,6 +9,7 @@ const ParamConfig = {
     _defaults: DEFAULT_PARAMS,
 
     init() {
+        if (typeof invalidateParamCache === 'function') invalidateParamCache();
         let saved = localStorage.getItem('landlord_ai_params');
         if (saved) {
             try {
@@ -40,6 +41,7 @@ const ParamConfig = {
     },
 
     set(path, value) {
+        if (typeof invalidateParamCache === 'function') invalidateParamCache();
         if (!this._overrides) {
             this._overrides = JSON.parse(JSON.stringify(this._defaults));
         }
@@ -71,6 +73,7 @@ const ParamConfig = {
     },
 
     reset() {
+        if (typeof invalidateParamCache === 'function') invalidateParamCache();
         this._overrides = null;
         localStorage.removeItem('landlord_ai_params');
     },
