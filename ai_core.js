@@ -822,6 +822,28 @@ function scorePlay(features, role, memory, state, playerHand) {
         if (features.lastPlayType === 'single' && features.lastPlayPower <= 12) score += ph.overkill.singleLe12 || -200;
         if (features.lastPlayType === 'pair' && features.lastPlayPower <= 10) score += ph.overkill.pairLe10 || -150;
     }
+    // ===== 角色协作/压制：农民保队友、压制地主；地主压制快赢农民 =====
+    let _pid = state.currentPlayer;
+    let _landlord = state.landlord;
+    let _lastId = state.lastPlayerId;
+    // 下家是对手且少牌：除非过牌会送其赢，否则应防止其接牌并优先压住
+    if (features.needBeat && features.nextPlayerHandCount <= 2) {
+        let nextIsOpp = role === 'farmer' ? ( ( (_pid+1)%3 ) === _landlord ) : ( ( (_pid+1)%3 ) !== _landlord );
+        if (nextIsOpp && !features.isRocket) score += 60;
+    }
+    // 地主(对手)只剩 <=2 张：农民应尽量压住/防止其顺走
+    if (role === 'farmer' && features.needBeat && _lastId === _landlord && (state.players[_landlord] ? state.players[_landlord].length : 20) <= 2) {
+        if (features.playPower > (features.lastPlayPower || 0)) score += 120;
+    }
+    // 队友只剩 <=2 张：农民不要 unnecessarily 压过队友/抢出大牌
+    if (role === 'farmer' && state.lastPlayerId !== -1 && state.lastPlayerId !== _landlord && features.needBeat) {
+        let mateCards = state.players[state.lastPlayerId] ? state.players[state.lastPlayerId].length : 20;
+        if (mateCards <= 2 && features.playPower >= 12) score -= 100;
+    }
+    // 地主面对快赢农民：强力压制
+    if (role === 'landlord' && features.needBeat && _lastId !== _landlord && (state.players[_lastId] ? state.players[_lastId].length : 20) <= 2) {
+        if (features.playPower > (features.lastPlayPower || 0)) score += 150;
+    }
     if (playerHand) {
         let ruleCtx = {
             needBeat: !!features.needBeat,
@@ -872,6 +894,8 @@ function computePassScore(role, state) {
     let nextCards = state.players[nextP] ? state.players[nextP].length : 17;
     let isNextOpp = role === 'farmer' ? nextP === state.landlord : nextP !== state.landlord;
     if (nextCards <= 2 && isNextOpp && state.lastPlayerId !== -1 && state.lastPlayerId !== state.currentPlayer) score -= 300;
+    // 队友(下家)即将出完：优先过牌送其胜利
+    if (nextCards <= 2 && !isNextOpp && state.lastPlayerId !== -1 && state.lastPlayerId !== state.currentPlayer) score += 150;
     if (state.passCount >= 1) score += ps.passCountGe1;
     return score;
 }
@@ -1022,10 +1046,10 @@ function decomposeHandDP(hand) {
             let cnt = countValues(play.map(c=>c.value));
             let kickerVal = parseInt(Object.keys(cnt).find(k => cnt[k] === target && parseInt(k) !== type.value)) || 0;
             pscore = ds.tripleWith - Math.max(0, kickerVal - 7) * 3;
-            if (type.value >= 11) pscore -= 15;
+            if (type.value >= 11) pscore -= 30;
         }
         else if (type.type === CardType.PAIR) pscore = ds.pair;
-        else if (type.type === CardType.TRIPLE) { pscore = ds.triple; if (type.value >= 11) pscore -= 12; }
+        else if (type.type === CardType.TRIPLE) { pscore = ds.triple; if (type.value >= 11) pscore -= 30; }
         else pscore = ds.single;
         if (play.length === hand.length) pscore += ds.completeBonus;
         playEntries.push({ mask, score: pscore, play });
@@ -1967,6 +1991,9 @@ class AICore {
                             if (val >= 12 && p.length <= 2) score += sl.controlValGe12LenLe2;
                             if (_oppMin <= 2 && p.length <= 2 && val < 12) score -= 500;
                         }
+                        // 开局/中局避免先把手里的大牌（2/A/K）组合作为主导出牌，优先留待控制
+                        if (hand.length > 8 && type && type.value >= 11 && p.length > 1) score -= 100;
+                        if (hand.length > 8 && type && (type.type === CardType.BOMB || type.type === CardType.ROCKET)) score -= 150;
                         if (score > bestLeadScore) { bestLeadScore = score; bestLead = p; }
                     }
                     if (bestLead) return bestLead;
@@ -2065,6 +2092,8 @@ class AICore {
                         if (p.length >= 3) score += sl.comboGte3;
                         if (partnerCount <= 3) score += sl.partnerLow;
                         if (isLordNext) score += sl.lordNext;
+                        if (hand.length > 8 && type && type.value >= 11 && p.length > 1) score -= 100;
+                        if (hand.length > 8 && type && (type.type === CardType.BOMB || type.type === CardType.ROCKET)) score -= 150;
                         if (score > bestLeadScore) { bestLeadScore = score; bestLead = p; }
                     }
                     if (bestLead) return bestLead;
