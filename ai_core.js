@@ -157,7 +157,7 @@ const DEFAULT_PARAMS = {
         playPower: 1.0, isBomb: -30, isRocket: -50,
         remainTotal: -2, remainSingle: -1.5, remainPair: -2,
         remainTriple: -4, remainBomb: 15, remainMaxStraight: 3,
-        remainBigCards: 1, hasRocket: 10, isLandlord: 5, isFarmer: 0,
+        remainBigCards: 3, hasRocket: 10, isLandlord: 5, isFarmer: 0,
         opponentHandCount: -1, partnerHandCount: 3, outsideBombCount: -5,
         isCritical: 40, needBeat: 25
     },
@@ -189,8 +189,8 @@ const DEFAULT_PARAMS = {
             call:    { easy: 0, medium: 0, hard: 0, grandmaster: 0, legendary: 6 }
         },
         // 单次决策的时间预算（毫秒）
-        endgameTimeBudgetMs: { easy: 120, medium: 200, hard: 700, grandmaster: 1100, legendary: 1500 },
-        mctsTimeBudgetMs:    { easy: 0, medium: 0, hard: 900, grandmaster: 1400, legendary: 1900 },
+        endgameTimeBudgetMs: { easy: 120, medium: 200, hard: 1200, grandmaster: 2000, legendary: 3000 },
+        mctsTimeBudgetMs:    { easy: 0, medium: 0, hard: 1500, grandmaster: 2500, legendary: 4000 },
         // 跨世界聚合的鲁棒系数：均值 − λ×标准差（压制"赌对手手牌"的走法）
         robustness: 0.25,
         // 领出被压概率的估计（样本数 / 权重 / 候选数）
@@ -207,7 +207,7 @@ const DEFAULT_PARAMS = {
     mcts: {
         ucbC: 1.4,
         rootBranch: 12, branch: 8,
-        iterations: { legendary: 20000, grandmaster: 5000, hard: 600, medium: 0, easy: 0 },
+        iterations: { legendary: 30000, grandmaster: 8000, hard: 1200, medium: 0, easy: 0 },
         handLimit: { legendary: 17, grandmaster: 14, hard: 12, medium: 0, easy: 0 },
         timeLimit: 4000,
         timeLimitByDiff: { legendary: 4000, grandmaster: 2500, hard: 1200 }
@@ -258,7 +258,7 @@ const DEFAULT_PARAMS = {
         }
     },
     dpScores: {
-        rocket: 60, bomb: 50, straight: 30, straightLenFactor: 2,
+        rocket: 60, bomb: 50, straight: 25, straightLenFactor: 1,
         straightPair: 25, straightPairLenFactor: 2, tripleWith: 20,
         plane: 40, planeLenFactor: 3, planeWith: 30,
         pair: 5, triple: 8, single: -5, completeBonus: 100
@@ -271,7 +271,7 @@ const DEFAULT_PARAMS = {
         maxTotalCards: 20, maxHandCards: 17, nodeLimit: 200000, timeBudgetMs: 700
     },
         aiTiming: {
-            thinkingSeconds: { legendary: 5, grandmaster: 4, hard: 3, medium: 2, easy: 2 },
+            thinkingSeconds: { legendary: 8, grandmaster: 6, hard: 4, medium: 2, easy: 2 },
             delayMs: { fast: 300, normal: 700, slow: 1200 }
         },
     analysis: {
@@ -979,7 +979,7 @@ function simulateOpponentResponseBlind(play, hand, state, role, memory, belief, 
 // ======================== DP 手牌分解 ========================
 function decomposeHandDP(hand) {
     if (!hand || hand.length === 0) return { plays: [], score: 0 };
-    if (hand.length > 14) return { plays: [], score: -999 };
+    if (hand.length > 17) return { plays: [], score: -999 };
     const n = hand.length;
     const idxToCard = hand;
     let cardIndex = {};
@@ -1022,9 +1022,10 @@ function decomposeHandDP(hand) {
             let cnt = countValues(play.map(c=>c.value));
             let kickerVal = parseInt(Object.keys(cnt).find(k => cnt[k] === target && parseInt(k) !== type.value)) || 0;
             pscore = ds.tripleWith - Math.max(0, kickerVal - 7) * 3;
+            if (type.value >= 11) pscore -= 15;
         }
         else if (type.type === CardType.PAIR) pscore = ds.pair;
-        else if (type.type === CardType.TRIPLE) pscore = ds.triple;
+        else if (type.type === CardType.TRIPLE) { pscore = ds.triple; if (type.value >= 11) pscore -= 12; }
         else pscore = ds.single;
         if (play.length === hand.length) pscore += ds.completeBonus;
         playEntries.push({ mask, score: pscore, play });
@@ -1121,7 +1122,9 @@ function _endgameKeyFast(hands, cp, lastPlay, passCount) {
 function _applyPlay(hands, cp, cards) {
     const hand = hands[cp];
     for (let i = 0; i < cards.length; i++) {
-        const idx = hand.indexOf(cards[i]);
+        const cid = cards[i].id;
+        let idx = hand.findIndex(c => c.id === cid);
+        if (idx < 0) idx = hand.indexOf(cards[i]);
         if (idx >= 0) hand.splice(idx, 1);
     }
 }
@@ -1565,7 +1568,18 @@ function mctsSearch(state, playerId, iterations, memory, timeLimit, opts) {
         } else {
             result = heuristicPlayoutWithMode(node.state, node.playerToMove, playerId, memory, false);
         }
-        while (node) { node.visits++; if (result) node.wins++; node = node.parent; }
+        // 反向传播：每个节点记录"走到该节点的-player-的胜率"，
+        // 不同阵营的走法必须取反（否则 MCTS 会把对手也当成在帮己方走牌，搜索完全失效）。
+        let mySide = (playerId === state.landlord) ? [playerId] : [0, 1, 2].filter(i => i !== state.landlord);
+        let cur = node;
+        while (cur && cur.parent) {
+            const moverIsMySide = mySide.includes(cur.parent.playerToMove);
+            const winForMover = moverIsMySide ? result : !result;
+            cur.visits++;
+            if (winForMover) cur.wins++;
+            cur = cur.parent;
+        }
+        if (root) root.visits++;
     }
     let best = root.bestChild();
     if (best && Array.isArray(best.play)) {
@@ -1959,7 +1973,11 @@ class AICore {
                 }
             }
             let straightPlays = plays.filter(p => getCardType(p)?.type === CardType.STRAIGHT);
-            if (straightPlays.length) return straightPlays.sort((a,b)=>b.length-a.length)[0];
+            if (straightPlays.length) {
+                // 不一律出最长顺子(3-A)，优先中等长度、低位起的顺子，留给后续轮次组合
+                straightPlays.sort((a, b) => (a.length - b.length) || (a[0].value - b[0].value));
+                return straightPlays[0];
+            }
             let planePlays = plays.filter(p => {
                 let t = getCardType(p);
                 return t && (t.type === CardType.PLANE || t.type === CardType.PLANE_WITH_SINGLE || t.type === CardType.PLANE_WITH_PAIR);
