@@ -15,6 +15,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon.png">
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
     <meta name="theme-color" content="#1a1a2e">
+    <meta name="app-version" content="v81">
     <meta name="description" content="像素风格斗地主：单机公平 AI 对战 + P2P 联机，离线可玩">
     <style>
         * { image-rendering: pixelated; font-family: 'Press Start 2P', cursive; -webkit-tap-highlight-color: transparent; touch-action: manipulation; box-sizing: border-box; }
@@ -143,7 +144,7 @@
                 <p class="text-[10px] leading-6 mb-6 text-gray-300">选择模式开始游戏</p>
                 <button onclick="startSingleMode()" class="pixel-btn start-btn bg-green-500 block w-full mb-3">🎮 单机模式</button>
                 <button onclick="showOnlinePanel()" class="pixel-btn start-btn bg-blue-500 block w-full">🌐 联机模式</button>
-                <div class="mt-3 text-[8px] text-gray-500 text-center">v78 · 公平AI · 断线重连 · 2人AI</div>
+                <div class="mt-3 text-[8px] text-gray-500 text-center"><span id="appVersionLabel">v81</span> · 公平AI · 断线重连 · 2人AI</div>
             </div>
         </div>
         <div id="connectPanel" class="connect-panel hidden">
@@ -178,6 +179,23 @@
     </div>
     <div id="debugStrip" class="fixed bottom-0 left-0 right-0 z-[70] bg-black/70 text-[8px] text-green-300 px-2 py-0.5 leading-tight font-mono" style="display:none;pointer-events:none"></div>
 </div>
+<script>
+    // ======================== 版本号展示 ========================
+    // 单一来源：<meta name="app-version">（index.html），与 sw.js 的 CACHE_VERSION 保持一致
+    (function showAppVersion() {
+        try {
+            let meta = document.querySelector('meta[name="app-version"]');
+            let v = meta ? (meta.getAttribute('content') || '') : '';
+            if (!v) {
+                let sw = document.querySelector('script[data-cache-version]');
+                if (sw) v = sw.getAttribute('data-cache-version') || '';
+            }
+            let el = document.getElementById('appVersionLabel');
+            if (el && v) el.textContent = v;
+            window.__APP_VERSION__ = v;
+        } catch (e) {}
+    })();
+</script>
 <script>
     // ======================== 全局设置 ========================
     // ---- 存储访问兜底（隐私模式/禁用存储时不能让整站脚本崩溃） ----
@@ -2715,6 +2733,17 @@ function broadcastFullState() {
         if (typeof GameState !== 'undefined' && GameState && GameState.phase && GameState.phase !== 'idle' && GameState.phase !== 'waiting') { return; }
       } catch (e) {}
       location.reload();
+    });
+    // SW 激活后回报缓存版本：与页面 meta 版本不一致时提示刷新
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      try {
+        if (!e.data || e.data.type !== 'VERSION') return;
+        let pageVer = (typeof window.__APP_VERSION__ === 'string') ? window.__APP_VERSION__ : '';
+        if (pageVer && e.data.version && pageVer !== e.data.version) {
+          console.warn('[SW] 版本不一致，页面 ' + pageVer + ' / 缓存 ' + e.data.version + '，将刷新');
+          try { location.reload(); } catch (err) {}
+        }
+      } catch (err) {}
     });
     navigator.serviceWorker.register('./sw.js').then(reg => {
       if (reg.active && !navigator.serviceWorker.controller) {
