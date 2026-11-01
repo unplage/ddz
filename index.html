@@ -2449,6 +2449,95 @@ function broadcastFullState() {
             this.ready = true;
         },
         think(phase, state, playerId, difficulty, memory) {
+            if (phase === 'play' && this._shouldParallelMcts(state, playerId, difficulty)) {
+                return this._thinkMctsParallel(state, playerId, difficulty, memory).then(play => {
+                    if (Array.isArray(play)) return play;
+                    return this._thinkSingle(phase, state, playerId, difficulty, memory);
+                });
+            }
+            return this._thinkSingle(phase, state, playerId, difficulty, memory);
+        },
+        _shouldParallelMcts(state, playerId, difficulty) {
+            if (difficulty !== 'hard' && difficulty !== 'grandmaster' && difficulty !== 'legendary') return false;
+            const hand = state.players[playerId];
+            const len = Array.isArray(hand) ? hand.length : 0;
+            const endgameLimit = cfg('endgameThresholds.' + difficulty) || 10;
+            const mctsLimit = cfg('mcts.handLimit.' + difficulty) || 0;
+            if (!len || len <= endgameLimit || len > mctsLimit) return false;
+            const worlds = cfg('blind.worlds.mcts.' + difficulty) || 0;
+            if (worlds < 2) return false;
+            return this.workers.filter(w => !w._dead && w._ready && !w._busy).length >= 2;
+        },
+        _thinkMctsParallel(state, playerId, difficulty, memory) {
+            return new Promise((resolve) => {
+                const active = this.workers.filter(w => !w._dead && w._ready && !w._busy);
+                if (active.length < 2) { resolve(null); return; }
+                const totalWorlds = cfg('blind.worlds.mcts.' + difficulty) || 3;
+                const n = Math.min(active.length, totalWorlds, 4);
+                if (n < 2) { resolve(null); return; }
+                const worldsPer = Math.max(1, Math.ceil(totalWorlds / n));
+                const iterations = cfg('mcts.iterations.' + difficulty) || 600;
+                const budgetMs = cfg('blind.mctsTimeBudgetMs.' + difficulty) || 1000;
+                const serializedState = this._serializeState(state, playerId);
+                const serializedMemory = memoryToData(memory);
+                const tasks = [];
+                const cleanup = () => {
+                    // 某个 Worker 超时后不阻塞其余结果；聚合阶段会使用已完成的部分。
+                };
+                for (let i = 0; i < n; i++) {
+                    const worker = active[i];
+                    const taskId = ++this.taskId;
+                    tasks.push(new Promise((taskResolve) => {
+                        this.pending.set(taskId, { resolve: taskResolve, reject: taskResolve, timeout: null, phase: 'mcts', playerId, kind: 'mcts' });
+                        worker._busy = true;
+                        worker._taskId = taskId;
+                        worker.postMessage({
+                            cmd: 'mcts', taskId, state: serializedState, playerId, difficulty,
+                            memory: serializedMemory, worlds: worldsPer, iterations,
+                            timeBudgetMs: budgetMs, collectAll: true
+                        });
+                        const timeout = setTimeout(() => {
+                            this.pending.delete(taskId);
+                            worker._busy = false;
+                            worker._taskId = null;
+                            taskResolve(null);
+                        }, 30000);
+                        this.pending.get(taskId).timeout = timeout;
+                    }));
+                }
+                Promise.all(tasks).then(results => {
+                    const entries = [];
+                    for (const r of results) {
+                        if (r && Array.isArray(r.agg)) entries.push(...r.agg);
+                    }
+                    let play = null;
+                    if (entries.length && typeof selectPlayFromMctsAgg === 'function') {
+                        play = selectPlayFromMctsAgg(entries, totalWorlds, cfg('blind.robustness') || 0.25);
+                    }
+                    if (!play) {
+                        let top = null;
+                        for (const r of results) if (r && r.play && r.play.length && (!top || r.visits > top.visits)) top = r;
+                        play = top ? top.play : null;
+                    }
+                    if (Array.isArray(play)) {
+                        try {
+                            window.__lastAIPlayReasoning = {
+                                turn: (typeof GameRecorder !== 'undefined' && GameRecorder.currentGame) ? GameRecorder.currentGame.actions.length : 0,
+                                player: playerId,
+                                phase: 'play',
+                                source: 'mcts-parallel',
+                                chosen: play,
+                                chosenScore: 0,
+                                candidates: [{ type: play.length ? ((getCardType(play) || {}).type || 'unknown') : 'pass', score: 0, isChosen: true }]
+                            };
+                        } catch (e) {}
+                    }
+                    cleanup();
+                    resolve(play);
+                }).catch(() => resolve(null));
+            });
+        },
+        _thinkSingle(phase, state, playerId, difficulty, memory) {
             return new Promise((resolve, reject) => {
                 let active = this.workers.filter(w => !w._dead && w._ready && !w._busy);
                 if (active.length === 0) {
@@ -2457,7 +2546,7 @@ function broadcastFullState() {
                     return;
                 }
                 let taskId = ++this.taskId;
-                this.pending.set(taskId, { resolve, reject, timeout: null });
+                this.pending.set(taskId, { resolve, reject, timeout: null, phase, playerId, kind: 'think' });
                 let serializedState = this._serializeState(state, playerId);
                 let serializedMemory = memoryToData(memory);
                 let worker = active[0];
@@ -2493,7 +2582,18 @@ function broadcastFullState() {
             if (data.memory && GameState.cardMemory) {
                 memoryFromData(GameState.cardMemory, data.memory);
             }
-            entry.resolve(data.result);
+            if (entry.phase === 'play' && data.reasoning) {
+                let reasoning = data.reasoning;
+                if (typeof GameRecorder !== 'undefined' && GameRecorder.currentGame) {
+                    reasoning.turn = GameRecorder.currentGame.actions.length;
+                }
+                window.__lastAIPlayReasoning = reasoning;
+            }
+            if (entry.kind === 'mcts') {
+                entry.resolve({ play: data.play || [], visits: data.visits || 0, wins: data.wins || 0, agg: data.agg || [] });
+            } else {
+                entry.resolve(data.result);
+            }
         },
         _serializeState(state, playerId) {
             // 公平性加固：只把"自己的手牌"发给 AI Worker，对手只给张数（与联机同步的瘦身策略一致），

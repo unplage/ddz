@@ -254,7 +254,7 @@ const DEFAULT_PARAMS = {
         maxCandidates: { legendary: 10, grandmaster: 10, hard: 10, medium: 0, easy: 0 },
         dpCandidates: { legendary: 6, grandmaster: 6, hard: 6, medium: 0, easy: 0 }
     },
-    randomFactors: { legendary: 0, grandmaster: 0.05, hard: 0.1, medium: 0.3, easy: 0.6 },
+    randomFactors: { legendary: 0, grandmaster: 0.05, hard: 0.1, medium: 0.2, easy: 0.5 },
     playHeuristics: {
         partnerPlay: { handLe3: -320, handLe2: -600, lastPowerGe40: -80, lastPowerLe20: -50 },
         lordBeatPartner: { needBeat: 80, handLe4: 120 },
@@ -288,7 +288,7 @@ const DEFAULT_PARAMS = {
         bombLeadLate: { bomb: 20, rocket: 30 }
     },
     passScores: {
-        farmerPartnerBase: 260, farmerPartnerHandLe3: -80, farmerPartnerHandLe2: 500,
+        farmerPartnerBase: 180, farmerPartnerHandLe3: -80, farmerPartnerHandLe2: 500,
         lordHandLe2: -999, lordHandLe4: -150, lordHandGt4: -10,
         landlordFarmerPlayed: -50, landlordFarmerHandLe3: -200,
         passCountGe1: -40
@@ -315,7 +315,8 @@ const DEFAULT_PARAMS = {
     },
     endgame: {
         maxDepth: 20, bombDepthPenalty: 1,
-        maxTotalCards: 20, maxHandCards: 17, nodeLimit: 200000, timeBudgetMs: 700
+        maxTotalCards: 24, maxHandCards: 20, maxOptions: 8,
+        nodeLimit: 200000, timeBudgetMs: 700
     },
         aiTiming: {
             thinkingSeconds: { legendary: 8, grandmaster: 6, hard: 4, medium: 2, easy: 2 },
@@ -529,27 +530,59 @@ class HandBelief {
         for (let i = 0; i < n; i++) out.push(this.sampleWorld());
         return out;
     }
-    // 某对手握有炸弹的概率（超几何分布，只依赖未见牌池）
+    // 某对手握有炸弹的概率：结合"未见牌池"与"地主底牌已明确归属该对手"的信息。
+    // 对每个点数，按超几何分布计算该对手至少拿到 4 张的概率；已知底牌直接减少所需张数。
     bombRiskFor(oppId) {
         const n = this.counts[oppId] || 0;
+        const known = this.knownByPlayer[oppId] || [];
+        const knownCounts = new Array(15).fill(0);
+        for (const c of known) knownCounts[c.value]++;
+        const unknownSlots = n - known.length;
         const poolSize = this.pool.length;
-        if (n < 4 || poolSize < 4) return 0;
-        const denom = comb(poolSize, 4);
-        if (!denom) return 0;
+        if (unknownSlots <= 0 || poolSize <= 0) {
+            for (let v = 0; v <= 12; v++) if (knownCounts[v] >= 4) return 1;
+            return 0;
+        }
         let risk = 0;
         for (let v = 0; v <= 12; v++) {
-            if (this.poolCounts[v] < 4) continue;
-            risk += comb(n, 4) / denom;
+            const need = Math.max(0, 4 - knownCounts[v]);
+            if (need <= 0) return 1;
+            const available = this.poolCounts[v] || 0;
+            if (available < need) continue;
+            let hit = 0;
+            const maxTake = Math.min(available, unknownSlots);
+            for (let take = need; take <= maxTake; take++) {
+                hit += comb(available, take) * comb(poolSize - available, unknownSlots - take);
+            }
+            const denom = comb(poolSize, unknownSlots);
+            if (denom) risk += hit / denom;
         }
         return Math.min(1, risk);
     }
-    // 某对手握有王炸的概率
+    // 某对手握有王炸的概率（已知底牌中的大小王同样计入）
     rocketRiskFor(oppId) {
         const n = this.counts[oppId] || 0;
+        const known = this.knownByPlayer[oppId] || [];
+        let knownSmall = 0, knownBig = 0;
+        for (const c of known) {
+            if (c.value === 13) knownSmall++;
+            if (c.value === 14) knownBig++;
+        }
+        if (knownSmall >= 1 && knownBig >= 1) return 1;
+        const unknownSlots = n - known.length;
         const poolSize = this.pool.length;
-        if (n < 2 || poolSize < 2) return 0;
-        if (this.poolCounts[13] < 1 || this.poolCounts[14] < 1) return 0;
-        return Math.min(1, comb(n, 2) / comb(poolSize, 2));
+        if (unknownSlots <= 0 || poolSize <= 0) return 0;
+        const needSmall = knownSmall >= 1 ? 0 : 1;
+        const needBig = knownBig >= 1 ? 0 : 1;
+        const need = needSmall + needBig;
+        if (need === 0) return 1;
+        if (need === 1) {
+            const value = needSmall ? 13 : 14;
+            if ((this.poolCounts[value] || 0) < 1) return 0;
+            return Math.min(1, comb(poolSize - 1, unknownSlots - 1) / comb(poolSize, unknownSlots));
+        }
+        if ((this.poolCounts[13] || 0) < 1 || (this.poolCounts[14] || 0) < 1) return 0;
+        return Math.min(1, comb(poolSize - 2, unknownSlots - 2) / comb(poolSize, unknownSlots));
     }
     // 估计某对手能压过 play 的概率（采样其可能手牌 → 检查是否存在合法应对）
     beatProbability(play, oppId, samples) {
@@ -611,7 +644,7 @@ function evaluateHandStrength(hand, memory, isLandlord, callPosition) {
     if (hand.some(c=>c.value===14) && hand.some(c=>c.value===13)) score += ec.bothJokers;
     else { if (hand.some(c=>c.value===14)) score += ec.bigJokerOnly; if (hand.some(c=>c.value===13)) score += ec.smallJokerOnly; }
     score += (cnt[12]||0)*ec.ace + (cnt[11]||0)*ec.king + (cnt[10]||0)*ec.queen;
-    let sortedUnique = [...new Set(values.filter(v=>v<13))].sort((a,b)=>a-b);
+    let sortedUnique = [...new Set(values.filter(v=>v<12))].sort((a,b)=>a-b);
     let maxLen = 1, cur = 1;
     for (let i=1;i<sortedUnique.length;i++) { if (sortedUnique[i] === sortedUnique[i-1]+1) cur++; else { maxLen = Math.max(maxLen, cur); cur=1; } }
     maxLen = Math.max(maxLen, cur);
@@ -1062,17 +1095,52 @@ function computePassScore(role, state) {
     // 队友(下家)即将出完：优先过牌送其胜利
     if (nextCards <= 2 && !isNextOpp && state.lastPlayerId !== -1 && state.lastPlayerId !== state.currentPlayer) score += 150;
     if (state.passCount >= 1) score += ps.passCountGe1;
+    try {
+        const lastId = state.lastPlayerId;
+        const oppCount = lastId >= 0 && state.players[lastId] ? state.players[lastId].length : 17;
+        const passCtx = {
+            target: 'pass',
+            needBeat: !!state.lastPlay && state.lastPlayerId !== state.currentPlayer,
+            role: role,
+            opponentHandCount: oppCount
+        };
+        for (const rule of matchRules(passCtx)) {
+            if (rule && rule.context && rule.context.target === 'pass') score += rule.penalty;
+        }
+    } catch (e) { /* 规则匹配失败不影响基础过牌分 */ }
     return score;
 }
 
 // ======================== 对手响应模拟 ========================
 function simulateOpponentResponseV2(play, hand, state, role, memory, depth = 1) {
-    let newHand = hand.filter(c => !play.includes(c));
-    let newState = _cloneStateShallow(state);
+    const myRoleId = role === 'landlord' ? 'landlord' : 'farmer';
+    const newHand = hand.filter(c => !play.includes(c));
+    const newState = _cloneStateShallow(state);
     newState.players[state.currentPlayer] = newHand;
-    let nextPlayer = (state.currentPlayer + 1) % 3;
-    if (newState.players[nextPlayer].length === 0) return -100;
-    let lastType = getCardType(play);
+    newState.lastPlay = getCardType(play);
+    newState.lastPlayerId = state.currentPlayer;
+    newState.passCount = 0;
+
+    function terminalScore(s) {
+        for (let i = 0; i < 3; i++) {
+            if (s.players[i] && s.players[i].length === 0) {
+                const winnerRole = i === s.landlord ? 'landlord' : 'farmer';
+                return winnerRole === myRoleId ? 100 : -100;
+            }
+        }
+        return null;
+    }
+    function staticScore(s) {
+        let mine = 0, theirs = 0;
+        for (let i = 0; i < 3; i++) {
+            const p = s.players[i] || [];
+            let str = 0;
+            try { str = evaluateHandStrength(p, memory, i === s.landlord); } catch (e) { str = p.length; }
+            const sameRole = (i === s.landlord) === (myRoleId === 'landlord');
+            if (sameRole) mine += str; else theirs += str;
+        }
+        return Math.max(-80, Math.min(80, (mine - theirs) * 0.8));
+    }
     function sampleOpponentPlays(oppHand, targetPlay) {
         let plays = getAllValidPlays(oppHand, targetPlay);
         if (!plays || plays.length === 0) return null;
@@ -1083,70 +1151,76 @@ function simulateOpponentResponseV2(play, hand, state, role, memory, depth = 1) 
         for (let i = 0; i < n; i++) result.push(plays[Math.min(i * step, plays.length - 1)]);
         return result;
     }
-    function evalState(s, pid, myRoleId, depth) {
-        if (s.players[pid].length === 0) {
-            let winnerRole = pid === s.landlord ? 'landlord' : 'farmer';
-            return winnerRole === myRoleId ? 100 : -100;
+    function evalState(s, pid, myRoleId, remainingDepth) {
+        const term = terminalScore(s);
+        if (term !== null) return term;
+        if (remainingDepth <= 0) return staticScore(s);
+        const needBeat = s.lastPlay && s.lastPlayerId !== pid;
+        const samples = sampleOpponentPlays(s.players[pid], s.lastPlay);
+        if (!samples || samples.length === 0) {
+            if (!needBeat) return staticScore(s);
+            const s2 = _cloneStateShallow(s);
+            s2.passCount = (s2.passCount || 0) + 1;
+            if (s2.passCount >= 2) { s2.lastPlay = null; s2.lastPlayerId = -1; s2.passCount = 0; }
+            return evalState(s2, (pid + 1) % 3, myRoleId, remainingDepth - 1);
         }
-        if (depth <= 0) {
-            let str = evaluateHandStrength(s.players[pid], memory, pid === s.landlord);
-            let sameRole = (pid === s.landlord) === (myRoleId === 'landlord');
-            return sameRole ? str : -str;
-        }
-        let samples = sampleOpponentPlays(s.players[pid], s.lastPlay);
-        if (!samples) {
-            s.passCount++;
-            if (s.passCount >= 2) { s.lastPlay = null; s.lastPlayerId = -1; s.passCount = 0; }
-            return evalState(s, (pid + 1) % 3, myRoleId, depth - 1);
-        }
+        const actions = samples.slice();
+        if (needBeat) actions.push([]);
         let total = 0, count = 0;
-        for (let sp of samples) {
-            let s2 = _cloneStateShallow(s);
-            let spIds = new Set(sp.map(c => c.id));
+        for (const sp of actions) {
+            const s2 = _cloneStateShallow(s);
+            if (!sp || sp.length === 0) {
+                s2.passCount = (s2.passCount || 0) + 1;
+                if (s2.passCount >= 2) { s2.lastPlay = null; s2.lastPlayerId = -1; s2.passCount = 0; }
+                total += evalState(s2, (pid + 1) % 3, myRoleId, remainingDepth - 1);
+                count++;
+                continue;
+            }
+            const spIds = new Set(sp.map(c => c.id));
             s2.players[pid] = s2.players[pid].filter(c => !spIds.has(c.id));
             s2.lastPlay = getCardType(sp);
             s2.lastPlayerId = pid;
             s2.passCount = 0;
-            if (s2.players[pid].length === 0) {
-                let wRole = pid === s2.landlord ? 'landlord' : 'farmer';
-                total += wRole === myRoleId ? 100 : -100;
-            } else {
-                total += evalState(s2, (pid + 1) % 3, myRoleId, depth - 1);
-            }
+            const term2 = terminalScore(s2);
+            total += term2 !== null ? term2 : evalState(s2, (pid + 1) % 3, myRoleId, remainingDepth - 1);
             count++;
         }
-        return count > 0 ? total / count : 0;
+        return count > 0 ? total / count : staticScore(s);
     }
-    let score = 0;
-    let opponentPlays = getAllValidPlays(newState.players[nextPlayer], lastType);
+
+    const rootTerm = terminalScore(newState);
+    if (rootTerm !== null) return rootTerm;
+    const nextPlayer = (state.currentPlayer + 1) % 3;
+    const opponentPlays = getAllValidPlays(newState.players[nextPlayer], newState.lastPlay);
     if (!opponentPlays || opponentPlays.length === 0) {
         newState.passCount = (newState.passCount || 0) + 1;
         if (newState.passCount >= 2) { newState.lastPlay = null; newState.lastPlayerId = -1; newState.passCount = 0; }
-        score = evalState(newState, (nextPlayer + 1) % 3, role, depth);
-    } else {
-        let n = depth >= 2 ? 15 : 8;
-        let samples = opponentPlays.length <= n ? opponentPlays :
-            (() => { let step = Math.floor(opponentPlays.length / n); let r = []; for (let i = 0; i < n; i++) r.push(opponentPlays[Math.min(i * step, opponentPlays.length - 1)]); return r; })();
-        let weighted = 0, count = 0;
-        for (let sp of samples) {
-            let s2 = _cloneStateShallow(newState);
-            let spIds = new Set(sp.map(c => c.id));
-            s2.players[nextPlayer] = s2.players[nextPlayer].filter(c => !spIds.has(c.id));
-            s2.lastPlay = getCardType(sp);
-            s2.lastPlayerId = nextPlayer;
-            s2.passCount = 0;
-            if (s2.players[nextPlayer].length === 0) {
-                let wRole = nextPlayer === s2.landlord ? 'landlord' : 'farmer';
-                weighted += wRole === role ? 100 : -100;
-            } else {
-                let third = (nextPlayer + 1) % 3;
-                weighted += evalState(s2, third, role, depth);
-            }
-            count++;
-        }
-        score = count > 0 ? weighted / count : 0;
+        return evalState(newState, (nextPlayer + 1) % 3, myRoleId, depth);
     }
-    return score;
+    const n = depth >= 2 ? 15 : 8;
+    const samples = opponentPlays.length <= n ? opponentPlays.slice() :
+        (() => { const step = Math.floor(opponentPlays.length / n); const r = []; for (let i = 0; i < n; i++) r.push(opponentPlays[Math.min(i * step, opponentPlays.length - 1)]); return r; })();
+    samples.push([]);
+    let weighted = 0, count = 0;
+    for (const sp of samples) {
+        const s2 = _cloneStateShallow(newState);
+        if (!sp || sp.length === 0) {
+            s2.passCount = (s2.passCount || 0) + 1;
+            if (s2.passCount >= 2) { s2.lastPlay = null; s2.lastPlayerId = -1; s2.passCount = 0; }
+            weighted += evalState(s2, (nextPlayer + 1) % 3, myRoleId, depth - 1);
+            count++;
+            continue;
+        }
+        const spIds = new Set(sp.map(c => c.id));
+        s2.players[nextPlayer] = s2.players[nextPlayer].filter(c => !spIds.has(c.id));
+        s2.lastPlay = getCardType(sp);
+        s2.lastPlayerId = nextPlayer;
+        s2.passCount = 0;
+        const term2 = terminalScore(s2);
+        weighted += term2 !== null ? term2 : evalState(s2, (nextPlayer + 1) % 3, myRoleId, depth - 1);
+        count++;
+    }
+    return count > 0 ? weighted / count : 0;
 }
 
 // ======================== 盲对手响应模拟（多世界聚合） ========================
@@ -1621,6 +1695,11 @@ function solveEndgameBlind(state, playerId, belief, opts) {
         } catch (e) { return 0; }
     };
     options.sort((a, b) => scoreOf(b) - scoreOf(a));
+    // 残局候选过多会让每个候选分到的搜索时间过短 → 全部被截断 → 残局搜索退化为启发式。
+    // 这里保留启发式排序最靠前的候选（覆盖多种牌型）+ 过牌，限制候选规模。
+    const maxOptions = Math.max(4, Math.min(10, opts.maxOptions || (cfg('endgame.maxOptions') || 8)));
+    let trimmedOptions = options.slice(0, maxOptions);
+    if (needBeat && !trimmedOptions.includes(ENDGAME_PASS)) trimmedOptions.push(ENDGAME_PASS);
 
     const worlds = Math.max(1, opts.worlds || 4);
     const budgetMs = opts.timeBudgetMs !== undefined ? opts.timeBudgetMs : (cfg('blind.endgameTimeBudgetMs') || 600);
@@ -1632,17 +1711,21 @@ function solveEndgameBlind(state, playerId, belief, opts) {
     const keyOf = (p) => (p === null || p === ENDGAME_PASS) ? 'pass' : p.map(c => c.id).sort().join(',');
     const agg = new Map();
 
+    let evaluatedWorlds = 0;
+    // 每个候选平均分到的时间片；候选越多每片越短，但总时间受全局 deadline 约束
+    const perCandidateMs = Math.max(30, Math.floor(budgetMs / Math.max(1, worlds * trimmedOptions.length)));
     for (let w = 0; w < worlds; w++) {
         if (Date.now() > deadline) break;
         const worldPlayers = belief.sampleWorld();
         const hands = worldPlayers.map(p => [...p]);
-        const ctx = {
-            nodes: 0, limit: perWorldLimit, tt: new Map(), truncated: false,
-            deadline: Math.min(deadline, Date.now() + Math.max(60, Math.floor(budgetMs / worlds)))
-        };
-        // 候选按启发式顺序评估：预算被截断时，优先保证"最想出的那几手"在每个世界里都被评估到
-        for (const p of options) {
+        evaluatedWorlds++;
+        // 每个候选使用独立 ctx：某个候选被截断时不会污染后续候选，也不会把整轮搜索提前结束。
+        for (const p of trimmedOptions) {
             if (Date.now() > deadline) break;
+            const ctx = {
+                nodes: 0, limit: perWorldLimit, tt: new Map(), truncated: false,
+                deadline: Math.min(deadline, Date.now() + perCandidateMs)
+            };
             let val;
             if (p === null || p === ENDGAME_PASS) {
                 val = endgameMinimax(hands, (playerId + 1) % 3, state.lastPlay, state.lastPlayerId, (state.passCount || 0) + 1, mySide, ctx, -Infinity, Infinity);
@@ -1656,8 +1739,7 @@ function solveEndgameBlind(state, playerId, belief, opts) {
                 val = endgameMinimax(hands, (playerId + 1) % 3, getCardType(p), playerId, 0, mySide, ctx, -Infinity, Infinity);
                 _undoPlay(hands, playerId, p);
             }
-            if (ctx.truncated) break;   // 估值被截断 → 不可信，不参与聚合
-            if (ctx.truncated) break;  // 该世界评估不可靠 → 丢弃剩余候选
+            if (ctx.truncated) continue;
             const key = keyOf(p);
             let e = agg.get(key);
             if (!e) { e = { sum: 0, sq: 0, n: 0, play: p }; agg.set(key, e); }
@@ -1665,19 +1747,19 @@ function solveEndgameBlind(state, playerId, belief, opts) {
         }
     }
 
-    // 只在"被同样多的世界评估过"的候选之间比较，避免样本数不同造成的偏差
-    let maxN = 0;
-    for (const e of agg.values()) maxN = Math.max(maxN, e.n);
+    // 候选可能只覆盖部分世界；用覆盖率惩罚替代"必须覆盖所有世界"的硬门槛，
+    // 否则预算稍紧就会把所有候选一起丢掉，残局搜索完全失效。
     let bestPlay = null, bestScore = -Infinity, found = false;
     for (const e of agg.values()) {
-        if (e.n === 0 || e.n < maxN) continue;
+        if (e.n <= 0) continue;
         const mean = e.sum / e.n;
         const variance = Math.max(0, e.sq / e.n - mean * mean);
-        const score = mean - lambda * Math.sqrt(variance);
+        const coverage = evaluatedWorlds > 0 ? e.n / evaluatedWorlds : 0;
+        const score = mean - lambda * Math.sqrt(variance) - 0.2 * (1 - coverage);
         if (score > bestScore) { bestScore = score; bestPlay = e.play; found = true; }
     }
     if (found) return bestPlay;
-    for (const o of options) if (o && o.length > 0) return o;
+    for (const o of trimmedOptions) if (o && o.length > 0) return o;
     return plays[0] || null;
 }
 
@@ -1749,7 +1831,7 @@ function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministi
             if (t.type === CardType.BOMB || t.type === CardType.ROCKET) sc -= 60;
             const over = needBeat ? (pw - minP) : 0;
             if (needBeat && over > 0) sc -= over * 0.6;
-            richCands.push(pl);
+            richCands.push({ play: pl, score: sc });
             if (sc > bestScore) {
                 third = second; thirdScore = secondScore;
                 second = best; secondScore = bestScore;
@@ -1762,9 +1844,29 @@ function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministi
             }
         }
         if (!best) { s.passCount++; cp = (cp + 1) % 3; continue; }
-        // 关键候选用完整启发式（角色协作/牌力节制/过牌价值）重打分
-        const richPool = richCands.length ? richCands : [best, second, third].filter(Boolean);
-        if (richPool.length > 6) richPool.length = 6;
+        // 关键候选用完整启发式重打分：先按结构分排序并保留牌型多样性，避免截断到"最弱 6 手"。
+        const richPool = [];
+        const seenRich = new Set();
+        const pushRich = (pl) => {
+            if (!pl || !pl.length) return;
+            const key = pl.map(c => c.id).sort().join(',');
+            if (seenRich.has(key)) return;
+            seenRich.add(key);
+            richPool.push(pl);
+        };
+        const sortedRich = richCands.slice().sort((a, b) => b.score - a.score);
+        pushRich(best); pushRich(second); pushRich(third);
+        const seenTypes = new Set();
+        for (const entry of sortedRich) {
+            const t = playTypeOf(entry.play);
+            if (!t) continue;
+            if (!seenTypes.has(t.type)) { seenTypes.add(t.type); pushRich(entry.play); }
+            if (richPool.length >= 8) break;
+        }
+        for (const entry of sortedRich) {
+            if (richPool.length >= 8) break;
+            pushRich(entry.play);
+        }
         if (richPool.length > 1 && typeof scorePlay === 'function') {
             let rBest = null, rScore = -Infinity;
             for (const cand of richPool) {
@@ -1998,11 +2100,14 @@ class MCTSNode {
         if (this.children.length === 0) return null;
         let maxVisits = 0;
         for (let c of this.children) if (c.visits > maxVisits) maxVisits = c.visits;
-        let best = null, bestRate = -1;
+        let best = null, bestScore = -Infinity;
+        const logN = Math.log(Math.max(2, maxVisits));
         for (let c of this.children) {
-            if (c.visits < Math.max(1, maxVisits * 0.1)) continue;
-            let rate = c.visits > 0 ? c.wins / c.visits : 0;
-            if (rate > bestRate) { bestRate = rate; best = c; }
+            if (c.visits < Math.max(2, maxVisits * 0.15)) continue;
+            const rate = c.wins / c.visits;
+            // 访问量越少，下界惩罚越大：避免低样本节点靠运气胜出。
+            const score = rate - Math.sqrt(logN / c.visits);
+            if (score > bestScore) { bestScore = score; best = c; }
         }
         if (best) return best;
         return this.children.reduce((a, b) => (b.visits > a.visits ? b : a), this.children[0]);
@@ -2068,6 +2173,45 @@ function mctsSearch(state, playerId, iterations, memory, timeLimit, opts) {
     if (fallbackPlays.length > 0) return { play: fallbackPlays[0], visits: 0, wins: 0 };
     return null;
 }
+// 跨 Worker / 跨世界聚合 MCTS 根统计，返回最稳健的走法。
+function selectPlayFromMctsAgg(entries, worlds, lambda) {
+    const agg = new Map();
+    for (const item of entries || []) {
+        if (!item || !item.key) continue;
+        let a = agg.get(item.key);
+        if (!a) { a = { visits: 0, wins: 0, play: item.play || [], rates: [] }; agg.set(item.key, a); }
+        a.visits += item.visits || 0;
+        a.wins += item.wins || 0;
+        if (Array.isArray(item.rates)) a.rates.push(...item.rates);
+        else if (item.visits > 0) a.rates.push(item.wins / item.visits);
+    }
+    if (!agg.size) return null;
+    let maxVisits = 0;
+    for (const a of agg.values()) maxVisits = Math.max(maxVisits, a.visits);
+    let best = null, bestScore = -Infinity;
+    const totalWorlds = Math.max(1, worlds || 1);
+    for (const a of agg.values()) {
+        if (a.visits < Math.max(1, maxVisits * 0.1)) continue;
+        const rate = a.visits > 0 ? a.wins / a.visits : 0;
+        let score = rate;
+        if (a.rates.length > 0) {
+            const mean = a.rates.reduce((x, y) => x + y, 0) / a.rates.length;
+            let std = 0;
+            if (a.rates.length > 1) {
+                const variance = a.rates.reduce((x, y) => x + (y - mean) * (y - mean), 0) / a.rates.length;
+                std = Math.sqrt(variance);
+            }
+            const coverage = a.rates.length / totalWorlds;
+            score = mean - (lambda || 0.25) * std - 0.15 * (1 - coverage);
+        }
+        if (score > bestScore) { bestScore = score; best = a.play; }
+    }
+    if (best) return best;
+    let top = null;
+    for (const a of agg.values()) if (!top || a.visits > top.visits) top = a;
+    return top ? top.play : null;
+}
+
 // 汇总 MCTS 根节点各走法的访问/胜出统计（供多世界聚合使用）
 function _collectRootStats(root) {
     const stats = new Map();
@@ -2189,7 +2333,15 @@ function mctsSearchBlind(state, playerId, belief, opts) {
     }
     if (!best) return null;
     const needBeatRoot = state.lastPlay && state.lastPlayerId !== playerId;
-    if (best.length > 0 || needBeatRoot) return { play: best, visits: maxVisits, wins: Math.round(bestRate * maxVisits) };
+    if (best.length > 0 || needBeatRoot) {
+        const result = { play: best, visits: maxVisits, wins: Math.round(bestRate * maxVisits) };
+        if (opts.collectAll) {
+            result.agg = [...agg.entries()].map(([key, a]) => ({
+                key, visits: a.visits, wins: a.wins, play: a.play, rates: a.rates
+            }));
+        }
+        return result;
+    }
     return null;
 }
 
@@ -2210,6 +2362,28 @@ class AICore {
     think(phase, state) {
         if (phase === 'call') return this.callDecision(state);
         return this.playDecision(state);
+    }
+    _recordReasoning(chosen, source, scored) {
+        try {
+            const chosenType = chosen && chosen.length ? (getCardType(chosen) || {}).type || 'unknown' : 'pass';
+            const list = Array.isArray(scored) ? scored : [];
+            this.lastReasoning = {
+                turn: 0,
+                player: this.id,
+                phase: 'play',
+                source: source || 'heuristic',
+                chosen: chosen || [],
+                chosenScore: (list.find(s => s.chosen) || {}).score || 0,
+                candidates: list.slice(0, 10).map(s => ({
+                    type: s.play && s.play.length ? ((getCardType(s.play) || {}).type || 'unknown') : 'pass',
+                    score: s.score,
+                    isChosen: !!s.chosen || s.play === chosen
+                }))
+            };
+            if (!list.length) {
+                this.lastReasoning.candidates = [{ type: chosenType, score: 0, isChosen: true }];
+            }
+        } catch (e) { this.lastReasoning = null; }
     }
     callDecision(state) {
         let curr = state.baseScore;
@@ -2237,7 +2411,7 @@ class AICore {
                 players: state.players.map((p, i) => (i === this.id ? [...p, ...lordCards] : p))
             });
             const belief = new HandBelief(this.id, callState, this.memory);
-            let bestBid = 0, bestEV = -999;
+            let bestBid = 0, bestEV = 0;
             for (let bid = 1; bid <= 3; bid++) {
                 if (bid <= curr) continue;
                 let wins = 0;
@@ -2272,6 +2446,7 @@ class AICore {
         return 0;
     }
     playDecision(state) {
+        this.lastReasoning = null;
         let hand = [...state.players[this.id]];
         if (hand.length === 0) return [];
         let lastPlay = state.lastPlay;
@@ -2291,7 +2466,11 @@ class AICore {
                 timeBudgetMs: this.budgetMs('blind.endgameTimeBudgetMs.' + this.difficulty, 600),
                 memory: this.memory
             });
-            if (egResult !== null && egResult !== undefined) return (egResult === ENDGAME_PASS || egResult.__endgamePass) ? [] : egResult;
+            if (egResult !== null && egResult !== undefined) {
+                const endgamePlay = (egResult === ENDGAME_PASS || egResult.__endgamePass) ? [] : egResult;
+                this._recordReasoning(endgamePlay, 'endgame', []);
+                return endgamePlay;
+            }
         }
         let mctsLimit = cfg('mcts.handLimit.' + this.difficulty) || 0;
         let mctsIters = cfg('mcts.iterations.' + this.difficulty) || 0;
@@ -2312,14 +2491,17 @@ class AICore {
             });
             if (mctsResult && Array.isArray(mctsResult.play)) {
                 let needBeatMcts = lastPlay && state.lastPlayerId !== this.id;
-                if (mctsResult.play.length > 0 || needBeatMcts) return mctsResult.play;
+                if (mctsResult.play.length > 0 || needBeatMcts) {
+                    this._recordReasoning(mctsResult.play, 'mcts', []);
+                    return mctsResult.play;
+                }
             }
         }
         if (lastPlay && state.lastPlayerId !== this.id) {
-            if (lastPlay.type === CardType.ROCKET) return [];
+            if (lastPlay.type === CardType.ROCKET) { this._recordReasoning([], 'rule', []); return []; }
             if (lastPlay.type === CardType.BOMB) {
                 let hasBeatingBomb = Object.values(hand.reduce((a,c)=>(a[c.value]=(a[c.value]||0)+1,a),{})).some(v=>v===4);
-                if (!hasBeatingBomb && !(hand.some(c=>c.value===13) && hand.some(c=>c.value===14))) return [];
+                if (!hasBeatingBomb && !(hand.some(c=>c.value===13) && hand.some(c=>c.value===14))) { this._recordReasoning([], 'rule', []); return []; }
             }
         }
         if (!lastPlay || state.lastPlayerId === this.id) {
@@ -2328,7 +2510,7 @@ class AICore {
             return this.refineLeadByBelief(lead, allPlays, hand, state, role, belief);
         }
         let beatable = getAllValidPlays(hand, lastPlay);
-        if (beatable.length === 0) return [];
+        if (beatable.length === 0) { this._recordReasoning([], 'rule', []); return []; }
         let simWorlds = Math.max(1, cfg('blind.worlds.sim.' + this.difficulty) || 3);
         let simCache = null;
         let simDepth = cfg('simulation.depth.' + this.difficulty) || 0;
@@ -2376,7 +2558,7 @@ class AICore {
             }
         }
         scored.sort((a,b)=>b.score - a.score);
-        if (scored[0].play.length === 0) return [];
+        if (scored[0].play.length === 0) { this._recordReasoning([], 'heuristic', scored.map(s => ({ play: s.play, score: s.score, chosen: s.play.length === 0 }))); return []; }
         let isCritical = (hand.length <= 3) || (this.memory.getMaxOutside(hand) <= 12 && hand.length <= 5);
         let roleP = (state.landlord === this.id) ? 'landlord' : 'farmer';
         let oppCloseToWin;
@@ -2394,21 +2576,7 @@ class AICore {
         } else {
             chosenPlay = scored[0].play;
         }
-        // 记录推理快照（浏览器端供 GameRecorder 使用；Worker/Node 无 window 自动跳过）
-        try {
-            this.lastReasoning = {
-                turn: (typeof state !== 'undefined' && state.actions) ? state.actions.length : 0,
-                player: this.id,
-                phase: 'play',
-                chosen: chosenPlay,
-                chosenScore: scored.find(s => s.play === chosenPlay) ? scored.find(s => s.play === chosenPlay).score : 0,
-                candidates: scored.slice(0, Math.min(scored.length, 10)).map(s => ({
-                    type: s.play.length > 0 ? (getCardType(s.play) ? getCardType(s.play).type : 'unknown') : 'pass',
-                    score: s.score,
-                    isChosen: s.play === chosenPlay
-                }))
-            };
-        } catch (e) { this.lastReasoning = null; }
+        this._recordReasoning(chosenPlay, 'heuristic', scored.map(s => ({ play: s.play, score: s.score, chosen: s.play === chosenPlay })));
         return chosenPlay;
     }
     // 用信念模型评估"领出被压概率"，在启发式首选与更稳的领出之间做小幅取舍
