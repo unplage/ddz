@@ -281,6 +281,12 @@ const DEFAULT_PARAMS = {
         tripleHigh: -45, tripleWithHigh: -70, quadHigh: -60, planeHigh: -40,
         leadHighSingle: -30, leadHighPair: -25, endgameExempt: 4
     },
+    leadAdjust: {
+        // 农民下一位就是地主时，不要把 ≤3 这种“白送控制权”的单张直接喂出去
+        farmerTinySingleVsLandlord: 1000,
+        // 终局炸弹/王炸领出奖励（不再是绝对死规则）
+        bombLeadLate: { bomb: 20, rocket: 30 }
+    },
     passScores: {
         farmerPartnerBase: 260, farmerPartnerHandLe3: -80, farmerPartnerHandLe2: 500,
         lordHandLe2: -999, lordHandLe4: -150, lordHandGt4: -10,
@@ -450,6 +456,18 @@ class HandBelief {
         if (lordHasBottom) for (const c of lordCards) if (!ownIds.has(c.id)) this.knownByPlayer[this.landlord].push({ ...c });
         const knownIds = new Set();
         for (const list of this.knownByPlayer) for (const c of list) knownIds.add(c.id);
+
+        // 地主底牌若已被打出，不能继续作为"手中已知牌"进入世界采样
+        if (memory && memory.seen) {
+            const playedRaw = new Set(memory.seen);
+            for (let i = 0; i < 3; i++) {
+                if (this.knownByPlayer[i]) {
+                    this.knownByPlayer[i] = this.knownByPlayer[i].filter(c => !playedRaw.has(c.id));
+                }
+            }
+            knownIds.clear();
+            for (const list of this.knownByPlayer) for (const c of list) knownIds.add(c.id);
+        }
 
         // 已打出的牌 = 公开信息（记牌器）
         const playedSet = new Set();
@@ -658,6 +676,21 @@ function extractPlayFeatures(play, hand, lastPlay, role, memory, state) {
 
 // ======================== 出牌生成 ========================
 const _PLAY_TYPE_CACHE = new Map();
+function _canonicalHand(hand) {
+    return hand.slice().sort((a, b) => (a.value - b.value) || (a.id < b.id ? -1 : (a.id > b.id ? 1 : 0)));
+}
+const _VALID_PLAYS_CACHE = new Map();
+const _VALID_PLAYS_CACHE_MAX = 256;
+function _validPlaysKey(hand, lastPlay) {
+    let ids = [];
+    for (const c of hand) ids.push(c.value + ':' + c.id);
+    ids.sort();
+    let lp = '-';
+    if (lastPlay && lastPlay.type) {
+        lp = lastPlay.type + ':' + lastPlay.value + ':' + (lastPlay.length || 0);
+    }
+    return ids.join(',') + '|' + lp;
+}
 function _playKey(cards) { return cards.map(c => c.id).sort().join(','); }
 function playTypeOf(play) {
     if (!play || !play.length) return null;
@@ -671,9 +704,19 @@ function playTypeOf(play) {
 function getAllValidPlays(hand, lastPlay = null) {
     if (!hand || hand.length === 0) return [];
     if (lastPlay && lastPlay.type === CardType.ROCKET) return [];
+
+    const cacheKey = _validPlaysKey(hand, lastPlay);
+    const cached = _VALID_PLAYS_CACHE.get(cacheKey);
+    if (cached !== undefined) {
+        return cached.map(p => p.slice());
+    }
+
+    // 等价牌必须稳定表示：否则同一副牌因数组顺序不同会返回“不同的那张 K”，
+    // 上层链路可能在另一条 canonical 列表里选中另一张同名牌，被误判为非法牌。
+    const hand2 = _canonicalHand(hand);
     let cands = [];
     const byValue = {};
-    hand.forEach(c => { if (!byValue[c.value]) byValue[c.value] = []; byValue[c.value].push(c); });
+    hand2.forEach(c => { if (!byValue[c.value]) byValue[c.value] = []; byValue[c.value].push(c); });
     const push = (cards, type) => cands.push({ cards, type });
     Object.values(byValue).forEach(arr => { if (arr.length >= 1) push([arr[0]], { type: CardType.SINGLE, value: arr[0].value }); });
     Object.values(byValue).forEach(arr => { if (arr.length >= 2) push([arr[0], arr[1]], { type: CardType.PAIR, value: arr[0].value }); });
@@ -682,7 +725,7 @@ function getAllValidPlays(hand, lastPlay = null) {
     if (byValue[13] && byValue[14]) push([byValue[13][0], byValue[14][0]], { type: CardType.ROCKET, value: 100 });
     if (_canContend(lastPlay, CardType.TRIPLE_WITH_SINGLE)) {
         for (let triple of Object.values(byValue).filter(arr=>arr.length>=3)) {
-            for (let single of hand) if (single.value !== triple[0].value)
+            for (let single of hand2) if (single.value !== triple[0].value)
                 push([...triple.slice(0,3), single], { type: CardType.TRIPLE_WITH_SINGLE, value: triple[0].value });
         }
     }
@@ -694,7 +737,7 @@ function getAllValidPlays(hand, lastPlay = null) {
     }
     if (_canContend(lastPlay, CardType.FOUR_WITH_TWO_SINGLE)) {
         for (let quad of Object.values(byValue).filter(arr=>arr.length===4)) {
-            let singles = hand.filter(c => c.value !== quad[0].value);
+            let singles = hand2.filter(c => c.value !== quad[0].value);
             for (let i=0;i<singles.length;i++) for (let j=i+1;j<singles.length;j++)
                 push([...quad, singles[i], singles[j]], { type: CardType.FOUR_WITH_TWO_SINGLE, value: quad[0].value });
         }
@@ -707,7 +750,7 @@ function getAllValidPlays(hand, lastPlay = null) {
         }
     }
     if (_canContend(lastPlay, CardType.STRAIGHT)) {
-        let uniqueValues = [...new Set(hand.map(c=>c.value).filter(v=>v<12))].sort((a,b)=>a-b);
+        let uniqueValues = [...new Set(hand2.map(c=>c.value).filter(v=>v<12))].sort((a,b)=>a-b);
         for (let len=5; len<=12; len++) {
             for (let i=0; i+len <= uniqueValues.length; i++) {
                 let seq = uniqueValues.slice(i, i+len);
@@ -755,7 +798,7 @@ function getAllValidPlays(hand, lastPlay = null) {
                 for (let v of seq) { if (!byValue[v] || byValue[v].length<3) { ok=false; break; } tripleCards.push(byValue[v][0], byValue[v][1], byValue[v][2]); }
                 if (!ok) continue;
                 let usedIds = new Set(tripleCards.map(c=>c.id));
-                let kickers = hand.filter(c => !usedIds.has(c.id));
+                let kickers = hand2.filter(c => !usedIds.has(c.id));
                 for (let combo of getCombinations(kickers, len)) {
                     const cards = [...tripleCards, ...combo];
                     const vt = getCardType(cards);
@@ -806,7 +849,10 @@ function getAllValidPlays(hand, lastPlay = null) {
         out.push({ cards: entry.cards, type });
     }
     out.sort((a,b) => typePowerOf(a.type.type, a.type.value, a.type.length) - typePowerOf(b.type.type, b.type.value, b.type.length));
-    return out.map(e => e.cards);
+    const result = out.map(e => e.cards);
+    if (_VALID_PLAYS_CACHE.size >= _VALID_PLAYS_CACHE_MAX) _VALID_PLAYS_CACHE.clear();
+    _VALID_PLAYS_CACHE.set(cacheKey, result.map(p => p.slice()));
+    return result.map(p => p.slice());
 }
 
 // ======================== 评分系统 ========================
@@ -891,7 +937,16 @@ function scorePlay(features, role, memory, state, playerHand) {
     if ((features.isBomb || features.isRocket) && features.remainTotal <= 2) score += ph.bombUrgent.remainLe2;
     if (features.isBomb && memory.getOutsideBombCount(playerHand) <= 1 && !memory.getOutsideRocketPossible(playerHand)) score += ph.bombStrategic.fewOutside;
     if (features.isRocket) score += ph.bombStrategic.rocketBonus;
-    if (!features.needBeat && (features.isBomb || features.isRocket)) score += features.isRocket ? ph.bombLead.rocket : ph.bombLead.bomb;
+    if (!features.needBeat && (features.isBomb || features.isRocket)) {
+        let _late = features.remainTotal <= 3 || (playerHand && playerHand.length <= 6);
+        if (!_late) {
+            score += features.isRocket ? ph.bombLead.rocket : ph.bombLead.bomb;
+        } else {
+            let _bl = cfg('leadAdjust.bombLeadLate') || { bomb: 20, rocket: 30 };
+            score += features.isRocket ? _bl.rocket : _bl.bomb;
+        }
+    }
+
     if ((features.isBomb || features.isRocket) && features.needBeat && features.remainTotal > 5) {
         if (features.lastPlayPower < 40) score += ph.bombWasted.lowLastPower;
         if (features.lastPlayPower >= 40 && features.remainTotal > 8) score += ph.bombWasted.highLastPower;
@@ -1218,64 +1273,107 @@ function decomposeHandDP(hand) {
 
 function greedyDecompose(hand) {
     if (!hand || !hand.length) return { plays: [], score: 0 };
-    const cnt = new Array(15).fill(0);
-    hand.forEach(c => { if (c.value >= 0 && c.value <= 14) cnt[c.value]++; });
-    const byValue = new Array(15).fill(null).map(() => []);
-    hand.forEach(c => byValue[c.value].push(c));
+    hand = _canonicalHand(hand);
+
     const plays = [];
     const used = new Set();
-    const take = (v, n) => byValue[v].slice(0, n).forEach(c => used.add(c.id));
-    for (let v = 0; v <= 12; v++) if (cnt[v] === 4) { plays.push(byValue[v].slice(0, 4)); take(v, 4); }
-    if (cnt[13] && cnt[14]) { plays.push([byValue[13][0], byValue[14][0]]); take(13, 1); take(14, 1); }
-    for (let v = 12; v >= 0; v--) {
-        if (cnt[v] >= 3) {
-            const triple = byValue[v].slice(0, 3);
-            plays.push(triple); take(v, 3);
-            for (let w = 0; w <= 14; w++) {
-                if (w === v) continue;
-                const avail = byValue[w].filter(c => !used.has(c.id));
-                if (avail.length >= 1) { plays.push([...triple, avail[0]]); take(w, 1); break; }
-            }
-        }
+    const remaining = () => hand.filter(c => !used.has(c.id));
+    const takeCards = (cards) => {
+        for (const c of cards) used.add(c.id);
+        plays.push(cards.map(c => ({ ...c })));
+    };
+    const reserve = (cards) => { for (const c of cards) used.add(c.id); };
+    const unreservePlay = (cards) => plays.push(cards.map(c => ({ ...c })));
+
+    const byValue = {};
+    for (const c of hand) {
+        if (c.value < 0 || c.value > 14) continue;
+        if (!byValue[c.value]) byValue[c.value] = [];
+        byValue[c.value].push(c);
     }
-    for (let len = 6; len >= 3; len--) {
-        for (let start = 0; start + len <= 12; start++) {
-            let seq = [], ok = true;
-            for (let i = 0; i < len; i++) {
-                const v = start + i;
-                if (cnt[v] < 2) { ok = false; break; }
-                seq.push(v);
-            }
-            if (!ok) continue;
-            let cards = [];
-            seq.forEach(v => { cards.push(...byValue[v].filter(c => !used.has(c.id)).slice(0, 2)); });
-            if (cards.length !== len * 2) continue;
-            plays.push(cards); cards.forEach(c => used.add(c.id));
-        }
-    }
-    for (let len = 12; len >= 5; len--) {
-        for (let start = 0; start + len <= 12; start++) {
-            let ok = true;
-            for (let i = 0; i < len; i++) if (cnt[start + i] < 1) { ok = false; break; }
-            if (!ok) continue;
-            const cards = [];
-            for (let i = 0; i < len; i++) {
-                const v = start + i;
-                const a = byValue[v].filter(c => !used.has(c.id))[0];
-                if (!a) { ok = false; break; }
-                cards.push(a);
-            }
-            if (!ok) continue;
-            plays.push(cards); cards.forEach(c => used.add(c.id));
-        }
-    }
+
+    const rocket = (byValue[13] && byValue[13].length && byValue[14] && byValue[14].length)
+        ? [byValue[13][0], byValue[14][0]] : null;
+    const bombs = [];
     for (let v = 0; v <= 12; v++) {
-        const avail = byValue[v].filter(c => !used.has(c.id));
-        for (let i = 0; i + 1 < avail.length; i += 2) { plays.push([avail[i], avail[i + 1]]); used.add(avail[i].id); used.add(avail[i + 1].id); }
+        if (byValue[v] && byValue[v].length === 4) bombs.push(byValue[v].slice(0, 4));
     }
-    hand.forEach(c => { if (!used.has(c.id)) { plays.push([c]); used.add(c.id); } });
+
+    // 炸弹/王炸先“预留”给最后，但不会参与前面的顺子/连对拆解。
+    const reserved = [];
+    if (rocket) { reserve(rocket); reserved.push(rocket); }
+    for (const b of bombs) { reserve(b); reserved.push(b); }
+
+    const availFor = (v) => (byValue[v] || []).filter(c => !used.has(c.id));
+    const canUseValue = (v) => availFor(v).length > 0;
+    const findRun = (need, minLen) => {
+        for (let len = Math.min(12, Math.max(2, minLen)); len >= minLen; len--) {
+            for (let start = 0; start + len <= 12; start++) {
+                let ok = true;
+                const vals = [];
+                for (let i = 0; i < len; i++) {
+                    const v = start + i;
+                    if (!canUseValue(v) || availFor(v).length < need) { ok = false; break; }
+                    vals.push(v);
+                }
+                if (!ok) continue;
+                const seq = [];
+                for (const v of vals) {
+                    const it = availFor(v);
+                    for (let k = 0; k < need; k++) seq.push(it[k]);
+                }
+                if (seq.length) return seq;
+            }
+        }
+        return null;
+    };
+
+    // 连对 > 顺子，先把连续结构形成
+    let pairRun = findRun(2, 3);
+    if (pairRun) takeCards(pairRun);
+    let straightRun = findRun(1, 5);
+    if (straightRun) takeCards(straightRun);
+
+    // 三带：优先三张本体，kicker 用剩余最小的牌，避免吃 A/2/王
+    for (let v = 12; v >= 0; v--) {
+        if ((byValue[13] && v === 13) || (byValue[14] && v === 14)) continue;
+        const avail = availFor(v);
+        if (avail.length < 3) continue;
+        const triple = avail.slice(0, 3);
+        const kickerList = remaining().filter(c => !triple.includes(c) && c.value !== v)
+            .sort((a, b) => a.value - b.value);
+        if (kickerList.length) takeCards([...triple, kickerList[0]]);
+        else takeCards(triple);
+    }
+
+    // 剩余对子
+    const rem = remaining().slice().sort((a, b) => a.value - b.value);
+    for (let i = 0; i < rem.length - 1; i++) {
+        if (rem[i] && rem[i + 1] && rem[i].value === rem[i + 1].value) {
+            takeCards([rem[i], rem[i + 1]]);
+            i++;
+        }
+    }
+
+    // 单张
+    for (const c of remaining()) takeCards([c]);
+
+    // 预留牌放最后（炸弹/王炸不该作为常规先手）
+    for (const play of reserved) unreservePlay(play);
+
     let score = 0;
-    plays.forEach(pl => { const t = getCardType(pl); if (!t) return; score += pl.length * 2 + (t.type === CardType.STRAIGHT ? 6 : 0); });
+    for (const pl of plays) {
+        const t = getCardType(pl);
+        if (!t) continue;
+        let base = pl.length * 2;
+        if (t.type === CardType.STRAIGHT) base += 8 + t.length * 2;
+        else if (t.type === CardType.STRAIGHT_PAIR) base += 8 + t.length * 2;
+        else if (t.type === CardType.PLANE) base += 8 + t.length * 2;
+        else if (t.type === CardType.TRIPLE) base += 3;
+        else if (t.type === CardType.PAIR) base += 1;
+        else if (t.type === CardType.BOMB || t.type === CardType.ROCKET) base -= 2;
+        score += base;
+    }
     return { plays, score };
 }
 
@@ -1289,6 +1387,7 @@ function _cloneStateShallow(state) {
 }
 
 // ======================== 残局求解（快速 make/undo + 置换表 + 时间预算） ========================
+const ENDGAME_PASS = { __endgamePass: true };
 // 关键改进：① 支持"过牌"作为根候选（原实现漏掉，会错失配合/留牌最优解）
 //           ② 终局收益与深度解耦，置换表可跨路径复用（原实现按深度存，复用不安全）
 //           ③ 手牌以"点数多重集"做键，同点不同花视为等价，TT 命中率显著提升
@@ -1452,13 +1551,13 @@ function solveEndgame(state, playerId, opts) {
     };
 
     const options = plays.slice();
-    if (needBeat) options.push(null); // 过牌
+    if (needBeat) options.push(ENDGAME_PASS); // 过牌
     // 以学习到的启发式评分排序：保证即使预算截断，回退的也是 AI 默认最想出的牌，
     // 使残局求解成为"启发式的严格改进"而非另起炉灶。
     const mem = _memoryFromState(state);
     const role = (playerId === state.landlord) ? 'landlord' : 'farmer';
     const scoreOf = (p) => {
-        if (p === null) return computePassScore(role, state);
+        if (p === ENDGAME_PASS) return computePassScore(role, state);
         try {
             const f = extractPlayFeatures(p, hand, state.lastPlay, role, mem, state);
             return scorePlay(f, role, mem, state, hand);
@@ -1470,7 +1569,7 @@ function solveEndgame(state, playerId, opts) {
     let searchTruncated = false;
     for (const p of options) {
         let val;
-        if (p === null) {
+        if (p === null || p === ENDGAME_PASS) {
             val = endgameMinimax(hands, (playerId + 1) % 3, state.lastPlay, state.lastPlayerId, (state.passCount || 0) + 1, mySide, ctx, -Infinity, Infinity);
         } else {
             _applyPlay(hands, playerId, p);
@@ -1510,12 +1609,12 @@ function solveEndgameBlind(state, playerId, belief, opts) {
     const plays = needBeat ? getAllValidPlays(hand, state.lastPlay) : getAllValidPlays(hand, null);
     if (!plays.length) return null;
     const options = plays.slice();
-    if (needBeat) options.push(null); // 过牌
+    if (needBeat) options.push(ENDGAME_PASS); // 过牌
 
     const role = (playerId === state.landlord) ? 'landlord' : 'farmer';
     const mem = opts.memory || null;
     const scoreOf = (p) => {
-        if (p === null) return computePassScore(role, state);
+        if (p === null || p === ENDGAME_PASS) return computePassScore(role, state);
         try {
             const f = extractPlayFeatures(p, hand, state.lastPlay, role, mem, state);
             return scorePlay(f, role, mem, state, hand);
@@ -1530,7 +1629,7 @@ function solveEndgameBlind(state, playerId, belief, opts) {
     const perWorldLimit = Math.max(20000, Math.floor(nodeLimit / worlds));
     const lambda = opts.robustness !== undefined ? opts.robustness : (cfg('blind.robustness') !== undefined ? cfg('blind.robustness') : 0.25);
     const mySide = (playerId === state.landlord) ? [playerId] : [0, 1, 2].filter(i => i !== state.landlord);
-    const keyOf = (p) => (p === null) ? 'pass' : p.map(c => c.id).sort().join(',');
+    const keyOf = (p) => (p === null || p === ENDGAME_PASS) ? 'pass' : p.map(c => c.id).sort().join(',');
     const agg = new Map();
 
     for (let w = 0; w < worlds; w++) {
@@ -1545,7 +1644,7 @@ function solveEndgameBlind(state, playerId, belief, opts) {
         for (const p of options) {
             if (Date.now() > deadline) break;
             let val;
-            if (p === null) {
+            if (p === null || p === ENDGAME_PASS) {
                 val = endgameMinimax(hands, (playerId + 1) % 3, state.lastPlay, state.lastPlayerId, (state.passCount || 0) + 1, mySide, ctx, -Infinity, Infinity);
             } else {
                 _applyPlay(hands, playerId, p);
@@ -1684,8 +1783,15 @@ function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministi
             const oppUrgent = lastCards <= 2;
             const cheap = bestOver <= 4;
             let doPass = false;
-            if (mateLead) doPass = true;
-            else if (!cheap && !oppUrgent) doPass = true;
+            if (mateLead) {
+                // 队友领出：默认让牌。但如果队友并不领先、且地主/对手下一家很紧，
+                // 需要允许一次“低价接管”，而不是永远机械过牌。
+                const nextAfter = (cp + 1) % 3;
+                const lordRem = s.players[s.landlord] ? s.players[s.landlord].length : 17;
+                const partnerCards = (s.players[lastId] && s.players[lastId].length) || 0;
+                const lordIsNext = role === 'farmer' && nextAfter === s.landlord;
+                doPass = !(lordIsNext && lordRem <= 4 && partnerCards > 2 && cheap);
+            } else if (!cheap && !oppUrgent) doPass = true;
             if (doPass) {
                 s.passCount = (s.passCount || 0) + 1;
                 if (s.passCount >= 2) { s.lastPlay = null; s.lastPlayerId = -1; s.passCount = 0; }
@@ -1709,6 +1815,20 @@ function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministi
     return _playoutTerminalEval(s, mySide);
 }
 
+function _handTurnsEstimate(hand) {
+    if (!hand || hand.length === 0) return 0;
+    if (hand.length > 20) return Math.ceil(hand.length / 2);
+    let plan = null;
+    try { plan = (hand.length <= 15) ? decomposeHandDP(hand) : greedyDecompose(hand); }
+    catch (e) { plan = greedyDecompose(hand); }
+    return plan && plan.plays ? Math.max(1, plan.plays.length) : Math.max(1, hand.length);
+}
+function _sideTurnsEstimate(players, side) {
+    let turns = 0;
+    for (const i of side) turns += _handTurnsEstimate(players[i] || []);
+    return turns;
+}
+
 function _playoutTerminalEval(s, mySide) {
     let mine = 0, theirs = 0, myPower = 0, theirPower = 0;
     for (let i = 0; i < 3; i++) {
@@ -1722,7 +1842,10 @@ function _playoutTerminalEval(s, mySide) {
         else { theirs += p.length; theirPower += pw; }
     }
     if (mine !== theirs) return mine < theirs;
-    return myPower >= theirPower;
+    if (myPower !== theirPower) return myPower > theirPower;
+    const myTurns = _sideTurnsEstimate(s.players, mySide);
+    const theirTurns = _sideTurnsEstimate(s.players, [0, 1, 2].filter(i => !mySide.includes(i)));
+    return myTurns <= theirTurns;
 }
 
 // ======================== MCTS ========================
@@ -1813,7 +1936,14 @@ class MCTSNode {
                         const t = playTypeOf(p);
                         return !(t && (t.type === CardType.BOMB || t.type === CardType.ROCKET));
                     });
-                    if (noBomb.length) plays = noBomb;
+                    if (noBomb.length) {
+                        const bombs = plays.filter(p => {
+                            const t = playTypeOf(p);
+                            return t && (t.type === CardType.BOMB || t.type === CardType.ROCKET);
+                        });
+                        if (bombs.length) noBomb.push(bombs[0]);
+                        plays = noBomb;
+                    }
                 }
                 if (needBeat) {
                     const minP = minBeatPower(st.lastPlay.type, st.lastPlay.value, st.lastPlay.length);
@@ -1847,6 +1977,7 @@ class MCTSNode {
             if (newState.players[this.playerToMove].length === 0) newState.phase = 'gameover';
         }
         if (newState.passCount >= 2) { newState.lastPlay = null; newState.lastPlayerId = -1; newState.passCount = 0; }
+        newState.currentPlayer = nextPlayer;
         let child = new MCTSNode(newState, play || [], nextPlayer, this.myId);
         // 根节点先验：虚拟访问把搜索预算导向启发式评分靠前的走法
         if (this.parent === null && this.priors) {
@@ -1991,7 +2122,6 @@ function _buildRootPriors(state, playerId, memory) {
         const rank = Math.min(i, K);
         map.set(key, 0.5 + 0.3 * (1 - rank / Math.max(1, K)));
     }
-    if (needBeat) map.set('pass', 0.35);
     return map;
 }
 
@@ -2161,7 +2291,7 @@ class AICore {
                 timeBudgetMs: this.budgetMs('blind.endgameTimeBudgetMs.' + this.difficulty, 600),
                 memory: this.memory
             });
-            if (egResult !== null) return egResult;
+            if (egResult !== null && egResult !== undefined) return (egResult === ENDGAME_PASS || egResult.__endgamePass) ? [] : egResult;
         }
         let mctsLimit = cfg('mcts.handLimit.' + this.difficulty) || 0;
         let mctsIters = cfg('mcts.iterations.' + this.difficulty) || 0;
@@ -2366,8 +2496,8 @@ class AICore {
                 }
             }
         } else {
-            // 队友只剩 1~2 张：把牌让给队友，别抢出
-            if (partnerCount <= 2 && partnerId2 >= 0) {
+            // 队友只剩 1~2 张：把牌让给队友，但只在队友确实是下家时
+            if (partnerCount <= 2 && partnerId2 >= 0 && nextId === partnerId2) {
                 const cheap = plays.slice().sort((a,b) => getPlayPower(a) - getPlayPower(b));
                 return cheap[0];
             }
@@ -2386,6 +2516,11 @@ class AICore {
             if (role === 'farmer') {
                 // 农民：地主在下一位时优先"便宜"的牌，别替地主拆大牌
                 if (nextId === landlordId) sc = p.length * 8 - getPlayPower(p) * 0.9;
+                if (nextId === landlordId && p.length === 1 && p[0] && p[0].value <= 3) {
+                    let _tinyPenalty = cfg('leadAdjust.farmerTinySingleVsLandlord');
+                    if (typeof _tinyPenalty !== 'number') _tinyPenalty = 1000;
+                    sc -= _tinyPenalty;
+                }
                 // 队友牌多时不要单张磨蹭，尽量成组出
                 if (partnerCount > 4 && p.length === 1) sc -= 8;
             } else {

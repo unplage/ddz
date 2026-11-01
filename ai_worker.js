@@ -66,7 +66,7 @@ self.onmessage = function (e) {
     try {
         switch (msg.cmd) {
             case 'init': {
-                if (msg.params) _params = msg.params;
+                if (Object.prototype.hasOwnProperty.call(msg || {}, 'params')) _params = msg.params || null;
                 if (typeof invalidateParamCache === 'function') invalidateParamCache();
                 if (msg.correctionRules) _correctionRules = msg.correctionRules;
                 self.postMessage({ status: 'ready' });

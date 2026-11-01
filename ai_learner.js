@@ -76,9 +76,11 @@ const ParamConfig = {
         if (typeof invalidateParamCache === 'function') invalidateParamCache();
         this._overrides = null;
         localStorage.removeItem('landlord_ai_params');
+        this._persist();
     },
 
     _persist() {
+        if (typeof invalidateParamCache === 'function') invalidateParamCache();
         if (this._overrides) {
             localStorage.setItem('landlord_ai_params', JSON.stringify(this._overrides));
         } else {
@@ -86,9 +88,8 @@ const ParamConfig = {
         }
         if (typeof window !== 'undefined' && window.AiWorkerPool && window.AiWorkerPool.ready) {
             try {
-                let params = this._overrides ? this._overrides : null;
-                let msg = { cmd: 'init' };
-                if (params) msg.params = params;
+                let msg = { cmd: 'init', params: this._overrides ? this._overrides : null };
+                if (typeof CorrectionRules !== 'undefined') { CorrectionRules.init(); msg.correctionRules = CorrectionRules._rules || []; }
                 for (let w of window.AiWorkerPool.workers) {
                     if (w._ready && !w._dead) w.postMessage(msg);
                 }
@@ -868,6 +869,68 @@ const CorrectionRules = {
     _learnFromAnalysis(gameId, analysis) {
         // Deprecated: 学习功能已由 GodViewLearner 接管
     },
+    _learnFromCorrections(corrections) {
+        if (!Array.isArray(corrections)) return;
+        this.init();
+        let changed = false;
+        for (let c of corrections) {
+            if (!c || typeof c.diff !== 'number' || c.diff < 0.25) continue;
+            const specs = [];
+            const actualBomb = c.actualType === CardType.BOMB || c.actualType === CardType.ROCKET;
+            const bestBomb = c.bestType === CardType.BOMB || c.bestType === CardType.ROCKET;
+            if (actualBomb && !bestBomb) specs.push({
+                context: { needBeat: true, isBomb: true },
+                penalty: - (10 + Math.round(c.diff * 20)),
+                category: 'overkill',
+                reason: '用炸弹/王炸过度压制，有更小牌型可用',
+                confidence: Math.min(0.9, 0.55 + c.diff * 0.5),
+                comparators: {}
+            });
+            const highKicker = (
+                (c.actualType === CardType.TRIPLE_WITH_SINGLE || c.actualType === CardType.TRIPLE_WITH_PAIR) &&
+                c.actualFeat && c.actualFeat.kickerValue >= 11 &&
+                (!c.bestFeat || (c.bestFeat.kickerValue || 0) < c.actualFeat.kickerValue)
+            );
+            if (highKicker) specs.push({
+                context: {
+                    needBeat: true,
+                    playType: c.actualType,
+                    kickerValue: 11
+                },
+                comparators: { kickerValue: 'gte' },
+                penalty: -8,
+                category: 'high_kicker',
+                reason: '三带使用过高 kicker，存在更小带牌',
+                confidence: Math.min(0.9, 0.55 + c.diff * 0.4)
+            });
+            for (const spec of specs) {
+                this._mergeCorrectionRule(spec);
+                changed = true;
+            }
+        }
+        if (changed) this._persist();
+    },
+    _mergeCorrectionRule(spec) {
+        let rule = this._rules.find(r => JSON.stringify(r.context) === JSON.stringify(spec.context) && JSON.stringify(r.comparators || {}) === JSON.stringify(spec.comparators || {}));
+        if (rule) {
+            rule.triggerCount++;
+            rule.confidence = Math.min(0.98, rule.confidence + 0.05);
+            rule.penalty = Math.round((rule.penalty + spec.penalty) / 2);
+            rule.ts = Date.now();
+            return;
+        }
+        if (this._rules.length >= this.MAX_RULES) this._rules.shift();
+        this._rules.push({
+            context: spec.context,
+            comparators: spec.comparators || null,
+            penalty: spec.penalty,
+            category: spec.category,
+            reason: spec.reason,
+            confidence: spec.confidence,
+            triggerCount: 1,
+            ts: Date.now()
+        });
+    },
 
     getStats() {
         this.init();
@@ -899,8 +962,9 @@ const SelfPlayEval = {
     _decide(seat, state, memory, candSeat, cand, base) {
         const prev = ParamConfig._overrides;
         ParamConfig._overrides = (seat === candSeat) ? cand : base;
+        if (typeof invalidateParamCache === 'function') invalidateParamCache();
         try { return new AICore(seat, 'medium', memory).playDecision(state); }
-        finally { ParamConfig._overrides = prev; }
+        finally { ParamConfig._overrides = prev; if (typeof invalidateParamCache === 'function') invalidateParamCache(); }
     },
     _playDeal(deal, landlord, candSeat, cand, base) {
         const players = deal.hands.map(p => p.map(c => ({ ...c })));
@@ -957,7 +1021,7 @@ const SelfPlayEval = {
     async evaluate(cand, base, deals, timeBudgetMs) {
         if (typeof AICore === 'undefined' || typeof getAllValidPlays === 'undefined') return null;
         const t0 = Date.now();
-        const budget = timeBudgetMs || 6000;
+        const budget = timeBudgetMs || 8000;
         let games = 0, wins = 0;
         const yieldToUI = () => new Promise(r => setTimeout(r, 0));
         for (let d = 0; d < deals; d++) {
@@ -971,10 +1035,12 @@ const SelfPlayEval = {
                 const w = this._playDeal(deal, landlord, cfg.seat, cand, base);
                 const candWon = (cfg.seat === landlord) ? (w === landlord) : (w !== landlord);
                 games++; if (candWon) wins++;
-                if (Date.now() - t0 > budget) return games > 0 ? wins / games : null;
+                if (Date.now() - t0 > budget) return null;
                 await yieldToUI();
             }
         }
+        const minGames = Math.max(4, Math.min(8, deals * 2));
+        if (games < minGames) return null;
         return games > 0 ? wins / games : null;
     }
 };
@@ -1025,6 +1091,7 @@ const GodViewLearner = {
             let corrections = this._analyzeGame(game, stats);
             if (corrections.length > 0) {
                 this._saveCorrections(corrections);
+                try { CorrectionRules._learnFromCorrections(corrections); } catch (e) {}
                 await this._applyAdjustments(corrections, stats); // 内部完成候选构建→自对弈验证→按需持久化
             }
         } catch (e) {
@@ -1267,8 +1334,15 @@ const GodViewLearner = {
                 let feat = extractPlayFeatures(p, hand, s.lastPlay, role, memory, s);
                 return { play: p, score: scorePlay(feat, role, memory, s, hand) };
             });
+            // 过牌必须作为候选之一：之前 rollout 只会“有牌必打”，会严重高估主动出牌。
+            scored.push({ play: [], score: computePassScore(role, s) });
             scored.sort((a, b) => b.score - a.score);
             let chosen = scored[0].play;
+            if (chosen.length === 0) {
+                s.passCount++;
+                cp = (cp + 1) % 3;
+                continue;
+            }
             if (Math.random() < 0.12 && scored.length > 1 && scored[1].play.length > 0) {
                 chosen = scored[1].play;
             }
@@ -1279,7 +1353,24 @@ const GodViewLearner = {
             s.passCount = 0;
             cp = (cp + 1) % 3;
         }
-        return false;
+        // 到达 step limit 时，用“我方是否更快走完 + 牌力”给出近似终局判断，
+        // 而不是永远返回 false（会把所有 rollout 都判成输，污染反事实标签）。
+        try {
+            let mySide = (aiPlayerId === lordIdx) ? [aiPlayerId] : [0, 1, 2].filter(i => i !== lordIdx);
+            let myLen = 0, oppLen = 0;
+            for (let i = 0; i < 3; i++) {
+                const len = (s.players[i] || []).length;
+                if (mySide.includes(i)) myLen += len; else oppLen += len;
+            }
+            if (myLen !== oppLen) return myLen < oppLen;
+            let myPower = 0, oppPower = 0;
+            for (let i = 0; i < 3; i++) {
+                let pw = 0;
+                for (const c of (s.players[i] || [])) pw += 1 + (c.value >= 12 ? 3 : 0) + (c.value >= 11 ? 1 : 0);
+                if (mySide.includes(i)) myPower += pw; else oppPower += pw;
+            }
+            return myPower >= oppPower;
+        } catch (e) { return false; }
     },
 
     _advanceState(state, action) {
@@ -1408,13 +1499,15 @@ const GodViewLearner = {
         }
         if (changed === 0) return;
 
-        // 自我对弈 A/B 验证：候选参数必须不劣于当前参数才采纳（0.45 容忍小样本噪声）
+        // 自我对弈 A/B 验证：候选参数必须不劣于当前参数才采纳。
+        // 之前 6 副牌 + 0.45 门禁，几乎无法区分噪声与真实提升，因此这里提升到
+        // 10 副牌 / 20 paired games，并要求 A/B 胜率不低于 50%。
         let base = this._effectiveParams();
         let wr = null;
-        try { wr = await SelfPlayEval.evaluate(candidate, base, 6, 5000); } catch (e) { wr = null; }
+        try { wr = await SelfPlayEval.evaluate(candidate, base, 10, 8000); } catch (e) { wr = null; }
         stats.validated = true;
         stats.validationWinRate = wr;
-        if (wr !== null && wr < 0.45) {
+        if (wr === null || wr < 0.5) {
             this._statsCache.rejected = (this._statsCache.rejected || 0) + 1;
             this._statsCache.lastValidation = wr;
             return;
