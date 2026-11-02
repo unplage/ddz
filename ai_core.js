@@ -209,7 +209,7 @@ const DEFAULT_PARAMS = {
         grandmaster: { one: 20, two: 30, three: 42, bombBonus: 20, bothJokersBonus: 20, singlePenaltyFactor: 3, positionBonus: 8 },
         legendary: null
     },
-    endgameThresholds: { legendary: 17, grandmaster: 17, hard: 15, medium: 9, easy: 7 },
+    endgameThresholds: { legendary: 20, grandmaster: 20, hard: 18, medium: 9, easy: 7 },
     // ======================== 隐藏信息（Blind AI）参数 ========================
     // 公平性：AI 只使用公开信息（自己手牌 / 各家张数 / 已出牌 / 地主底牌），
     // 对手手牌一律不可见；搜索在采样出的"可能世界"里进行并跨世界聚合。
@@ -220,11 +220,11 @@ const DEFAULT_PARAMS = {
             endgame: { easy: 2, medium: 3, hard: 6, grandmaster: 8, legendary: 10 },
             mcts:    { easy: 0, medium: 0, hard: 3, grandmaster: 5, legendary: 6 },
             sim:     { easy: 0, medium: 0, hard: 2, grandmaster: 3, legendary: 4 },
-            call:    { easy: 0, medium: 0, hard: 0, grandmaster: 0, legendary: 6 }
+            call:    { easy: 0, medium: 0, hard: 4, grandmaster: 6, legendary: 6 }
         },
         // 单次决策的时间预算（毫秒）
-        endgameTimeBudgetMs: { easy: 120, medium: 200, hard: 1200, grandmaster: 2000, legendary: 3000 },
-        mctsTimeBudgetMs:    { easy: 0, medium: 0, hard: 1500, grandmaster: 2500, legendary: 4000 },
+        endgameTimeBudgetMs: { easy: 120, medium: 200, hard: 1500, grandmaster: 2500, legendary: 3500 },
+        mctsTimeBudgetMs:    { easy: 0, medium: 0, hard: 1800, grandmaster: 3000, legendary: 4500 },
         // 跨世界聚合的鲁棒系数：均值 − λ×标准差（压制"赌对手手牌"的走法）
         robustness: 0.25,
         // 领出被压概率的估计（样本数 / 权重 / 候选数）
@@ -241,7 +241,7 @@ const DEFAULT_PARAMS = {
     mcts: {
         ucbC: 1.4,
         rootBranch: 12, branch: 8,
-        iterations: { legendary: 30000, grandmaster: 8000, hard: 1200, medium: 0, easy: 0 },
+        iterations: { legendary: 30000, grandmaster: 12000, hard: 1800, medium: 0, easy: 0 },
         handLimit: { legendary: 17, grandmaster: 14, hard: 12, medium: 0, easy: 0 },
         timeLimit: 4000,
         timeLimitByDiff: { legendary: 4000, grandmaster: 2500, hard: 1200 }
@@ -339,6 +339,8 @@ class MasterMemory {
         this.history = [];
         this.playerHistory = [[], [], []];
         this.totalCardsPlayed = [0, 0, 0];
+        // 对手个体化：记录各玩家在需要跟牌时选择过牌的上下文（公开信息，仅用于收窄信念）
+        this.passHints = [[], [], []];
     }
     record(cards) {
         cards.forEach(c => {
@@ -380,6 +382,22 @@ class MasterMemory {
     }
     getOutsideRocketPossible(myHand) {
         return this._outsideCount(13, myHand) >= 1 && this._outsideCount(14, myHand) >= 1;
+    }
+    // 记录某玩家在需要跟牌时选择过牌（仅记录公开的上下文，不窥视手牌）
+    recordPass(playerId, ctx) {
+        if (playerId < 0 || playerId > 2 || !ctx) return;
+        this.passHints[playerId].push({ type: ctx.type, value: ctx.value, length: ctx.length || 0, ts: Date.now() });
+        // 保留最近 60 条，避免无限增长
+        if (this.passHints[playerId].length > 60) this.passHints[playerId].shift();
+    }
+    // 获取某对手在指定点数附近曾 pass 过的次数（用于降低其持有该区间大牌的概率）
+    passHintsNear(oppId, value, within = 2) {
+        if (!this.passHints[oppId]) return 0;
+        let n = 0;
+        for (const h of this.passHints[oppId]) {
+            if (Math.abs(h.value - value) <= within) n++;
+        }
+        return n;
     }
 }
 
@@ -503,6 +521,9 @@ class HandBelief {
         this.pool = pool;
         this.poolCounts = new Array(15).fill(0);
         for (const c of pool) this.poolCounts[c.value]++;
+        // 对手个体化线索：各对手曾在需要跟牌时 pass 过的上下文（公开信息）
+        this.passHints = memory && memory.passHints ? memory.passHints : [[], [], []];
+        this.memory = memory;
     }
 
     // 采样一个"可能世界"：自己的手牌精确，对手手牌按未见牌池随机分配（保留地主底牌归属）
@@ -557,7 +578,14 @@ class HandBelief {
             const denom = comb(poolSize, unknownSlots);
             if (denom) risk += hit / denom;
         }
-        return Math.min(1, risk);
+        // 对手曾在高点区 pass 过，说明其手中大牌较少，下调握炸概率
+        let passDiscount = 1.0;
+        for (let v = 0; v <= 12; v++) {
+            const hints = this.memory ? this.memory.passHintsNear(oppId, v, 2) : 0;
+            if (hints > 0) passDiscount -= hints * 0.08;
+        }
+        passDiscount = Math.max(0.3, passDiscount);
+        return Math.min(1, risk * passDiscount);
     }
     // 某对手握有王炸的概率（已知底牌中的大小王同样计入）
     rocketRiskFor(oppId) {
@@ -598,7 +626,16 @@ class HandBelief {
             try { can = getAllValidPlays(hand, type).length > 0; } catch (e) { can = false; }
             if (can) hit++;
         }
-        return total > 0 ? hit / total : 0;
+        let base = total > 0 ? hit / total : 0;
+        // 对手曾在该点数区间 pass 过，降低其能压过的概率（公开行为约束信念）
+        let hintPenalty = 0;
+        const hints = this.passHints[oppId] || [];
+        const pv = type.value;
+        for (const h of hints) {
+            if (type.type === CardType.SINGLE && h.type === 'single' && h.value >= pv) hintPenalty += 0.12;
+            if ((h.type === 'bomb' || h.type === 'rocket') && type.type !== CardType.ROCKET) hintPenalty += 0.08;
+        }
+        return Math.max(0, Math.min(1, base - Math.min(0.5, hintPenalty)));
     }
 }
 
@@ -2399,10 +2436,10 @@ class AICore {
             if (strength > (ct.one || 22) && curr < 1) return 1;
             return 0;
         }
-        if (this.difficulty === 'legendary') {
-            // 叫分评估同样走"信念世界"，不窥视他人手牌
+        if (this.difficulty === 'hard' || this.difficulty === 'grandmaster' || this.difficulty === 'legendary') {
+            // 叫分评估走"信念世界"多模拟，不窥视他人手牌
             const worlds = Math.max(1, cfg('blind.worlds.call.' + this.difficulty) || 6);
-            const trials = cfg('blind.callTrials.' + this.difficulty) || 60;
+            const trials = { hard: 20, grandmaster: 40, legendary: 60 }[this.difficulty] || 40;
             const lordCards = state.lordCards || [];
             // 以"我当地主 + 拿底牌"为前提构造信念（底牌归属公开，因此从对手牌池中剔除）
             const callState = Object.assign({}, state, {
@@ -2458,6 +2495,13 @@ class AICore {
             }
         }
         let endgameLimit = cfg('endgameThresholds.' + this.difficulty) || 10;
+        // 记录对手最近一次"需要跟牌却选择过牌"的公开信息，用于收窄其手牌信念
+        if (state.passCount === 1 && state.lastPlay && state.lastPlayerId !== -1) {
+            const passerId = (state.currentPlayer + 2) % 3;
+            if (passerId !== this.id) {
+                try { this.memory.recordPass(passerId, { type: state.lastPlay.type, value: state.lastPlay.value, length: state.lastPlay.length || 0 }); } catch (e) {}
+            }
+        }
         // ===== 公平性：只使用公开信息建立信念模型（对手手牌不可见） =====
         const belief = new HandBelief(this.id, state, this.memory);
         if (hand.length <= endgameLimit) {
@@ -2518,9 +2562,21 @@ class AICore {
         let dpBonusFactor = cfg('simulation.dpBonusFactor.' + this.difficulty) || 0;
         let simMax = cfg('simulation.maxCandidates.' + this.difficulty) || 8;
         let dpMax = cfg('simulation.dpCandidates.' + this.difficulty) || 6;
+        // 动态拆牌/剩余结构评分：出完此手后，剩余手牌结构越紧凑（出手步数越少、单张越少），分越高
+        // 仅在残局（手牌较少）时启用动态拆牌/结构评分，避免中盘每步额外跑分解导致移动端卡顿
+        const _structScore = (newHand) => {
+            if (!newHand || newHand.length === 0) return 60;
+            if (newHand.length > 12) return 0;
+            let plan = newHand.length <= 15 ? decomposeHandDP(newHand) : greedyDecompose(newHand);
+            let turns = plan && plan.plays ? plan.plays.length : newHand.length;
+            let feats = extractHandFeatures(newHand);
+            return 50 - turns * 2.5 - feats.single * 1.5;
+        };
         let baseScored = beatable.map(play => {
             let features = extractPlayFeatures(play, hand, lastPlay, role, this.memory, state);
-            return { play, score: scorePlay(features, role, this.memory, state, hand) };
+            let newHand = hand.filter(c => !play.includes(c));
+            let structScore = _structScore(newHand);
+            return { play, score: scorePlay(features, role, this.memory, state, hand) + structScore * 2.0 };
         });
         baseScored.sort((a, b) => b.score - a.score);
         const simTargets = new Set(baseScored.slice(0, Math.max(1, simMax)).map(x => x.play));
@@ -2558,6 +2614,24 @@ class AICore {
             }
         }
         scored.sort((a,b)=>b.score - a.score);
+        // ===== 宏观跟牌门禁：先判断"是否值得对付"，再决定出什么 =====
+        // 若最佳非炸弹/王炸跟牌相对 pass 优势不明显，且对手快走完，直接放弃跟牌，
+        // 避免"有能打的牌就硬跟，跟了更亏"的问题。
+        const _bestEntry = scored[0];
+        if (_bestEntry && _bestEntry.play.length > 0) {
+            const _passEntry = scored.find(s => s.play.length === 0);
+            const _passVal = _passEntry ? _passEntry.score : -Infinity;
+            const _gap = _bestEntry.score - _passVal;
+            const _topType = getCardType(_bestEntry.play);
+            const _isBombRocket = _topType && (_topType.type === CardType.BOMB || _topType.type === CardType.ROCKET);
+            const _oppClose = (state.lastPlayerId >= 0 && state.players[state.lastPlayerId]
+                ? state.players[state.lastPlayerId].length : 17) <= 2;
+            if (!_isBombRocket && (_gap < 0 || (_oppClose && _gap < 18))) {
+                this._recordReasoning([], 'macro_pass', scored.map(s => ({ play: s.play, score: s.score, chosen: s.play.length === 0 })));
+                return [];
+            }
+        }
+
         if (scored[0].play.length === 0) { this._recordReasoning([], 'heuristic', scored.map(s => ({ play: s.play, score: s.score, chosen: s.play.length === 0 }))); return []; }
         let isCritical = (hand.length <= 3) || (this.memory.getMaxOutside(hand) <= 12 && hand.length <= 5);
         let roleP = (state.landlord === this.id) ? 'landlord' : 'farmer';

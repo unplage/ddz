@@ -607,8 +607,8 @@ const GameAnalyzer = {
             if (state.phase !== 'playing') break;
             if (state.players.some(p => p.length === 0)) break;
 
-            // Only check AI decisions (players 1 and 2)
-            if (action.p === 1 || action.p === 2) {
+            // Check all players' decisions (human seat 0 included)
+            if (action.p >= 0 && action.p <= 2) {
                 let playerHand = state.players[action.p];
                 if (playerHand && playerHand.length > 0) {
                     let m = this._checkDecision(state, action, playerHand, game.difficulty, memory);
@@ -1034,11 +1034,11 @@ const SelfPlayEval = {
         hands.forEach(h => h.sort((a, b) => a.value - b.value));
         return { hands, lordCards };
     },
-    _decide(seat, state, memory, candSeat, cand, base) {
+    _decide(seat, state, memory, candSeat, cand, base, difficulty = 'grandmaster') {
         const prev = ParamConfig._overrides;
         ParamConfig._overrides = (seat === candSeat) ? cand : base;
         if (typeof invalidateParamCache === 'function') invalidateParamCache();
-        try { return new AICore(seat, 'medium', memory).playDecision(state); }
+        try { return new AICore(seat, difficulty, memory).playDecision(state); }
         finally { ParamConfig._overrides = prev; if (typeof invalidateParamCache === 'function') invalidateParamCache(); }
     },
     _playDeal(deal, landlord, candSeat, cand, base) {
@@ -1063,7 +1063,7 @@ const SelfPlayEval = {
             let chosen = null;
             if (plays.length === 0) chosen = [];
             else {
-                try { chosen = this._decide(cp, state, memory, candSeat, cand, base); } catch (e) { chosen = null; }
+                try { chosen = this._decide(cp, state, memory, candSeat, cand, base, difficulty); } catch (e) { chosen = null; }
                 if (!Array.isArray(chosen)) chosen = null;
                 if (chosen && chosen.length > 0) {
                     const ids = new Set(chosen.map(c => c.id));
@@ -1093,7 +1093,7 @@ const SelfPlayEval = {
         return winner;
     },
     // 返回 Promise<{winRate, games, wins}>；每局之间让出主线程，避免自对弈验证阻塞界面
-    async evaluate(cand, base, deals, timeBudgetMs) {
+    async evaluate(cand, base, deals, timeBudgetMs, difficulty = 'grandmaster') {
         if (typeof AICore === 'undefined' || typeof getAllValidPlays === 'undefined') return null;
         const t0 = Date.now();
         const budget = timeBudgetMs || 12000;
@@ -1209,7 +1209,7 @@ const GodViewLearner = {
             lastPlay: null, lastPlayerId: -1, passCount: 0, phase: 'playing'
         };
         let corrections = [];
-        let aiPlayers = [1, 2];
+        let aiPlayers = [0, 1, 2];
 
         for (let i = 0; i < game.actions.length; i++) {
             let action = game.actions[i];
@@ -1556,8 +1556,8 @@ const GodViewLearner = {
         if (now - this._lastAdjustTime < this._ADJUST_INTERVAL) return;
         this._lastAdjustTime = now;
 
-        let lr = 0.05 / (1 + 0.002 * this._adjustCount);
-        if (lr < 0.002) return;
+        let lr = 0.05 / (1 + 0.001 * this._adjustCount);
+        if (lr < 0.0005) lr = 0.0005;
 
         let weightDeltas = {};
         let heuristicDeltas = {};
@@ -1605,7 +1605,7 @@ const GodViewLearner = {
             let cur = ParamConfig.get(path);
             if (typeof cur !== 'number') continue;
             let def = this._defaultWeight(key);
-            let range = Math.max(2, Math.abs(def) * 1.5);
+            let range = Math.max(4, Math.abs(def) * 3.0);
             let nv = Math.max(def - range, Math.min(def + range, cur + weightDeltas[key]));
             if (Math.abs(nv - cur) < 0.0005) continue;
             this._setNested(candidate, path, Math.round(nv * 10000) / 10000);
@@ -1626,7 +1626,7 @@ const GodViewLearner = {
         // 10 副牌 / 20 paired games，并要求 A/B 胜率不低于 50%。
         let base = this._effectiveParams();
         let validation = null;
-        try { validation = await SelfPlayEval.evaluate(candidate, base, 20, 16000); } catch (e) { validation = null; }
+        try { validation = await SelfPlayEval.evaluate(candidate, base, 20, 16000, 'grandmaster'); } catch (e) { validation = null; }
         stats.validated = true;
         stats.validationWinRate = validation ? validation.winRate : null;
         stats.validationGames = validation ? validation.games : 0;
@@ -1642,7 +1642,7 @@ const GodViewLearner = {
             const centre = p + z * z / (2 * n);
             const margin = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n));
             const lower = (centre - margin) / denom;
-            accepted = p >= 0.52 && lower > 0.42;
+            accepted = p >= 0.50 && lower > 0.45;
             stats.validationLowerBound = lower;
         }
         if (!accepted) {
