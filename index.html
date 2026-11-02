@@ -15,7 +15,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon.png">
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
     <meta name="theme-color" content="#1a1a2e">
-    <meta name="app-version" content="v81">
+    <meta name="app-version" content="v82">
     <meta name="description" content="像素风格斗地主：单机公平 AI 对战 + P2P 联机，离线可玩">
     <style>
         * { image-rendering: pixelated; font-family: 'Press Start 2P', cursive; -webkit-tap-highlight-color: transparent; touch-action: manipulation; box-sizing: border-box; }
@@ -1274,11 +1274,90 @@
         else { if (GameState.lastPlay) showToast('建议：不出'); else showToast('请自由出牌'); }
     }
 
+    // ======================== 联机网络配置（参考 p2p/net.js） ========================
+    // 跨 WiFi / 不同网络下 WebRTC 必须依赖 STUN 获取公网候选、TURN 中继穿透对称 NAT。
+    const ONLINE_NET = {
+        SETTINGS_KEY: 'ddz.online.net.v1',
+        ICE_RESTART_COOLDOWN: 15000,
+        BLACKHOLE_MS: 8000,
+        DEFAULTS: {
+            signaling: { host: '0.peerjs.com', port: 443, path: '/', secure: true, key: 'peerjs' },
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+                { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+                { urls: 'turn:openrelay.metered.ca:5349', username: 'openrelayproject', credential: 'openrelayproject' },
+                { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+                { urls: 'turns:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+            ],
+            iceTransportPolicy: 'all',
+            iceCandidatePoolSize: 10
+        },
+        _lastIceRestart: 0,
+        load() {
+            try {
+                const raw = localStorage.getItem(this.SETTINGS_KEY);
+                if (!raw) return cloneObj(this.DEFAULTS);
+                const p = JSON.parse(raw);
+                return {
+                    signaling: { ...cloneObj(this.DEFAULTS.signaling), ...(p.signaling || {}) },
+                    iceServers: Array.isArray(p.iceServers) && p.iceServers.length ? p.iceServers : cloneObj(this.DEFAULTS.iceServers),
+                    iceTransportPolicy: p.iceTransportPolicy || this.DEFAULTS.iceTransportPolicy,
+                    iceCandidatePoolSize: p.iceCandidatePoolSize != null ? p.iceCandidatePoolSize : this.DEFAULTS.iceCandidatePoolSize
+                };
+            } catch (e) { return cloneObj(this.DEFAULTS); }
+        },
+        peerOptions() {
+            const s = this.load();
+            return {
+                host: s.signaling.host || this.DEFAULTS.signaling.host,
+                port: Number(s.signaling.port) || this.DEFAULTS.signaling.port,
+                path: s.signaling.path || '/',
+                secure: s.signaling.secure !== false,
+                key: s.signaling.key || 'peerjs',
+                config: {
+                    iceServers: s.iceServers,
+                    iceTransportPolicy: s.iceTransportPolicy === 'relay' ? 'relay' : 'all',
+                    iceCandidatePoolSize: Number(s.iceCandidatePoolSize) || 10,
+                    sdpSemantics: 'unified-plan',
+                    bundlePolicy: 'max-bundle',
+                    rtcpMuxPolicy: 'require'
+                }
+            };
+        },
+        restartIce() {
+            if (!GameState.peer) return;
+            const now = Date.now();
+            if (now - this._lastIceRestart < this.ICE_RESTART_COOLDOWN) return;
+            this._lastIceRestart = now;
+            try {
+                if (typeof GameState.peer.restartIce === 'function') GameState.peer.restartIce();
+                else if (GameState.peer._iceConnectionState !== 'connected' && GameState.peer.reconnect) GameState.peer.reconnect();
+            } catch (e) { console.warn('[Online] ICE 重启失败', e); }
+        }
+    };
+    function cloneObj(o) { return JSON.parse(JSON.stringify(o)); }
+
+    function bindOnlineNetworkEvents() {
+        if (typeof navigator === 'undefined') return;
+        const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        if (conn && typeof conn.addEventListener === 'function') {
+            conn.addEventListener('change', () => {
+                if (isOnlineMode()) ONLINE_NET.restartIce();
+            });
+        }
+        if (typeof window.addEventListener === 'function') {
+            window.addEventListener('online', () => { if (isOnlineMode()) ONLINE_NET.restartIce(); });
+            window.addEventListener('offline', () => { /* 断线由 heartbeat/close 处理 */ });
+        }
+    }
+
     // ======================== 联机模式 ========================
     function initPeer(customId) {
         if (GameState.peer) { GameState.peer.destroy(); GameState.peer = null; }
         return new Promise((resolve, reject) => {
-            GameState.peer = customId ? new Peer(customId) : new Peer();
+            GameState.peer = customId ? new Peer(customId, ONLINE_NET.peerOptions()) : new Peer(ONLINE_NET.peerOptions());
             let peerConnected = false;
             let peerTimeout = trackTimeout(() => {
                 if (!peerConnected) {
@@ -1335,7 +1414,9 @@
                 if (GameState.peer && GameState.myRole === 'host') {
                     try { GameState.peer.reconnect(); } catch (e) {}
                 }
+                ONLINE_NET.restartIce();
             });
+            bindOnlineNetworkEvents();
         });
     }
     function createRoom() {
