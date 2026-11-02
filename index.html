@@ -15,7 +15,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon.png">
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
     <meta name="theme-color" content="#1a1a2e">
-    <meta name="app-version" content="v83">
+    <meta name="app-version" content="v84">
     <meta name="description" content="像素风格斗地主：单机公平 AI 对战 + P2P 联机，离线可玩">
     <style>
         * { image-rendering: pixelated; font-family: 'Press Start 2P', cursive; -webkit-tap-highlight-color: transparent; touch-action: manipulation; box-sizing: border-box; }
@@ -165,6 +165,7 @@
             </div>
             <div class="text-[10px] text-gray-400 mt-2 mb-1">── 加入房间 ──</div>
             <div class="input-group"><input type="text" id="targetPeerId" placeholder="输入对方房间码"><button onclick="joinGame()" class="pixel-btn bg-green-500 w-full mt-1">加入房间</button></div>
+            <button onclick="openNetModal()" class="pixel-btn bg-gray-700 w-full mt-1 text-[9px]">📶 网络设置</button>
             <button onclick="hideOnlinePanel()" class="pixel-btn bg-gray-600 w-full mt-2 text-[10px]">返回</button>
         </div>
         <div id="rulesModal" class="hidden fixed inset-0 bg-black/95 flex items-center justify-center z-50 p-4"><div class="bg-gray-800 p-4 pixel-border w-full max-w-sm max-h-[80vh] overflow-y-auto"><h2 class="text-lg text-yellow-400 mb-4 retro-text text-center">游戏规则</h2><div class="text-[10px] leading-6 text-gray-300 space-y-2"><p>• 发牌：每人17张，留3张底牌</p><p>• 叫分：1-3分或不叫，高分当地主</p><p>• 牌型：单张、对子、三带一/对、顺子(5+)、连对(3+)、飞机(不带/带单/带对)、四带二、炸弹、王炸</p><p>• 春天/反春天：底分×2</p></div><button onclick="toggleRules()" class="pixel-btn bg-red-500 mt-4 w-full text-[12px]">关闭</button></div></div>
@@ -174,6 +175,40 @@
                 <h2 class="text-lg text-yellow-400 mb-4 retro-text text-center">📊 历史战绩</h2>
                 <div id="statsList" class="space-y-2 mb-4"></div>
                 <div class="flex gap-2"><button onclick="clearHistory()" class="pixel-btn bg-red-500 flex-1 text-[10px]">清空记录</button><button onclick="closeStatsModal()" class="pixel-btn bg-gray-500 flex-1 text-[10px]">关闭</button></div>
+            </div>
+        </div>
+        <!-- 网络状态与服务器设置（参考 p2p/net.js） -->
+        <div id="netModal" class="hidden fixed inset-0 bg-black/95 flex items-center justify-center z-[80] p-4">
+            <div class="bg-gray-800 p-4 pixel-border w-full max-w-md max-h-[90vh] overflow-y-auto">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-lg text-yellow-400 retro-text">📶 网络状态与设置</h3>
+                    <button onclick="closeNetModal()" class="pixel-btn bg-red-500 text-[10px]">✕</button>
+                </div>
+                <div id="netStatusBox" class="mb-3 p-2 bg-gray-900/50 rounded text-[9px] text-gray-300">等待连接…</div>
+                <div class="mb-3">
+                    <div class="text-xs font-bold mb-1 text-gray-400">⚙️ 信令服务器</div>
+                    <div class="input-group"><input type="text" id="netSigHost" placeholder="0.peerjs.com"><label class="text-[8px] text-gray-500 ml-1">Host</label></div>
+                    <div class="flex gap-1 mt-1">
+                        <div class="flex-1"><input type="number" id="netSigPort" placeholder="443"><label class="text-[8px] text-gray-500 ml-1">Port</label></div>
+                        <div class="flex-1"><input type="text" id="netSigPath" placeholder="/"><label class="text-[8px] text-gray-500 ml-1">Path</label></div>
+                        <div class="flex-1"><input type="text" id="netSigKey" placeholder="peerjs"><label class="text-[8px] text-gray-500 ml-1">Key</label></div>
+                    </div>
+                    <label class="flex items-center mt-1 text-[9px]"><input type="checkbox" id="netSigSecure" class="mr-1"> 使用 TLS（secure）</label>
+                </div>
+                <div class="mb-3">
+                    <div class="text-xs font-bold mb-1 text-gray-400">🧊 TURN / STUN 服务器（JSON 数组）</div>
+                    <textarea id="netIceServers" rows="6" class="w-full text-[8px] bg-black/40 border border-gray-600 rounded p-1 text-gray-200" placeholder='[{"urls":"stun:stun.l.google.com:19302"},{"urls":"turn:openrelay.metered.ca:443","username":"openrelayproject","credential":"openrelayproject"}']></textarea>
+                </div>
+                <div class="mb-3">
+                    <label class="flex items-center mt-1 text-[9px]"><input type="radio" id="netIcePolicyAll" name="netIcePolicy" value="all" class="mr-1" checked> ICE all（优先直连）</label>
+                    <label class="flex items-center mt-1 text-[9px] ml-4"><input type="radio" id="netIcePolicyRelay" name="netIcePolicy" value="relay" class="mr-1"> ICE relay（强制中继，穿透严格 NAT）</label>
+                </div>
+                <div class="flex gap-2 mt-3">
+                    <button onclick="saveNetSettings()" class="pixel-btn bg-green-500 flex-1 text-[10px]">保存</button>
+                    <button onclick="resetNetSettings()" class="pixel-btn bg-gray-600 flex-1 text-[10px]">恢复默认</button>
+                    <button onclick="closeNetModal()" class="pixel-btn bg-gray-500 flex-1 text-[10px]">关闭</button>
+                </div>
+                <p class="text-[8px] text-gray-500 mt-2">保存后需重新连接生效。公共 TURN 配额有限，跨网络/对称 NAT 下建议配置专属 TURN。</p>
             </div>
         </div>
     </div>
@@ -1295,6 +1330,7 @@
             iceCandidatePoolSize: 10
         },
         _lastIceRestart: 0,
+        _iceMonitors: new WeakMap(),
         load() {
             try {
                 const raw = localStorage.getItem(this.SETTINGS_KEY);
@@ -1335,8 +1371,95 @@
                 if (typeof GameState.peer.restartIce === 'function') GameState.peer.restartIce();
                 else if (GameState.peer._iceConnectionState !== 'connected' && GameState.peer.reconnect) GameState.peer.reconnect();
             } catch (e) { console.warn('[Online] ICE 重启失败', e); }
+        },
+        // 监控数据通道的 RTCPeerConnection ICE 状态，失败/断开时自动 restartIce（参考 p2p/net.js monitorIce）
+        monitorIce(conn) {
+            if (!conn || this._iceMonitors.has(conn)) return;
+            let pc = null;
+            try { pc = conn._pc; } catch (e) { return; }
+            if (!pc || pc.connectionState === 'closed') return;
+            this._iceMonitors.set(conn, true);
+            let lastRestart = 0;
+            const restart = (reason) => {
+                const now = Date.now();
+                if (now - lastRestart < 10000) return;
+                lastRestart = now;
+                try { pc.restartIce(); } catch (e) { console.warn('[Online] restartIce 失败', e); }
+            };
+            pc.oniceconnectionstatechange = () => {
+                const s = pc.iceConnectionState;
+                if (s === 'failed' || s === 'disconnected') restart('ICE ' + s);
+            };
+            pc.onconnectionstatechange = () => {
+                if (pc.connectionState === 'failed') restart('连接失败');
+            };
+        },
+        saveSettings(next) {
+            const s = {
+                ...cloneObj(this.DEFAULTS),
+                ...next,
+                signaling: { ...cloneObj(this.DEFAULTS.signaling), ...(next.signaling || {}) },
+                iceServers: Array.isArray(next.iceServers) && next.iceServers.length ? next.iceServers : cloneObj(this.DEFAULTS.iceServers)
+            };
+            try { localStorage.setItem(this.SETTINGS_KEY, JSON.stringify(s)); } catch (e) { console.warn('[Online] 保存网络设置失败', e); }
+        },
+        resetSettings() {
+            try { localStorage.removeItem(this.SETTINGS_KEY); } catch (e) { /* ignore */ }
         }
     };
+    function cloneObj(o) { return JSON.parse(JSON.stringify(o)); }
+
+    // ======================== 联机网络设置 UI ========================
+    function openNetModal() {
+        document.getElementById('netModal').classList.remove('hidden');
+        const s = ONLINE_NET.load();
+        document.getElementById('netSigHost').value = s.signaling.host || '';
+        document.getElementById('netSigPort').value = s.signaling.port || '';
+        document.getElementById('netSigPath').value = s.signaling.path || '/';
+        document.getElementById('netSigKey').value = s.signaling.key || 'peerjs';
+        document.getElementById('netSigSecure').checked = s.signaling.secure !== false;
+        document.getElementById('netIceServers').value = JSON.stringify(s.iceServers, null, 2);
+        document.getElementById('netIcePolicyAll').checked = s.iceTransportPolicy !== 'relay';
+        document.getElementById('netIcePolicyRelay').checked = s.iceTransportPolicy === 'relay';
+    }
+    function closeNetModal() {
+        document.getElementById('netModal').classList.add('hidden');
+    }
+    function saveNetSettings() {
+        const host = document.getElementById('netSigHost').value.trim() || '0.peerjs.com';
+        const port = parseInt(document.getElementById('netSigPort').value) || 443;
+        const path = document.getElementById('netSigPath').value.trim() || '/';
+        const key = document.getElementById('netSigKey').value.trim() || 'peerjs';
+        const secure = document.getElementById('netSigSecure').checked;
+        let iceServers = ONLINE_NET.DEFAULTS.iceServers;
+        try {
+            const raw = document.getElementById('netIceServers').value.trim();
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed) && parsed.length) iceServers = parsed;
+            }
+        } catch (e) { showToast('TURN 服务器 JSON 格式错误'); return; }
+        const policy = document.getElementById('netIcePolicyRelay').checked ? 'relay' : 'all';
+        ONLINE_NET.saveSettings({
+            signaling: { host, port, path, secure, key },
+            iceServers,
+            iceTransportPolicy: policy
+        });
+        closeNetModal();
+        showToast('网络设置已保存，重新连接后生效');
+    }
+    function resetNetSettings() {
+        ONLINE_NET.resetSettings();
+        document.getElementById('netSigHost').value = '0.peerjs.com';
+        document.getElementById('netSigPort').value = '443';
+        document.getElementById('netSigPath').value = '/';
+        document.getElementById('netSigKey').value = 'peerjs';
+        document.getElementById('netSigSecure').checked = true;
+        document.getElementById('netIceServers').value = JSON.stringify(ONLINE_NET.DEFAULTS.iceServers, null, 2);
+        document.getElementById('netIcePolicyAll').checked = true;
+        document.getElementById('netIcePolicyRelay').checked = false;
+        showToast('已恢复默认网络设置');
+    }
     function cloneObj(o) { return JSON.parse(JSON.stringify(o)); }
 
     function bindOnlineNetworkEvents() {
@@ -1382,6 +1505,8 @@
                 conn.on('data', d => onConnectionData(conn, d));
                 conn.on('close', () => onHostConnClosed(conn));
                 conn.on('error', () => onHostConnClosed(conn));
+                // ICE 状态监控：失败/断开时自动 restartIce，穿透跨网络 NAT
+                ONLINE_NET.monitorIce(conn);
                 // 槽位分配推迟到收到 hello（含持久 sessionId）之后，以支持断线重连
             });
             GameState.peer.on('error', e => {
@@ -1478,7 +1603,7 @@
         };
         let joinTimeout = setTimeout(() => failJoin('连接超时，请检查房间号'), 10000);
 
-        conn.on('open', () => {
+            conn.on('open', () => {
             if (opened) return;
             opened = true; finish();
             clientReconnectAttempts = 0;
@@ -1490,6 +1615,8 @@
             conn._disconnected = false;
             conn._hbWait = 0;
             startHeartbeat();
+            // ICE 状态监控：跨网络/对称 NAT 下数据通道失败时自动重启 ICE
+            ONLINE_NET.monitorIce(conn);
             try { conn.send({ type: 'hello', sessionId: getClientSessionId() }); } catch (e) {}
             document.getElementById('connectPanel').style.display = 'none';
             document.getElementById('connStatus').innerHTML = '🔗 已连接房主';
@@ -1516,7 +1643,7 @@
     function scheduleClientReconnect() {
         if (clientIntentionalLeave) { clientReconnecting = false; return; }
         if (clientReconnecting) return;
-        if (clientReconnectAttempts >= 6) {
+        if (clientReconnectAttempts >= 8) {
             clientReconnecting = false;
             showToast('重连失败，返回菜单');
             trackTimeout(backToMenu, 1500);
@@ -1524,9 +1651,10 @@
         }
         clientReconnecting = true;
         clientReconnectAttempts++;
-        let delay = Math.min(1000 * clientReconnectAttempts, 4000);
-        showToast('连接断开，' + Math.round(delay / 1000) + '秒后重连(' + clientReconnectAttempts + '/6)…');
-        updateDebugStrip('重连中 ' + clientReconnectAttempts + '/6…');
+        // 指数退避重连（参考 p2p/net.js）：2000ms * 1.5^n，上限 10s
+        let delay = Math.min(2000 * Math.pow(1.5, clientReconnectAttempts - 1), 10000);
+        showToast('连接断开，' + Math.round(delay / 1000) + '秒后重连(' + clientReconnectAttempts + '/8)…');
+        updateDebugStrip('重连中 ' + clientReconnectAttempts + '/8…');
         clearTimer();
         trackTimeout(() => {
             if (clientIntentionalLeave) { clientReconnecting = false; return; }
