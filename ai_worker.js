@@ -50,9 +50,11 @@ function rebuildMemory(data) {
     if (!data) return m;
     m.remain = data.remain;
     m.seen = new Set(data.seen);
-    m.history = data.history.map(arr => [...arr]);
-    m.playerHistory = data.playerHistory.map(arr => arr.map(a => [...a]));
-    m.totalCardsPlayed = [...data.totalCardsPlayed];
+    m.history = (data.history || []).map(arr => [...arr]);
+    m.playerHistory = (data.playerHistory || [[], [], []]).map(arr => arr.map(a => [...a]));
+    m.totalCardsPlayed = [...(data.totalCardsPlayed || [0, 0, 0])];
+    // passHints 必须往返：漏掉会让 Worker 侧的信念模型弱于主线程
+    m.passHints = (data.passHints || [[], [], []]).map(arr => arr.map(h => ({ ...h })));
     return m;
 }
 
@@ -69,7 +71,19 @@ self.onmessage = function (e) {
                 if (Object.prototype.hasOwnProperty.call(msg || {}, 'params')) _params = msg.params || null;
                 if (typeof invalidateParamCache === 'function') invalidateParamCache();
                 if (msg.correctionRules) _correctionRules = msg.correctionRules;
-                self.postMessage({ status: 'ready' });
+                self.postMessage({ taskId: msg.taskId, status: 'ok' });
+                break;
+            }
+            case 'setParams': {
+                // 学习闭环：参数更新后必须能立刻推送到所有 Worker
+                _params = msg.params || null;
+                if (typeof invalidateParamCache === 'function') invalidateParamCache();
+                self.postMessage({ taskId: msg.taskId, status: 'ok' });
+                break;
+            }
+            case 'setRules': {
+                _correctionRules = msg.correctionRules || [];
+                self.postMessage({ taskId: msg.taskId, status: 'ok' });
                 break;
             }
             case 'think': {
@@ -101,7 +115,8 @@ self.onmessage = function (e) {
                         seen: [...memory.seen],
                         history: memory.history.map(arr => [...arr]),
                         playerHistory: memory.playerHistory.map(arr => arr.map(a => [...a])),
-                        totalCardsPlayed: [...memory.totalCardsPlayed]
+                        totalCardsPlayed: [...memory.totalCardsPlayed],
+                        passHints: (memory.passHints || [[], [], []]).map(arr => arr.map(h => ({ ...h })))
                     }
                 });
                 break;

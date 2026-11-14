@@ -77,9 +77,13 @@ console.log('== 3. 跟牌：大牌/炸弹顶防规则不再恒为死规则 ==');
 {
     const mem = new mod.MasterMemory();
     const bombLast = mod.getCardType([C(0, 'a'), C(0, 'b'), C(0, 'c'), C(0, 'd')]);
-    const hand = [C(1, 'e'), C(1, 'f'), C(1, 'g'), C(1, 'h'), C(5), C(6)];
+    const hand = [C(1, 'e'), C(1, 'f'), C(1, 'g'), C(1, 'h'), C(5), C(6), C(7), C(8)];
     const st = { players: [hand, [C(9)], [C(10)]], landlord: 0, currentPlayer: 0, lastPlay: bombLast, lastPlayerId: 1, passCount: 0 };
-    const f = mod.extractPlayFeatures([C(1, 'e'), C(1, 'f'), C(1, 'g'), C(1, 'h')], hand, bombLast, 'landlord', mem, st);
+    // 用手牌里**同一批牌对象**（生产路径就是这样调的）：
+    // 早年的实现按引用过滤"剩余手牌"，传等价但不同引用的牌会算出错误的剩余张数，
+    // 这条断言当年是"靠这个 bug 才通过"的。现在按 id 匹配，剩余张数才是对的。
+    const f = mod.extractPlayFeatures([hand[0], hand[1], hand[2], hand[3]], hand, bombLast, 'landlord', mem, st);
+    check('剩余手牌张数按 id 正确扣除', f.remainTotal === hand.length - 4, `实际=${f.remainTotal} 期望=${hand.length - 4}`);
     const fires = f.needBeat && f.lastPlayPower >= 13 && f.remainTotal > 3 && f.playPower > f.lastPlayPower;
     check('压炸弹时触发"大牌顶防"(-40)', fires,
         `needBeat=${f.needBeat} lastPlayPower=${f.lastPlayPower} playPower=${f.playPower} remainTotal=${f.remainTotal}`);

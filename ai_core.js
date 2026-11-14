@@ -52,6 +52,11 @@ function matchRules(ctx) {
     return [];
 }
 
+// 确定性搜索模式：只用节点/迭代预算，不看挂钟 → 同种子同参数必然同结果
+function isDeterministicSearch() {
+    try { return !!cfg('search.deterministic'); } catch (e) { return false; }
+}
+
 const CardType = {
     SINGLE:'single', PAIR:'pair', TRIPLE:'triple', TRIPLE_WITH_SINGLE:'triple_single', TRIPLE_WITH_PAIR:'triple_pair',
     STRAIGHT:'straight', STRAIGHT_PAIR:'straight_pair', FOUR_WITH_TWO_SINGLE:'four_two_single', FOUR_WITH_TWO_PAIR:'four_two_pair',
@@ -70,18 +75,47 @@ function getCombinations(arr, k) {
     }
     return result;
 }
+// 牌型只取决于「点数多重集」（王炸额外取决于 joker id），
+// 因此缓存键用点数计数签名 —— 比按 id 排序便宜得多。
+// 命中时返回副本：调用方会改 .cards（例如 getAllValidPlays 里回填 canonical 牌），
+// 直接返回缓存对象会污染缓存。
+// 直接返回缓存对象会污染缓存。
+const _CARD_TYPE_CACHE = new Map();
+const _CARD_TYPE_CACHE_MAX = 6000;
+function _cardTypeSignature(cards) {
+    let cnt = new Array(15).fill(0);
+    let j1 = 0, j2 = 0;
+    for (let i = 0; i < cards.length; i++) {
+        const c = cards[i];
+        if (c && c.value >= 0 && c.value <= 14) cnt[c.value]++;
+        if (c && c.id === 'joker1') j1++;
+        else if (c && c.id === 'joker2') j2++;
+    }
+    // Array.join 在 V8 里比逐段字符串拼接快得多
+    return cards.length + '|' + cnt.join(',') + (j1 ? 'J1' : '') + (j2 ? 'J2' : '');
+}
+function _cacheCardType(sig, type, value, length, cards) {
+    if (_CARD_TYPE_CACHE.size >= _CARD_TYPE_CACHE_MAX) _CARD_TYPE_CACHE.clear();
+    _CARD_TYPE_CACHE.set(sig, { type, value, length, cards });
+    return { type, value, length, cards };
+}
 function getCardType(cards) {
     if (!cards || cards.length === 0) return null;
+    const sig = _cardTypeSignature(cards);
+    const hit = _CARD_TYPE_CACHE.get(sig);
+    if (hit) {
+        return { type: hit.type, value: hit.value, length: hit.length, cards: hit.cards ? [...hit.cards] : undefined };
+    }
     const sorted = [...cards].sort((a,b)=>a.value-b.value);
     const values = sorted.map(c=>c.value);
     const uniq = [...new Set(values)];
-    if (cards.length === 2 && cards.some(c=>c.id==='joker1') && cards.some(c=>c.id==='joker2')) return { type:CardType.ROCKET, value:100, cards:sorted };
-    if (cards.length === 1) return { type:CardType.SINGLE, value:values[0], cards:sorted };
-    if (cards.length === 2 && uniq.length === 1) return { type:CardType.PAIR, value:values[0], cards:sorted };
-    if (cards.length === 3 && uniq.length === 1) return { type:CardType.TRIPLE, value:values[0], cards:sorted };
-    if (cards.length === 4 && uniq.length === 1) return { type:CardType.BOMB, value:values[0]+50, cards:sorted };
-    if (cards.length === 4 && uniq.length === 2) { let cnt = countValues(values); if (Object.values(cnt).includes(3)) return { type:CardType.TRIPLE_WITH_SINGLE, value:parseInt(Object.keys(cnt).find(k=>cnt[k]===3)), cards:sorted }; }
-    if (cards.length === 5 && uniq.length === 2) { let cnt = countValues(values); if (Object.values(cnt).includes(3) && Object.values(cnt).includes(2)) return { type:CardType.TRIPLE_WITH_PAIR, value:parseInt(Object.keys(cnt).find(k=>cnt[k]===3)), cards:sorted }; }
+    if (cards.length === 2 && cards.some(c=>c.id==='joker1') && cards.some(c=>c.id==='joker2')) return _cacheCardType(sig, CardType.ROCKET, 100, undefined, sorted);
+    if (cards.length === 1) return _cacheCardType(sig, CardType.SINGLE, values[0], undefined, sorted);
+    if (cards.length === 2 && uniq.length === 1) return _cacheCardType(sig, CardType.PAIR, values[0], undefined, sorted);
+    if (cards.length === 3 && uniq.length === 1) return _cacheCardType(sig, CardType.TRIPLE, values[0], undefined, sorted);
+    if (cards.length === 4 && uniq.length === 1) return _cacheCardType(sig, CardType.BOMB, values[0]+50, undefined, sorted);
+    if (cards.length === 4 && uniq.length === 2) { let cnt = countValues(values); if (Object.values(cnt).includes(3)) return _cacheCardType(sig, CardType.TRIPLE_WITH_SINGLE, parseInt(Object.keys(cnt).find(k=>cnt[k]===3)), undefined, sorted); }
+    if (cards.length === 5 && uniq.length === 2) { let cnt = countValues(values); if (Object.values(cnt).includes(3) && Object.values(cnt).includes(2)) return _cacheCardType(sig, CardType.TRIPLE_WITH_PAIR, parseInt(Object.keys(cnt).find(k=>cnt[k]===3)), undefined, sorted); }
     if (cards.length === 6) {
         let cnt = countValues(values);
         let four = Object.keys(cnt).find(k=>cnt[k]===4);
@@ -90,22 +124,22 @@ function getCardType(cards) {
             const wingKeys = Object.keys(cnt).filter(k=>parseInt(k)!==fv);
             const wingCards = wingKeys.reduce((sum,k)=>sum+cnt[k],0);
             if (wingCards === 2 && wingKeys.every(k=>cnt[k]<=2))
-                return { type:CardType.FOUR_WITH_TWO_SINGLE, value:fv, cards:sorted };
+                return _cacheCardType(sig, CardType.FOUR_WITH_TWO_SINGLE, fv, undefined, sorted);
         }
     }
-    if (cards.length === 8) { let cnt = countValues(values); let four = Object.keys(cnt).find(k=>cnt[k]===4); if (four && Object.values(cnt).filter(v=>v===2).length === 2) return { type:CardType.FOUR_WITH_TWO_PAIR, value:parseInt(four), cards:sorted }; }
-    if (cards.length >= 5 && uniq.length === cards.length && isStraight(values) && values[cards.length-1] <= 11 && !values.includes(12)) return { type:CardType.STRAIGHT, value:values[0], length:cards.length, cards:sorted };
+    if (cards.length === 8) { let cnt = countValues(values); let four = Object.keys(cnt).find(k=>cnt[k]===4); if (four && Object.values(cnt).filter(v=>v===2).length === 2) return _cacheCardType(sig, CardType.FOUR_WITH_TWO_PAIR, parseInt(four), undefined, sorted); }
+    if (cards.length >= 5 && uniq.length === cards.length && isStraight(values) && values[cards.length-1] <= 11 && !values.includes(12)) return _cacheCardType(sig, CardType.STRAIGHT, values[0], cards.length, sorted);
     if (cards.length >= 6 && cards.length % 2 === 0) {
         let cnt = countValues(values);
         let pairs = Object.keys(cnt).filter(k=>cnt[k]===2).map(Number).sort((a,b)=>a-b);
-        if (pairs.length === cards.length/2 && isStraight(pairs) && pairs[pairs.length-1] <= 11) return { type:CardType.STRAIGHT_PAIR, value:pairs[0], length:pairs.length, cards:sorted };
+        if (pairs.length === cards.length/2 && isStraight(pairs) && pairs[pairs.length-1] <= 11) return _cacheCardType(sig, CardType.STRAIGHT_PAIR, pairs[0], pairs.length, sorted);
     }
     if (cards.length >= 6 && cards.length % 3 === 0) {
         let cnt = countValues(values);
         let tripVals = Object.keys(cnt).filter(k=>cnt[k]===3).map(Number).sort((a,b)=>a-b);
         let groupLen = cards.length / 3;
         if (tripVals.length === groupLen && groupLen >= 2 && isStraight(tripVals) && tripVals[groupLen-1] <= 11)
-            return { type:CardType.PLANE, value:tripVals[0], length:groupLen, cards:sorted };
+            return _cacheCardType(sig, CardType.PLANE, tripVals[0], groupLen, sorted);
     }
     if (cards.length >= 8 && cards.length % 4 === 0) {
         let cnt = countValues(values);
@@ -119,7 +153,7 @@ function getCardType(cards) {
             let wingCards = wingKeys.reduce((sum,k)=>sum+cnt[k],0);
             if (wingCards !== groupLen) continue;
             if (wingKeys.some(k=>cnt[k]>2)) continue;
-            return { type:CardType.PLANE_WITH_SINGLE, value:seq[0], length:groupLen, cards:sorted };
+            return _cacheCardType(sig, CardType.PLANE_WITH_SINGLE, seq[0], groupLen, sorted);
         }
     }
     if (cards.length >= 10 && cards.length % 5 === 0) {
@@ -132,7 +166,7 @@ function getCardType(cards) {
             let used = new Set(seq);
             let remain = Object.keys(cnt).filter(k=>!used.has(parseInt(k)) && cnt[k]===2);
             if (remain.length === groupLen)
-                return { type:CardType.PLANE_WITH_PAIR, value:seq[0], length:groupLen, cards:sorted };
+                return _cacheCardType(sig, CardType.PLANE_WITH_PAIR, seq[0], groupLen, sorted);
         }
     }
     return null;
@@ -176,6 +210,18 @@ function getPlayPower(play) {
     let type = getCardType(play);
     if (!type) return 0;
     return typePowerOf(type.type, type.value, type.length);
+}
+// typePowerOf 的结果缓存（同一牌型/牌值/长度组合反复出现）
+const _POWER_CACHE = new Map();
+function _cachedTypePower(type, value, length) {
+    const key = type + ':' + value + ':' + (length || 0);
+    let v = _POWER_CACHE.get(key);
+    if (v === undefined) {
+        v = typePowerOf(type, value, length);
+        if (_POWER_CACHE.size > 2000) _POWER_CACHE.clear();
+        _POWER_CACHE.set(key, v);
+    }
+    return v;
 }
 function _canContend(lastPlay, type) {
     if (!lastPlay) return true;
@@ -235,6 +281,8 @@ const DEFAULT_PARAMS = {
         bombRiskWeight: { easy: 0, medium: 0, hard: 40, grandmaster: 40, legendary: 40 },
         // 盲 MCTS 是否使用启发式根先验（1 = 开启）
         mctsRootPriors: { easy: 0, medium: 0, hard: 1, grandmaster: 1, legendary: 1 },
+        // 信念采样是否按「手牌形状」分配（1 = 结构化，更接近真实牌局；0 = 均匀随机）
+        structuredBelief: 1,
         // 叫分模拟次数（传奇难度）
         callTrials: { legendary: 60 }
     },
@@ -311,12 +359,32 @@ const DEFAULT_PARAMS = {
         pair: 5, triple: 8, single: -5, completeBonus: 100
     },
     heuristicPlayout: {
-        bestProb: 0.80, top2Prob: 0.95, stepLimit: 90
+        bestProb: 0.80, top2Prob: 0.95, stepLimit: 90,
+        // rollout 里做「完整启发式精排」的候选数。
+        // 越大 → rollout 越像根评估（搜索信号越同质化、越慢）。
+        // 实测：8 比 4 强（把精排候选砍到 4 会让 rollout 明显变弱），
+        // 所以默认值保持 8；提速靠缓存，不靠削弱 rollout。
+        richCandidates: 8,
+        // rollout 里每个底牌组合最多派生多少个组合牌型（0 = 不限）
+        maxComboPerGroup: 0
     },
     endgame: {
         maxDepth: 20, bombDepthPenalty: 1,
         maxTotalCards: 24, maxHandCards: 20, maxOptions: 8,
         nodeLimit: 200000, timeBudgetMs: 700
+    },
+    // ======================== 搜索预算模式 ========================
+    // deterministic = true 时，搜索只用「节点数 / 迭代数」预算，不看挂钟。
+    // 用途：离线评测（A/B 配对自对弈）必须可复现，否则任何增益都测不出来。
+    // 运行时（浏览器对局）保持 false，用时间预算换取强度。
+    search: {
+        deterministic: false,
+        // 以下三项只在确定性模式（离线评测）下生效。
+        // 默认值刻意取小：评测要跑几十上百局，预算太大单局就要好几秒。
+        // 注意：nodeBudget 是「本次残局求解的总节点数」，不是每候选的。
+        nodeBudget: 1200,
+        mctsIterations: 40,
+        mctsWorlds: 1
     },
         aiTiming: {
             thinkingSeconds: { legendary: 8, grandmaster: 6, hard: 4, medium: 2, easy: 2 },
@@ -353,8 +421,11 @@ class MasterMemory {
     }
     recordPlayerPlay(playerId, cards) {
         if (this.playerHistory[playerId]) {
+            // 只统计「真正第一次出现」的牌：同一张牌被重复记录（引擎 bug / 重放）不应
+            // 让 totalCardsPlayed 虚增，否则记牌器与实际牌局会永久不一致。
+            const fresh = cards.filter(c => !this.seen.has(c.id));
             this.playerHistory[playerId].push(cards.map(c=>c.id));
-            this.totalCardsPlayed[playerId] += cards.length;
+            this.totalCardsPlayed[playerId] += fresh.length;
             this.record(cards);
         }
     }
@@ -526,8 +597,81 @@ class HandBelief {
         this.memory = memory;
     }
 
-    // 采样一个"可能世界"：自己的手牌精确，对手手牌按未见牌池随机分配（保留地主底牌归属）
+    // 采样一个"可能世界"：自己的手牌精确，对手手牌按未见牌池分配（保留地主底牌归属）
+    //
+    // 关键：**按「手牌形状」采样，而不是把牌逐张随机撒出去**。
+    // 均匀随机撒牌造出的"对手"几乎全是散牌（12 张 12 个点数），
+    // 于是：
+    //   · 对手几乎接不住任何牌 → 搜索严重高估自己的控制权 → 乱出大牌
+    //   · 对手几乎不可能有炸弹 → 炸弹风险估计失真
+    // 真实手牌是对子/三张/顺子成团的。这里按点数分组、整组优先分配，
+    // 让采样出的手牌在结构上接近真实牌局。
     sampleWorld() {
+        const players = [[], [], []];
+        players[this.playerId] = this.ownHand.map(c => ({ ...c }));
+        // 结构化采样开关：1 = 按手牌形状分配（默认，更接近真实牌局）
+        //                  0 = 逐张均匀随机（旧行为，仅用于 A/B 对照）
+        if (cfg('blind.structuredBelief') === 0) return this._sampleWorldUniform();
+        const oppIds = [];
+        for (let i = 0; i < 3; i++) if (i !== this.playerId) oppIds.push(i);
+        // 处理顺序随机化：否则「先被处理的那个对手」会系统性地拿到更合适的牌组，
+        // 造成座位偏置（750 局 A/B 实测该偏置存在）。
+        for (let i = oppIds.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            const t = oppIds[i]; oppIds[i] = oppIds[j]; oppIds[j] = t;
+        }
+        const need = [0, 0, 0];
+        for (const i of oppIds) {
+            players[i] = this.knownByPlayer[i].map(c => ({ ...c }));
+            need[i] = Math.max(0, this.counts[i] - players[i].length);
+        }
+        // 未见牌池按点数分组
+        const groups = new Map();
+        for (const c of this.pool) {
+            let g = groups.get(c.value);
+            if (!g) { g = []; groups.set(c.value, g); }
+            g.push(c);
+        }
+        const groupList = [...groups.values()];
+        for (let i = groupList.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            const t = groupList[i]; groupList[i] = groupList[j]; groupList[j] = t;
+        }
+        // 第一轮：整组分配（能装下就整组给同一个人 → 形成对子/三张）
+        let progress = true;
+        while (progress) {
+            progress = false;
+            for (const opp of oppIds) {
+                if (need[opp] <= 0) continue;
+                let picked = -1;
+                for (let gi = 0; gi < groupList.length; gi++) {
+                    if (groupList[gi].length <= need[opp]) { picked = gi; break; }
+                }
+                if (picked < 0) continue;
+                const grp = groupList.splice(picked, 1)[0];
+                for (const c of grp) players[opp].push(c);
+                need[opp] -= grp.length;
+                progress = true;
+            }
+        }
+        // 第二轮：剩下的组按剩余容量拆分（少量散牌是真实的）
+        for (const grp of groupList) {
+            for (const c of grp) {
+                let placed = false;
+                for (const opp of oppIds) {
+                    if (need[opp] > 0) { players[opp].push(c); need[opp]--; placed = true; break; }
+                }
+                if (!placed) break;
+            }
+        }
+        for (let i = 0; i < 3; i++) {
+            if (i === this.playerId) continue;
+            players[i].sort((a, b) => a.value - b.value);
+        }
+        return players;
+    }
+    // 逐张均匀随机（旧行为）。保留用于 A/B 对照与回归基线。
+    _sampleWorldUniform() {
         const pool = this.pool.slice();
         for (let i = pool.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
@@ -640,7 +784,23 @@ class HandBelief {
 }
 
 // ======================== 手牌分析 ========================
+// 手牌特征只取决于点数多重集 → 用点数计数签名做缓存键。
+// 这个函数在搜索里被调用极多次（每个候选 × 每个 rollout 步），缓存收益很大。
+const _HAND_FEATURES_CACHE = new Map();
+const _HAND_FEATURES_CACHE_MAX = 3000;
 function extractHandFeatures(hand) {
+    if (!hand || !hand.length) {
+        return { single:0, pair:0, triple:0, bomb:0, maxStraightLen:0, maxStraightPairLen:0, bigCards:0, hasRocket:0, total:0 };
+    }
+    const sig = _cardTypeSignature(hand);
+    const hit = _HAND_FEATURES_CACHE.get(sig);
+    if (hit) return Object.assign({}, hit);
+    const feats = _extractHandFeaturesUncached(hand);
+    if (_HAND_FEATURES_CACHE.size >= _HAND_FEATURES_CACHE_MAX) _HAND_FEATURES_CACHE.clear();
+    _HAND_FEATURES_CACHE.set(sig, feats);
+    return Object.assign({}, feats);
+}
+function _extractHandFeaturesUncached(hand) {
     let values = hand.map(c => c.value);
     let counts = new Array(15).fill(0);
     values.forEach(v => counts[v]++);
@@ -698,9 +858,27 @@ function evaluateHandStrength(hand, memory, isLandlord, callPosition) {
     return score;
 }
 
+// outsideBombCount 只取决于手牌 + 记牌器状态，而同一轮评分里所有候选共用同一副手牌
+// → 用「最近一次」的记忆缓存，避免每个候选都重算一遍（O(13n)）。
+// 注意：缓存键必须带上记牌器状态 —— 对手出牌后我的手牌不变但记牌器变了，
+// 只用手牌签名做键会返回过期的炸弹估计。
+let _outsideMemoKey = null, _outsideMemoVal = 0;
+function _outsideBombCountMemo(memory, hand) {
+    if (!memory || typeof memory.getOutsideBombCount !== 'function') return 0;
+    let memState = 0;
+    if (memory.seen && typeof memory.seen.size === 'number') memState = memory.seen.size;
+    const key = _cardTypeSignature(hand) + '#' + memState;
+    if (_outsideMemoKey === key) return _outsideMemoVal;
+    _outsideMemoKey = key;
+    _outsideMemoVal = memory.getOutsideBombCount(hand);
+    return _outsideMemoVal;
+}
+
 function extractPlayFeatures(play, hand, lastPlay, role, memory, state) {
     let playType = getCardType(play);
-    let newHand = hand.filter(c => !play.includes(c));
+    // 用 id 集合代替 includes 线性查找（原来 O(手牌×出牌)）
+    const playIds = new Set(play.map(c => c.id));
+    let newHand = hand.filter(c => !playIds.has(c.id));
     let handFeatures = extractHandFeatures(newHand);
     let playPower = getPlayPower(play);
     let isBomb = [CardType.BOMB, CardType.ROCKET].includes(playType.type);
@@ -737,7 +915,7 @@ function extractPlayFeatures(play, hand, lastPlay, role, memory, state) {
         opponentHandCount: state.lastPlayerId !== -1 ? state.players[state.lastPlayerId].length : 0,
         nextPlayerHandCount: state.players[nextPlayerId] ? state.players[nextPlayerId].length : 17,
         partnerHandCount: (role === 'farmer' && partnerId !== -1) ? (state.players[partnerId]?.length || 0) : 0,
-        outsideBombCount: memory.getOutsideBombCount(hand), isCritical: (newHand.length <= 3) ? 1 : 0,
+        outsideBombCount: _outsideBombCountMemo(memory, hand), isCritical: (newHand.length <= 3) ? 1 : 0,
         needBeat: needBeat ? 1 : 0, lastPlayType: lastPlay ? lastPlay.type : 'none', lastPlayPower: lastPlay ? lastPlay.value : 0,
         lastPlayLength: lastPlay ? (lastPlay.length || 0) : 0,
         playType: playType.type, kickerValue, mainValue: playType.value
@@ -752,16 +930,61 @@ function _canonicalHand(hand) {
 const _VALID_PLAYS_CACHE = new Map();
 const _VALID_PLAYS_CACHE_MAX = 256;
 function _validPlaysKey(hand, lastPlay) {
-    let ids = [];
-    for (const c of hand) ids.push(c.value + ':' + c.id);
-    ids.sort();
+    // 手牌按 (value,id) 排序后的序列即规范形。
+    // 用「牌面索引 + 手牌内序号」编码：索引保证唯一，序号保证顺序敏感。
+    // 键里必须包含具体是哪张牌（同点数的不同花色是不同的牌），
+    // 所以不能只用点数多重集 —— 否则会返回别的手牌的牌 id。
+    const n = hand.length;
+    // 按 (value, id) 排序 —— 规范形的唯一表示
+    const ord = new Array(n);
+    for (let i = 0; i < n; i++) ord[i] = i;
+    ord.sort((a, b) => (hand[a].value - hand[b].value) || (hand[a].id < hand[b].id ? -1 : (hand[a].id > hand[b].id ? 1 : 0)));
+    // 键里必须包含**牌的身份**（同点数的不同花色是不同的牌），
+    // 也不能用点数多重集 —— 否则会命中别的手牌的缓存、返回别人的牌 id。
+    let key = '';
+    for (let i = 0; i < n; i++) key += String.fromCharCode(_cardIdx(hand[ord[i]]));
     let lp = '-';
     if (lastPlay && lastPlay.type) {
         lp = lastPlay.type + ':' + lastPlay.value + ':' + (lastPlay.length || 0);
     }
-    return ids.join(',') + '|' + lp;
+    return key + '|' + lp;
 }
-function _playKey(cards) { return cards.map(c => c.id).sort().join(','); }
+// 牌面 id → 小整数索引。
+// 缓存键用整数数组排序后转字符，比「字符串数组排序 + join」快一个数量级。
+// 牌面 id → 小整数索引。用普通对象（而不是 Map）：属性查找在 V8 里更快。
+const _CARD_INDEX = Object.create(null);
+let _cardIndexNext = 1;
+function _cardIdx(card) {
+    let i = _CARD_INDEX[card.id];
+    if (i === undefined) {
+        i = _cardIndexNext++;
+        _CARD_INDEX[card.id] = i;
+    }
+    return i;
+}
+// 牌点数多重集 → 键。
+// 在 getAllValidPlays 内部，所有候选都取自同一副「规范手牌」，
+// 因此「点数多重集相同」就等价于「同一手牌」—— 用它做去重比按 id 便宜得多
+// （实测按 id 的字符串键占了 35% 的 CPU）。
+function _playValueKey(cards) {
+    let n = cards.length;
+    if (n === 0) return '';
+    const v = new Array(n);
+    for (let i = 0; i < n; i++) v[i] = cards[i].value;
+    v.sort((a, b) => a - b);
+    return v.join(',');
+}
+function _playKey(cards) {
+    const n = cards.length;
+    if (n === 0) return '';
+    const a = new Array(n);
+    for (let i = 0; i < n; i++) a[i] = _cardIdx(cards[i]);
+    a.sort((x, y) => x - y);
+    // 用 charCode 拼接（索引 < 65536）
+    let out = '';
+    for (let i = 0; i < n; i++) out += String.fromCharCode(a[i]);
+    return out;
+}
 function playTypeOf(play) {
     if (!play || !play.length) return null;
     const key = _playKey(play);
@@ -771,11 +994,18 @@ function playTypeOf(play) {
     if (t) { if (_PLAY_TYPE_CACHE.size > 4000) _PLAY_TYPE_CACHE.clear(); _PLAY_TYPE_CACHE.set(key, t); }
     return t;
 }
-function getAllValidPlays(hand, lastPlay = null) {
+// opts.maxComboPerGroup：限制「每组底牌」派生的组合数上限（0 = 不限）。
+//
+// 为什么需要它：三带一/四带二/飞机带翅膀这些牌型的候选数是组合爆炸的
+// （12 个三张 × 17 张单牌 = 204 个三带一候选），枚举本身就很贵。
+// 根节点与 MCTS 扩展需要**全部**合法走法（否则会漏掉好棋），
+// 但 rollout 只是要挑一个像样的走法 —— 给它一个精简集即可。
+// 保留的候选按「牌值从小到大」优先，因此消耗的都是小牌（正是 rollout 想要的）。
+function getAllValidPlays(hand, lastPlay = null, opts) {
     if (!hand || hand.length === 0) return [];
     if (lastPlay && lastPlay.type === CardType.ROCKET) return [];
-
-    const cacheKey = _validPlaysKey(hand, lastPlay);
+    const comboCap = (opts && opts.maxComboPerGroup) || 0;
+    const cacheKey = _validPlaysKey(hand, lastPlay) + (comboCap ? ('#' + comboCap) : '');
     const cached = _VALID_PLAYS_CACHE.get(cacheKey);
     if (cached !== undefined) {
         return cached.map(p => p.slice());
@@ -795,28 +1025,44 @@ function getAllValidPlays(hand, lastPlay = null) {
     if (byValue[13] && byValue[14]) push([byValue[13][0], byValue[14][0]], { type: CardType.ROCKET, value: 100 });
     if (_canContend(lastPlay, CardType.TRIPLE_WITH_SINGLE)) {
         for (let triple of Object.values(byValue).filter(arr=>arr.length>=3)) {
-            for (let single of hand2) if (single.value !== triple[0].value)
+            let n = 0;
+            for (let single of hand2) if (single.value !== triple[0].value) {
+                if (comboCap && n >= comboCap) break;
+                n++;
                 push([...triple.slice(0,3), single], { type: CardType.TRIPLE_WITH_SINGLE, value: triple[0].value });
+            }
         }
     }
     if (_canContend(lastPlay, CardType.TRIPLE_WITH_PAIR)) {
         for (let triple of Object.values(byValue).filter(arr=>arr.length>=3)) {
-            for (let pair of Object.values(byValue).filter(arr=>arr.length>=2 && arr[0].value !== triple[0].value))
+            let n = 0;
+            for (let pair of Object.values(byValue).filter(arr=>arr.length>=2 && arr[0].value !== triple[0].value)) {
+                if (comboCap && n >= Math.max(1, comboCap >> 1)) break;
+                n++;
                 push([...triple.slice(0,3), ...pair.slice(0,2)], { type: CardType.TRIPLE_WITH_PAIR, value: triple[0].value });
+            }
         }
     }
     if (_canContend(lastPlay, CardType.FOUR_WITH_TWO_SINGLE)) {
         for (let quad of Object.values(byValue).filter(arr=>arr.length===4)) {
             let singles = hand2.filter(c => c.value !== quad[0].value);
-            for (let i=0;i<singles.length;i++) for (let j=i+1;j<singles.length;j++)
+            let n = 0;
+            for (let i=0;i<singles.length;i++) for (let j=i+1;j<singles.length;j++) {
+                if (comboCap && n >= comboCap) break;
+                n++;
                 push([...quad, singles[i], singles[j]], { type: CardType.FOUR_WITH_TWO_SINGLE, value: quad[0].value });
+            }
         }
     }
     if (_canContend(lastPlay, CardType.FOUR_WITH_TWO_PAIR)) {
         for (let quad of Object.values(byValue).filter(arr=>arr.length===4)) {
             let pairs = Object.values(byValue).filter(arr=>arr.length>=2 && arr[0].value !== quad[0].value);
-            for (let i=0;i<pairs.length;i++) for (let j=i+1;j<pairs.length;j++)
+            let n = 0;
+            for (let i=0;i<pairs.length;i++) for (let j=i+1;j<pairs.length;j++) {
+                if (comboCap && n >= Math.max(1, comboCap >> 1)) break;
+                n++;
                 push([...quad, ...pairs[i].slice(0,2), ...pairs[j].slice(0,2)], { type: CardType.FOUR_WITH_TWO_PAIR, value: quad[0].value });
+            }
         }
     }
     if (_canContend(lastPlay, CardType.STRAIGHT)) {
@@ -869,7 +1115,10 @@ function getAllValidPlays(hand, lastPlay = null) {
                 if (!ok) continue;
                 let usedIds = new Set(tripleCards.map(c=>c.id));
                 let kickers = hand2.filter(c => !usedIds.has(c.id));
+                let n = 0;
                 for (let combo of getCombinations(kickers, len)) {
+                    if (comboCap && n >= comboCap) break;
+                    n++;
                     const cards = [...tripleCards, ...combo];
                     const vt = getCardType(cards);
                     if (vt && vt.type === CardType.PLANE_WITH_SINGLE) push(cards, vt);
@@ -889,7 +1138,10 @@ function getAllValidPlays(hand, lastPlay = null) {
                 if (!ok) continue;
                 let usedVals = new Set(seq);
                 let availPairs = pairValues.filter(v => !usedVals.has(v));
+                let n = 0;
                 for (let combo of getCombinations(availPairs, len)) {
+                    if (comboCap && n >= Math.max(1, comboCap >> 1)) break;
+                    n++;
                     let cards = [...tripleCards];
                     let ok2 = true;
                     for (let v of combo) { if (!byValue[v] || byValue[v].length<2) { ok2=false; break; } cards.push(byValue[v][0], byValue[v][1]); }
@@ -900,13 +1152,13 @@ function getAllValidPlays(hand, lastPlay = null) {
             }
         }
     }
-    let unique = new Map();
-    cands.forEach(entry => {
-        const key = _playKey(entry.cards);
-        if (!unique.has(key)) unique.set(key, entry);
-    });
+    // 去重：曾经这里有一个「按牌 id 排序拼字符串」的 Map，实测占掉 35% 的 CPU。
+    // 但各生成路径本来就互不重叠（牌型不同；同一路径内 (底牌, 配件) 组合唯一），
+    // 所以候选集合天然没有重复 —— 实测 600 手牌（领出 + 跟牌两种上下文）
+    // 去重前后完全一致。因此直接去掉，改为由 rules_test.js 断言"无重复"，
+    // 以后谁改坏了生成器会被测试挡住。
     let out = [];
-    for (const entry of unique.values()) {
+    for (const entry of cands) {
         let type = entry.type;
         if (!type || !type.cards) {
             type = getCardType(entry.cards);
@@ -1083,9 +1335,12 @@ function scorePlay(features, role, memory, state, playerHand) {
             needBeat: !!features.needBeat,
             lastPlayType: features.lastPlayType,
             lastPlayPower: features.lastPlayPower,
+            lastPlayLength: features.lastPlayLength,
             playType: features.playType,
             playPower: features.playPower,
+            playLength: features.playLength,
             kickerValue: features.kickerValue,
+            mainValue: features.mainValue,
             role: role,
             handSize: playerHand.length,
             isBomb: !!features.isBomb,
@@ -1094,7 +1349,22 @@ function scorePlay(features, role, memory, state, playerHand) {
             isRocketPlay: !!features.isRocket,
             hasBothJokers: playerHand.some(c=>c.value===14) && playerHand.some(c=>c.value===13),
             hasSmallJoker: playerHand.some(c=>c.value===13),
-            hasBigJoker: playerHand.some(c=>c.value===14)
+            hasBigJoker: playerHand.some(c=>c.value===14),
+            // 剩余张数类约束必须出现在上下文里：
+            // 纠错规则引擎只在 ctx 里存在对应键时才应用数值比较，
+            // 缺失就会被**静默丢弃** —— 例如"对手只剩 ≤2 张时才值得用炸"会退化成
+            // "每次用炸都奖励"，与 overkill 规则直接对冲。
+            opponentHandCount: features.opponentHandCount,
+            nextPlayerHandCount: features.nextPlayerHandCount,
+            partnerHandCount: features.partnerHandCount,
+            remainTotal: features.remainTotal,
+            remainSingle: features.remainSingle,
+            remainPair: features.remainPair,
+            remainTriple: features.remainTriple,
+            remainBomb: features.remainBomb,
+            outsideBombCount: features.outsideBombCount,
+            isLandlord: !!features.isLandlord,
+            isFarmer: !!features.isFarmer
         };
         let rules = matchRules(ruleCtx);
         for (let rule of rules) score += rule.penalty;
@@ -1533,8 +1803,9 @@ function _memoryFromState(state) {
     return mem;
 }
 
-function _endgameKeyFast(hands, cp, lastPlay, passCount) {
+function _endgameKeyFast(hands, cp, lastPlay, passCount, plies) {
     let k = cp + '|' + passCount + '|' + (lastPlay ? lastPlay.type + ':' + lastPlay.value + ':' + (lastPlay.length || 0) : '-');
+    if (plies !== undefined) k += '|p' + plies;
     for (let i = 0; i < 3; i++) {
         k += '|' + hands[i].map(c => c.value).sort((a, b) => a - b).join('.');
     }
@@ -1571,7 +1842,16 @@ function endgameMinimax(hands, cp, lastPlay, lastPlayerId, passCount, mySide, ct
     }
     if (passCount >= 2) { lastPlay = null; lastPlayerId = -1; passCount = 0; }
 
-    const key = _endgameKeyFast(hands, cp, lastPlay, passCount);
+    // 深度限制（可选）：ctx.maxPlies 生效时把 plies 计入置换表键，保证缓存正确
+    // ctx 始终共享（节点计数/截断标记都在 ctx 上），深度通过保存-恢复实现。
+    const plies = ctx.plies || 0;
+    const limited = ctx.maxPlies !== undefined && ctx.maxPlies !== null && ctx.maxPlies > 0;
+    if (limited && plies >= ctx.maxPlies) {
+        return _staticEvalHands(hands, mySide);
+    }
+    const nextCtx = ctx;
+
+    const key = limited ? _endgameKeyFast(hands, cp, lastPlay, passCount, plies) : _endgameKeyFast(hands, cp, lastPlay, passCount);
     const ttEntry = ctx.tt.get(key);
     if (ttEntry) {
         if (ttEntry.flag === 'exact') return ttEntry.value;
@@ -1588,9 +1868,10 @@ function endgameMinimax(hands, cp, lastPlay, lastPlayerId, passCount, mySide, ct
     let best = isMax ? -Infinity : Infinity;
     let childTruncated = false;
 
+    if (limited) ctx.plies = plies + 1;
     if (needBeat) {
         // 过牌分支
-        const val = endgameMinimax(hands, (cp + 1) % 3, lastPlay, lastPlayerId, passCount + 1, mySide, ctx, alpha, beta);
+        const val = endgameMinimax(hands, (cp + 1) % 3, lastPlay, lastPlayerId, passCount + 1, mySide, nextCtx, alpha, beta);
         best = val;
         if (isMax) { if (val > alpha) alpha = val; } else { if (val < beta) beta = val; }
         if (alpha >= beta) childTruncated = childTruncated || ctx.truncated;
@@ -1604,7 +1885,7 @@ function endgameMinimax(hands, cp, lastPlay, lastPlayerId, passCount, mySide, ct
             if (hands[cp].length === 0) {
                 val = mySide.includes(cp) ? 100 : -100;
             } else {
-                val = endgameMinimax(hands, (cp + 1) % 3, getCardType(p), cp, 0, mySide, ctx, alpha, beta);
+                val = endgameMinimax(hands, (cp + 1) % 3, getCardType(p), cp, 0, mySide, nextCtx, alpha, beta);
             }
             _undoPlay(hands, cp, p);
             if (isMax) {
@@ -1619,6 +1900,7 @@ function endgameMinimax(hands, cp, lastPlay, lastPlayerId, passCount, mySide, ct
         }
     }
 
+    if (limited) ctx.plies = plies;
     if (!ctx.truncated && !childTruncated) {
         let flag = 'exact';
         if (best <= origAlpha) flag = 'upper';
@@ -1629,8 +1911,15 @@ function endgameMinimax(hands, cp, lastPlay, lastPlayerId, passCount, mySide, ct
 }
 
 // 兼容旧签名（ai_learner 的精确解会调用）
+// maxDepth > 0 且 < 20 时启用深度限制（深度计入置换表键，保证缓存正确）
 function minimaxEndgame(state, currentPlayer, myId, depth, maxDepth, alpha = -999, beta = 999, ctx) {
-    if (!ctx) ctx = { nodes: 0, limit: 60000, tt: new Map(), truncated: false, deadline: Date.now() + 400 };
+    const useDepth = typeof maxDepth === 'number' && maxDepth > 0 && maxDepth < 20;
+    if (!ctx) {
+        ctx = { nodes: 0, limit: 60000, tt: new Map(), truncated: false, deadline: Date.now() + 400 };
+        if (useDepth) { ctx.maxPlies = maxDepth; ctx.plies = 0; }
+    } else if (useDepth && ctx.maxPlies === undefined) {
+        ctx.maxPlies = maxDepth; ctx.plies = depth || 0;
+    }
     const mySide = (myId === state.landlord) ? [myId] : [0, 1, 2].filter(i => i !== state.landlord);
     const hands = state.players.map(p => [...p]);
     return endgameMinimax(hands, currentPlayer, state.lastPlay, state.lastPlayerId, state.passCount || 0, mySide, ctx, alpha, beta);
@@ -1740,9 +2029,17 @@ function solveEndgameBlind(state, playerId, belief, opts) {
 
     const worlds = Math.max(1, opts.worlds || 4);
     const budgetMs = opts.timeBudgetMs !== undefined ? opts.timeBudgetMs : (cfg('blind.endgameTimeBudgetMs') || 600);
-    const deadline = Date.now() + budgetMs;
+    const determin = isDeterministicSearch();
+    const deadline = determin ? 0 : (Date.now() + budgetMs);
     const nodeLimit = opts.nodeLimit || (cfg('endgame.nodeLimit') || 200000);
-    const perWorldLimit = Math.max(20000, Math.floor(nodeLimit / worlds));
+    // 确定性模式：每个候选固定节点预算（与挂钟无关 → 可复现）
+    // nodeBudget 的语义是「本次残局求解的**总**节点预算」，
+    // 而不是「每个候选的节点预算」—— 后者会让总开销放大到
+    // 候选数 × 世界数 倍（8 候选 × 2 世界 × 1200 节点 = 19200 次 getAllValidPlays），
+    // 单次决策就能吃掉好几秒。
+    const detNodeBudget = Math.max(300, cfg('search.nodeBudget') || 12000);
+    const perCandidateNodes = Math.max(40, Math.floor(detNodeBudget / Math.max(1, trimmedOptions.length * worlds)));
+    const perWorldLimit = determin ? detNodeBudget : Math.max(20000, Math.floor(nodeLimit / worlds));
     const lambda = opts.robustness !== undefined ? opts.robustness : (cfg('blind.robustness') !== undefined ? cfg('blind.robustness') : 0.25);
     const mySide = (playerId === state.landlord) ? [playerId] : [0, 1, 2].filter(i => i !== state.landlord);
     const keyOf = (p) => (p === null || p === ENDGAME_PASS) ? 'pass' : p.map(c => c.id).sort().join(',');
@@ -1752,14 +2049,16 @@ function solveEndgameBlind(state, playerId, belief, opts) {
     // 每个候选平均分到的时间片；候选越多每片越短，但总时间受全局 deadline 约束
     const perCandidateMs = Math.max(30, Math.floor(budgetMs / Math.max(1, worlds * trimmedOptions.length)));
     for (let w = 0; w < worlds; w++) {
-        if (Date.now() > deadline) break;
+        if (!determin && Date.now() > deadline) break;
         const worldPlayers = belief.sampleWorld();
         const hands = worldPlayers.map(p => [...p]);
         evaluatedWorlds++;
         // 每个候选使用独立 ctx：某个候选被截断时不会污染后续候选，也不会把整轮搜索提前结束。
         for (const p of trimmedOptions) {
-            if (Date.now() > deadline) break;
-            const ctx = {
+            if (!determin && Date.now() > deadline) break;
+            const ctx = determin ? {
+                nodes: 0, limit: perCandidateNodes, tt: new Map(), truncated: false, deadline: 0
+            } : {
                 nodes: 0, limit: perWorldLimit, tt: new Map(), truncated: false,
                 deadline: Math.min(deadline, Date.now() + perCandidateMs)
             };
@@ -1845,7 +2144,13 @@ function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministi
         let hand = s.players[cp];
         if (!hand || hand.length === 0) { cp = (cp + 1) % 3; continue; }
         let needBeat = s.lastPlay && s.lastPlayerId !== cp;
-        let plays = needBeat ? getAllValidPlays(hand, s.lastPlay) : getAllValidPlays(hand, null);
+        // rollout 用精简候选集：组合牌型（三带一/四带二/飞机带翅膀）的候选数是
+        // 组合爆炸的，全枚举会把每次 rollout 拖慢好几倍。
+        // 根节点与 MCTS 扩展仍然用完整集合（不能漏掉好棋）。
+        const comboCap = hp.maxComboPerGroup || 0;
+        let plays = needBeat
+            ? getAllValidPlays(hand, s.lastPlay, comboCap ? { maxComboPerGroup: comboCap } : undefined)
+            : getAllValidPlays(hand, null, comboCap ? { maxComboPerGroup: comboCap } : undefined);
         if (plays.length === 0) { s.passCount++; cp = (cp + 1) % 3; continue; }
         const role = cp === s.landlord ? 'landlord' : 'farmer';
         const minP = needBeat ? minBeatPower(s.lastPlay.type, s.lastPlay.value, s.lastPlay.length) : 0;
@@ -1881,12 +2186,20 @@ function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministi
             }
         }
         if (!best) { s.passCount++; cp = (cp + 1) % 3; continue; }
-        // 关键候选用完整启发式重打分：先按结构分排序并保留牌型多样性，避免截断到"最弱 6 手"。
+        // 关键候选用完整启发式重打分：先按结构分排序并保留牌型多样性。
+        //
+        // 这里刻意**不**对全部候选调用 scorePlay：
+        //   1) 性能：scorePlay 是搜索里最贵的函数（要抽特征 + 查规则），
+        //      原实现每步要给 8 个候选打分 → 每次 rollout 成本翻倍。
+        //   2) 质量：rollout 策略如果和根节点用同一个 scorePlay，
+        //      MCTS 搜索的就是「我自己启发式的延伸」，会把启发式的盲点一起放大。
+        //      用「便宜的排序 + 少量精排」能让 rollout 与根评估部分解耦。
+        const RICH_MAX = cfg('heuristicPlayout.richCandidates') || 4;
         const richPool = [];
         const seenRich = new Set();
         const pushRich = (pl) => {
             if (!pl || !pl.length) return;
-            const key = pl.map(c => c.id).sort().join(',');
+            const key = _playKey(pl);
             if (seenRich.has(key)) return;
             seenRich.add(key);
             richPool.push(pl);
@@ -1898,10 +2211,10 @@ function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministi
             const t = playTypeOf(entry.play);
             if (!t) continue;
             if (!seenTypes.has(t.type)) { seenTypes.add(t.type); pushRich(entry.play); }
-            if (richPool.length >= 8) break;
+            if (richPool.length >= RICH_MAX) break;
         }
         for (const entry of sortedRich) {
-            if (richPool.length >= 8) break;
+            if (richPool.length >= RICH_MAX) break;
             pushRich(entry.play);
         }
         if (richPool.length > 1 && typeof scorePlay === 'function') {
@@ -2158,8 +2471,9 @@ function mctsSearch(state, playerId, iterations, memory, timeLimit, opts) {
     let root = new MCTSNode(_cloneStateShallow(state), null, state.currentPlayer, playerId, (opts && opts.rootPriors) || null);
     let startTime = Date.now();
     const allowEarlyStop = !(opts && opts.earlyStop === false);
+    const determin = isDeterministicSearch();
     for (let i = 0; i < iterations; i++) {
-        if (Date.now() - startTime > timeLimit) break;
+        if (!determin && Date.now() - startTime > timeLimit) break;
         if (allowEarlyStop && (i & 63) === 63 && root.children.length > 1) {
             let maxV = 0;
             for (const c of root.children) if (c.visits > maxV) maxV = c.visits;
@@ -2310,10 +2624,13 @@ function mctsSearchBlind(state, playerId, belief, opts) {
     opts = opts || {};
     const hand = state.players[playerId];
     if (!hand || hand.length === 0) return null;
-    const worlds = Math.max(1, opts.worlds || 3);
-    const iterations = opts.iterations || cfg('mcts.iterations.hard') || 600;
+    const determin = isDeterministicSearch();
+    const worlds = determin ? Math.max(1, cfg('search.mctsWorlds') || 4) : Math.max(1, opts.worlds || 3);
+    const iterations = determin
+        ? Math.max(1, cfg('search.mctsIterations') || 300)
+        : (opts.iterations || cfg('mcts.iterations.hard') || 600);
     const budgetMs = opts.timeBudgetMs !== undefined ? opts.timeBudgetMs : (cfg('blind.mctsTimeBudgetMs.hard') || 1000);
-    const deadline = Date.now() + budgetMs;
+    const deadline = determin ? 0 : (Date.now() + budgetMs);
     const memory = opts.memory || null;
     const priors = (cfg('blind.mctsRootPriors.' + (opts.difficulty || 'hard')) !== 0) ? _buildRootPriors(state, playerId, memory) : null;
     if (priors && opts.leadPref && opts.leadPref.length) {
@@ -2323,11 +2640,11 @@ function mctsSearchBlind(state, playerId, belief, opts) {
     const lambda = opts.robustness !== undefined ? opts.robustness : (cfg('blind.robustness') !== undefined ? cfg('blind.robustness') : 0.25);
     const agg = new Map();
     for (let w = 0; w < worlds; w++) {
-        if (Date.now() > deadline) break;
+        if (!determin && Date.now() > deadline) break;
         const worldPlayers = belief.sampleWorld();
         const worldState = Object.assign({}, state, { players: worldPlayers });
         const remainMs = deadline - Date.now();
-        const perWorldTime = Math.max(50, Math.floor(remainMs / Math.max(1, worlds - w)));
+        const perWorldTime = determin ? 1e9 : Math.max(50, Math.floor(remainMs / Math.max(1, worlds - w)));
         let res = null;
         try {
             res = mctsSearch(worldState, playerId, iterations, memory, perWorldTime, { collectStats: true, rootPriors: priors });

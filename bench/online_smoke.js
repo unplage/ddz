@@ -18,14 +18,23 @@ const HTML = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 const AI_CORE = fs.readFileSync(path.join(ROOT, 'ai_core.js'), 'utf8');
 const AI_LEARNER = fs.readFileSync(path.join(ROOT, 'ai_learner.js'), 'utf8');
 
-// ---- 提取 index.html 的第一个内联 <script>（主脚本） ----
-function extractInlineScript(html) {
+// ---- 提取 index.html 的主内联脚本 ----
+// 注意：不能简单取「第一个」内联脚本 —— index.html 里还有一个更早的版本号显示脚本。
+// 主脚本的判别特征：包含 GameState 的定义。
+function extractInlineScripts(html) {
     const re = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi;
-    const m = re.exec(html);
-    if (!m) throw new Error('未找到内联主脚本');
-    return m[1];
+    const out = [];
+    let m;
+    while ((m = re.exec(html)) !== null) out.push(m[1]);
+    return out;
 }
-const MAIN_SCRIPT = extractInlineScript(HTML);
+function extractMainScript(html) {
+    const scripts = extractInlineScripts(html);
+    const main = scripts.find(s => /\bconst\s+GameState\b/.test(s) || /\blet\s+GameState\b/.test(s) || /\bvar\s+GameState\b/.test(s));
+    if (!main) throw new Error('未找到主内联脚本（含 GameState 定义）');
+    return main;
+}
+const MAIN_SCRIPT = extractMainScript(HTML);
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
