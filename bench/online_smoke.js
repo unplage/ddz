@@ -495,9 +495,12 @@ async function main() {
     section('8. P0/P1 联机修复回归');
     // 静态检查（这些行为依赖真实网络/计时器，动态构造代价大）
     const mainTxt = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-    check('AFK 托管不再以 disconnected 为前提',
-        !/if \(!GameState\.disconnected\[id\]\) return;/.test(mainTxt) &&
+    check('在线玩家超时不强制托管（仅掉线才托管）',
+        mainTxt.includes('if (!GameState.disconnected[id]) {') &&
         mainTxt.includes('takeoverPlay(id);'));
+    check('结算后向所有玩家广播完整剩余手牌',
+        /safeState\.phase === 'gameover'\) return \[\.\.\.p\]/.test(mainTxt));
+    check('客户端也会显示自动过牌按钮', mainTxt.includes('syncAutoPassButton()'));
     check('sync 带 epoch 房间纪元', mainTxt.includes('epoch: GameState.roomEpoch'));
     check('客户端只接受房主连接 sync', mainTxt.includes("conn !== GameState.connections[0]"));
     check('sync 带记牌器快照', mainTxt.includes('memorySnapshot:'));

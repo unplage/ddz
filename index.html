@@ -15,7 +15,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon.png">
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
     <meta name="theme-color" content="#1a1a2e">
-    <meta name="app-version" content="v94">
+    <meta name="app-version" content="v95">
     <meta name="description" content="像素风格斗地主：单机公平 AI 对战 + P2P 联机，离线可玩">
     <style>
         * { image-rendering: pixelated; font-family: 'Press Start 2P', cursive; -webkit-tap-highlight-color: transparent; touch-action: manipulation; box-sizing: border-box; }
@@ -276,6 +276,10 @@
     // ======================== 联机体验配置 ========================
     const ONLINE_CALL_SECONDS = 10;
     const ONLINE_TURN_SECONDS = 15;
+    // 心跳每 5s 一次；连续 12 次收不到 pong（约 60s）才判定掉线。
+    // 旧值 6 次≈30s，后台标签页被节流时会误判"还在思考"的玩家掉线并被 AI 托管。
+    const HEARTBEAT_INTERVAL_MS = 5000;
+    const HEARTBEAT_MAX_MISSES = 12;
     let autoPassEnabled = SafeStore.get('landlord_autopass', '1') !== '0';
     let clientReconnecting = false;
     let clientReconnectAttempts = 0;
@@ -1558,6 +1562,7 @@
             document.getElementById('connStatus').innerHTML = '🔗 已连接房主';
             document.getElementById('debugStrip').style.display = 'block';
             updateDebugStrip('已连接，等待房主开局...');
+            syncAutoPassButton();
             showToast(isReconnect ? '重连成功！' : '加入成功，等待房主开局');
         });
         conn.on('close', () => { if (!opened) failJoin(''); else onClientConnLost(); });
@@ -1618,8 +1623,7 @@
         document.getElementById('connStatus').classList.remove('hidden');
         document.getElementById('connStatus').innerHTML = '👑 房主';
         document.getElementById('emojiBtn').classList.remove('hidden');
-        let _ap = document.getElementById('autoPassBtn');
-        if (_ap) { _ap.classList.remove('hidden'); _ap.style.background = autoPassEnabled ? 'rgba(74,222,128,0.5)' : 'rgba(255,255,255,0.2)'; }
+        syncAutoPassButton();
         document.getElementById('connectPanel').style.display = 'none';
         document.getElementById('startScreen').classList.add('hidden');
         showToast((GameState.onlineHumans || 3) === 2 ? "已连1人，AI补位，游戏开始" : "两人已满，游戏开始");
@@ -1671,9 +1675,15 @@
     function toggleAutoPass() {
         autoPassEnabled = !autoPassEnabled;
         SafeStore.set('landlord_autopass', autoPassEnabled ? '1' : '0');
-        let btn = document.getElementById('autoPassBtn');
-        if (btn) btn.style.background = autoPassEnabled ? 'rgba(74,222,128,0.5)' : 'rgba(255,255,255,0.2)';
+        syncAutoPassButton();
         showToast(autoPassEnabled ? '要不起时自动过牌：开' : '要不起时自动过牌：关');
+    }
+    // 房主与客户端都显示该按钮（各自本地偏好，互不影响）
+    function syncAutoPassButton() {
+        let btn = document.getElementById('autoPassBtn');
+        if (!btn) return;
+        if (isOnlineMode()) btn.classList.remove('hidden');
+        btn.style.background = autoPassEnabled ? 'rgba(74,222,128,0.5)' : 'rgba(255,255,255,0.2)';
     }
     function onConnectionData(conn, data) {
         try {
@@ -1759,6 +1769,8 @@ function broadcastFullState() {
             let safeState = JSON.parse(JSON.stringify(base));
             safeState.players = base.players.map((p, idx) => {
                 if (idx === myIdx) return [...p];
+                // 结算后公开所有玩家的剩余手牌，供所有人复盘
+                if (safeState.phase === 'gameover') return [...p];
                 return p.length; // 瘦身: 对方手牌只传张数(农民端渲染与判定仅需要张数)
             });
             if (safeState.phase === 'calling') {
@@ -1900,7 +1912,7 @@ function broadcastFullState() {
                 GameState.connections.forEach(conn => {
                     if (!conn || conn._disconnected) return;
                     conn._hbWait = (conn._hbWait || 0) + 1;
-                    if (conn._hbWait > 6) { handleOfflineDetected(conn); return; }
+                    if (conn._hbWait > HEARTBEAT_MAX_MISSES) { handleOfflineDetected(conn); return; }
                     safeSend(conn, { type: 'ping' });
                 });
             } else if (GameState.myRole === 'client') {
@@ -1908,10 +1920,10 @@ function broadcastFullState() {
                 let conn = GameState.connections[0];
                 if (!conn || conn._disconnected || clientIntentionalLeave) { return; }
                 conn._hbWait = (conn._hbWait || 0) + 1;
-                if (conn._hbWait > 6) { onClientConnLost(); return; }
+                if (conn._hbWait > HEARTBEAT_MAX_MISSES) { onClientConnLost(); return; }
                 try { conn.send({ type: 'ping' }); } catch (e) { onClientConnLost(); }
             }
-        }, 5000);
+        }, HEARTBEAT_INTERVAL_MS);
     }
     function stopHeartbeat() { if (hbTimer) { clearInterval(hbTimer); hbTimer = null; } }
     function handleSync(state) {
@@ -2205,14 +2217,21 @@ function broadcastFullState() {
                 document.getElementById('controls').innerHTML = '<button id="waitingBtn" class="pixel-btn bg-gray-600" disabled>等待叫分</button>';
             lastTurnRenderKey = key;
             let isHost = GameState.myRole === 'host';
-            // 掉线玩家立刻接管；在线但挂机的玩家也要在倒计时结束后接管，
-            // 否则在线 ping 一直续命 → 永远不进 disconnected → 牌局永久卡死。
+            // 只有"确认掉线"的玩家才由 AI 托管。仍在线（心跳正常）的玩家即使超过倒计时，
+            // 也只延长等待，不再被强行代打 —— 玩家可能只是还在思考。
             let waitMs = (isHost && GameState.disconnected[id]) ? 400 : ONLINE_CALL_SECONDS * 1000;
-            startOnlineTimer(ONLINE_CALL_SECONDS, () => {
+            let onCallTimeout = () => {
                 if (GameState.phase !== 'calling' || GameState.currentPlayer !== id || !isHost) return;
                 if (GameState.takeoverStarted && GameState.takeoverStarted[id]) return;
+                if (!GameState.disconnected[id]) {
+                    updateDebugStrip(getPlayerName(id) + ' 仍在思考，继续等待…');
+                    startOnlineTimer(ONLINE_CALL_SECONDS, onCallTimeout, id, null, ONLINE_CALL_SECONDS * 1000);
+                    broadcastFullState();
+                    return;
+                }
                 takeoverCall(id);
-            }, id, isHost ? null : onlineDeadline(ONLINE_CALL_SECONDS), waitMs);
+            };
+            startOnlineTimer(ONLINE_CALL_SECONDS, onCallTimeout, id, isHost ? null : onlineDeadline(ONLINE_CALL_SECONDS), waitMs);
         }
         if (GameState.myRole === 'host') broadcastFullState();
     }
@@ -2312,12 +2331,19 @@ function broadcastFullState() {
             lastTurnRenderKey = key;
             let isHost = GameState.myRole === 'host';
             let waitMs = (isHost && GameState.disconnected[id]) ? 400 : ONLINE_TURN_SECONDS * 1000;
-            startOnlineTimer(ONLINE_TURN_SECONDS, () => {
+            // 同叫分阶段：未掉线的玩家超时后只延长等待，不强制 AI 代打。
+            let onPlayTimeout = () => {
                 if (GameState.currentPlayer !== id || GameState.phase !== 'playing' || !isHost) return;
                 if (GameState.takeoverStarted && GameState.takeoverStarted[id]) return;
-                // 不再要求 disconnected：在线挂机同样托管
+                if (!GameState.disconnected[id]) {
+                    updateDebugStrip(getPlayerName(id) + ' 仍在思考，继续等待…');
+                    startOnlineTimer(ONLINE_TURN_SECONDS, onPlayTimeout, id, null, ONLINE_TURN_SECONDS * 1000);
+                    broadcastFullState();
+                    return;
+                }
                 takeoverPlay(id);
-            }, id, isHost ? null : onlineDeadline(ONLINE_TURN_SECONDS), waitMs);
+            };
+            startOnlineTimer(ONLINE_TURN_SECONDS, onPlayTimeout, id, isHost ? null : onlineDeadline(ONLINE_TURN_SECONDS), waitMs);
         }
         if (GameState.myRole === 'host') broadcastFullState();
     }
@@ -2434,7 +2460,7 @@ function broadcastFullState() {
             document.getElementById('playerTimerFill').style.width = pct + '%';
             if (remainingSeconds <= 3 && remainingSeconds >= 1 && lastWarnSec !== remainingSeconds && GameState.phase !== 'gameover') {
                 lastWarnSec = remainingSeconds;
-                try { showToast(isOnlineMode() ? remainingSeconds + '秒后超时后由房主托管！' : '还剩' + remainingSeconds + '秒'); } catch (e) {}
+                try { showToast(isOnlineMode() ? '还剩' + remainingSeconds + '秒，请尽快操作' : '还剩' + remainingSeconds + '秒'); } catch (e) {}
             }
         } else if (timerPlayerId === leftIdx) {
             document.getElementById('leftTimerFill').style.width = pct + '%';
@@ -2480,7 +2506,7 @@ function broadcastFullState() {
         } else if (!interactive) {
             allow = true;
         } else {
-            try { allow = window.confirm(`${getPlayerName(dcIdx)} 超过30秒无响应，是否允许 AI 代打？`); }
+            try { allow = window.confirm(`${getPlayerName(dcIdx)} 超过60秒无响应，是否允许 AI 代打？`); }
             catch (e) { allow = true; }
         }
         if (allow) {
