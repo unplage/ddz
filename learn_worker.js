@@ -82,6 +82,18 @@ function deterministicParams(p) {
     return out;
 }
 
+// 线上强度档验证：只关随机/开确定性以保证复现，保留真实搜索预算。
+// 旧的 deterministicParams 把所有预算砍到 40 iter / 1 world → 在弱策略下 A/B 赢，
+// 不代表线上强策略也赢。最终采纳前必须用本函数再验一次。
+function strongParams(p) {
+    const out = JSON.parse(JSON.stringify(p || {}));
+    out.search = Object.assign({}, out.search || {}, { deterministic: true });
+    out.randomFactors = Object.assign({}, out.randomFactors || {}, {
+        easy: 0, medium: 0, hard: 0, grandmaster: 0, legendary: 0
+    });
+    return out;
+}
+
 // ======================== 统计 ========================
 function wilson(wins, n, z) {
     if (!n) return { lo: 0, hi: 0 };
@@ -196,13 +208,14 @@ const SelfPlayEval = {
         return { winner, invalid: null };
     },
     // 配对评估：候选 vs 基线，同一副牌、角色平衡
-    async evaluate(cand, base, deals, timeBudgetMs, difficulty, seed) {
+    async evaluate(cand, base, deals, timeBudgetMs, difficulty, seed, strength) {
         if (typeof AICore === 'undefined' || typeof getAllValidPlays === 'undefined') return null;
         difficulty = (typeof difficulty === 'string' && difficulty) ? difficulty : 'grandmaster';
         const t0 = Date.now();
         const budget = timeBudgetMs || 120000;
-        const candParams = deterministicParams(cand);
-        const baseParams = deterministicParams(base);
+        const makeParams = (strength === 'strong') ? strongParams : deterministicParams;
+        const candParams = makeParams(cand);
+        const baseParams = makeParams(base);
         // 每次评估换种子：固定牌集会过拟合且 bootstrap CI 系统性过自信。
         // 测试可通过 seed 固定牌集以保证可复现（生产不传 → 随机）。
         this._rngState = (typeof seed === 'number' && Number.isFinite(seed))
@@ -676,6 +689,19 @@ const GodViewLearner = {
         this._statsCache.total += corrections.length;
     },
 
+    // 世界模型 / 搜索的关键标量参数：之前完全硬编码，学习闭环碰不到。
+    // 每项：{ def: 默认值, min, max, step: 单批最大步长 }
+    _TUNABLE_PARAMS: {
+        'blind.bombRiskWeight.hard':       { def: 40, min: 10, max: 70, step: 4 },
+        'blind.bombRiskWeight.grandmaster':{ def: 40, min: 10, max: 70, step: 4 },
+        'blind.bombRiskWeight.legendary':  { def: 40, min: 10, max: 70, step: 4 },
+        'blind.beatProbWeight.hard':       { def: 10, min: 2, max: 20, step: 1.5 },
+        'blind.beatProbWeight.grandmaster':{ def: 14, min: 3, max: 24, step: 2 },
+        'blind.beatProbWeight.legendary':  { def: 18, min: 4, max: 30, step: 2 },
+        'blind.robustness':                { def: 0.25, min: 0.1, max: 0.5, step: 0.03 },
+        'mcts.ucbC':                       { def: 1.4, min: 0.8, max: 2.2, step: 0.1 }
+    },
+
     _FEATURE_SCALE: {
         playPower: 20, isBomb: 1, isRocket: 1, remainTotal: 20, remainSingle: 8, remainPair: 8,
         remainTriple: 6, remainBomb: 4, remainMaxStraight: 12, remainBigCards: 8, hasRocket: 1,
@@ -721,8 +747,11 @@ const GodViewLearner = {
         let heuristicDeltas = {};
         const acc = {};   // 先按 key 聚合求均值，避免 correction 数量直接放大步长
 
+        // 世界模型参数的调整方向由纠错类型驱动（全是公开对局结果，不看对手手牌）
+        const categoryCount = { overkill: 0, missed_bomb: 0, bad_pass: 0, bad_keep: 0 };
         for (let corr of corrections) {
             if (corr.diff < 0.25) continue;
+            if (categoryCount[corr.category] !== undefined) categoryCount[corr.category]++;
 
             // --- A: 线性权重更新（特征差按量纲归一化 → 取均值 → 乘学习率）---
             // 地主与农民目标不同 → 权重按角色分桶统计（weightsByRole.<role>.<key>）
@@ -805,6 +834,33 @@ const GodViewLearner = {
             this._setNested(candidate, path, Math.round(nv * 10000) / 10000);
             changed++;
         }
+        // ===== 世界模型 / 搜索参数调整（纠错类型驱动 + 有界裁剪）=====
+        const tuneHints = [];
+        const n = Math.max(1, corrections.length);
+        // 炸弹用多了 → 提高 bombRisk；错过炸弹 → 降低 bombRisk
+        const bombDir = (categoryCount.overkill - categoryCount.missed_bomb) / n;
+        if (Math.abs(bombDir) > 0.05) {
+            for (const d of ['hard','grandmaster','legendary'])
+                tuneHints.push({ path: 'blind.bombRiskWeight.' + d, dir: bombDir });
+        }
+        // 不该过牌却过了 → 提高 beatProbWeight；不该出却出了 → 降低
+        const beatDir = (categoryCount.bad_pass - categoryCount.bad_keep) / n;
+        if (Math.abs(beatDir) > 0.05) {
+            for (const d of ['hard','grandmaster','legendary'])
+                tuneHints.push({ path: 'blind.beatProbWeight.' + d, dir: beatDir });
+        }
+        for (const hint of tuneHints) {
+            const spec = this._TUNABLE_PARAMS[hint.path];
+            if (!spec) continue;
+            const cur = paramGet(hint.path);
+            if (typeof cur !== 'number') continue;
+            const step = Math.max(-spec.step, Math.min(spec.step, hint.dir * spec.step * 3));
+            const nv = Math.max(spec.min, Math.min(spec.max, Math.round((cur + step) * 10000) / 10000));
+            if (Math.abs(nv - cur) < 0.0005) continue;
+            this._setNested(candidate, hint.path, nv);
+            changed++;
+        }
+
         if (changed === 0) return;
 
         // 自我对弈 A/B 验证：候选参数必须不劣于当前参数才采纳。
@@ -812,19 +868,30 @@ const GodViewLearner = {
         // 10 副牌 / 20 paired games，并要求 A/B 胜率不低于 50%。
         let base = this._effectiveParams();
         let validation = null;
-        // 验证在 Worker 里跑，不阻塞主线程。预算给足（Worker 有整段空闲时间）。
-        try { validation = await SelfPlayEval.evaluate(candidate, base, 30, 90000, 'grandmaster'); } catch (e) { validation = null; }
+        // ===== 两级验证门禁 =====
+        // 第 1 级：弱档快速筛选（40 iter / 1 world），排除明显更差的候选
+        try { validation = await SelfPlayEval.evaluate(candidate, base, 30, 90000, 'grandmaster', undefined, 'fast'); }
+        catch (e) { validation = null; }
         stats.validated = true;
         stats.validationWinRate = validation ? validation.winRate : null;
         stats.validationGames = validation ? validation.games : 0;
         let accepted = false;
-        // 采纳门槛（与 evaluate 的产出严格对齐）：
-        //   1) 至少 30 局有效对局（旧的 ">=20" 与 evaluate 的 minGames 不一致，永远过不了）
-        //   2) 配对 bootstrap 的 95% 下界 > 0.5 —— 必须是统计显著的提升，而不是噪声
-        if (validation && !validation.insufficient && validation.games >= 30 && validation.invalid === 0) {
-            accepted = validation.bootLo > 0.5;
-            stats.validationLowerBound = validation.bootLo;
-            stats.validationUpperBound = validation.bootHi;
+        if (validation && !validation.insufficient && validation.games >= 30 && validation.invalid === 0
+            && validation.bootLo > 0.5) {
+            // 第 2 级：线上强度档确认（保留真实 MCTS/世界预算）。
+            // 弱档赢不代表强档也赢 —— 必须在强档再验一次才采纳。
+            // 强档更贵：12 副牌/24 局，预算 240s；门槛略放宽到 winRate>0.55 && bootLo>0.45
+            // （样本少 CI 宽，但第 1 级已提供较强的筛选证据）。
+            let strong = null;
+            try { strong = await SelfPlayEval.evaluate(candidate, base, 12, 240000, 'grandmaster', undefined, 'strong'); }
+            catch (e) { strong = null; }
+            stats.strongValidation = strong ? {
+                winRate: strong.winRate, games: strong.games, bootLo: strong.bootLo
+            } : null;
+            accepted = !!(strong && !strong.insufficient && strong.games >= 16 &&
+                strong.invalid === 0 && strong.winRate > 0.55 && strong.bootLo > 0.45);
+            stats.validationLowerBound = strong ? strong.bootLo : validation.bootLo;
+            stats.validationUpperBound = strong ? strong.bootHi : validation.bootHi;
         }
         if (!accepted) {
             this._statsCache.rejected = (this._statsCache.rejected || 0) + 1;
@@ -856,7 +923,7 @@ self.onmessage = async function (e) {
                 break;
             }
             case 'evaluate': {
-                const res = await SelfPlayEval.evaluate(msg.candParams, msg.baseParams, msg.deals || 30, msg.timeBudgetMs || 90000, msg.difficulty, msg.seed);
+                const res = await SelfPlayEval.evaluate(msg.candParams, msg.baseParams, msg.deals || 30, msg.timeBudgetMs || 90000, msg.difficulty, msg.seed, msg.strength);
                 post({ taskId: msg.taskId, validation: res });
                 break;
             }

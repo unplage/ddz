@@ -15,7 +15,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon.png">
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
     <meta name="theme-color" content="#1a1a2e">
-    <meta name="app-version" content="v93">
+    <meta name="app-version" content="v94">
     <meta name="description" content="像素风格斗地主：单机公平 AI 对战 + P2P 联机，离线可玩">
     <style>
         * { image-rendering: pixelated; font-family: 'Press Start 2P', cursive; -webkit-tap-highlight-color: transparent; touch-action: manipulation; box-sizing: border-box; }
@@ -691,6 +691,10 @@
         singleCallCount = 0;
         bottomCardsShown = false;
         GameState.cardMemory = new MasterMemory();
+        try {
+            GameState.humanStyle = (typeof HumanStyleProfile !== 'undefined')
+                ? HumanStyleProfile.get() : null;
+        } catch (e) { GameState.humanStyle = null; }
         GameState.aiList = [null, new MasterAI(1, GameState.difficulty, GameState.cardMemory), new MasterAI(2, GameState.difficulty, GameState.cardMemory)];
         dealCards();
     }
@@ -2882,6 +2886,7 @@ function broadcastFullState() {
                 lordPlayCount: state.lordPlayCount,
                 farmerPlayed: state.farmerPlayed,
                 callScores: state.callScores, callOrder: state.callOrder || [],
+                humanStyle: (typeof HumanStyleProfile !== 'undefined' && state.humanStyle) ? state.humanStyle : null,
                 lordCards: state.lordCards ? state.lordCards.map(c => ({ id: c.id, suit: c.suit, rank: c.rank, value: c.value })) : [],
                 phase: state.phase
             };

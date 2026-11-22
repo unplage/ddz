@@ -712,6 +712,8 @@ class HandBelief {
         // 叫分顺序（公开信息）：最后叫分者的牌力信号强于第一个叫分者
         this.callOrder = (state.callOrder && state.callOrder.length === 3)
             ? state.callOrder.slice() : null;
+        // 跨局真人风格（公开行为统计，单机模式才有）：激进/保守/爱炸弹
+        this.humanStyle = (state.humanStyle && state.humanStyle.games >= 3) ? state.humanStyle : null;
         this.memory = memory;
 
         // ======================== 公开历史线索 ========================
@@ -962,7 +964,23 @@ class HandBelief {
             // 但 bombRiskFor 已按 seen 剔除，这里只做很轻的风格修正
             if (prof.bombCount >= 1) score -= 0.5;
         }
-        // 5) 记牌器滞后导致回收已打出的牌 → 世界本身不可信，降权
+        // 5) 跨局真人风格适应（仅单机、games≥3 才生效，公开行为统计）：
+        //    真人历史过牌多 → 采样世界里其牌力偏弱；爱炸弹 → 控牌偏多。
+        if (this.humanStyle) {
+            const hs = this.humanStyle;
+            const oppIdsHere = oppIds.filter(i => i !== this.playerId);
+            for (const id of oppIdsHere) {
+                // 真人座位：单机模式下玩家是 myRole 的对面；这里对所有非己方做温和先验
+                const hand = worldPlayers[id] || [];
+                const str = this._handStrengthScore(hand);
+                const wantWeak = (hs.passRate || 0.3) - 0.3;      // >0 表示偏保守
+                score -= wantWeak * str * 0.08;
+                const wantControl = (hs.bombRate || 0.05) - 0.05; // >0 表示爱炸弹
+                const f = extractHandFeatures(hand);
+                score += wantControl * (f.bomb + f.hasRocket * 2) * 6;
+            }
+        }
+        // 6) 记牌器滞后导致回收已打出的牌 → 世界本身不可信，降权
         score -= this.recycleCount * 0.5;
         return score;
     }

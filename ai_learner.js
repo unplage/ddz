@@ -534,6 +534,7 @@ const GameRecorder = {
 
         let game = this.currentGame;
         this.currentGame = null;
+        HumanStyleProfile.update(game);
         GameDatabase.save(game).then(() => {
             GameAnalyzer.analyze(game);
             // 学习闭环放进 Worker，避免主线程卡顿；Worker 不可用时回退到旧路径
@@ -545,6 +546,55 @@ const GameRecorder = {
         });
         ParameterOptimizer._onGameEnd(game);
     }
+};
+
+// ======================== 跨局真人风格画像 ========================
+// 单机模式下"对手"是固定策略 AI，但玩家是真人。这里从已结束的对局中提取
+// 真人的公开行为倾向（过牌率/炸弹率/出牌长度/主动领出率），跨局持久化，
+// 供 AI 在后续对局做温和的风格适应。全部来自公开动作，不涉及任何隐藏信息。
+const HumanStyleProfile = {
+    KEY: 'landlord_human_style',
+    _data: null,
+    init() {
+        if (this._data) return this._data;
+        let d = null;
+        try { d = JSON.parse(localStorage.getItem(this.KEY) || 'null'); } catch (e) {}
+        this._data = d && typeof d === 'object'
+            ? d : { games: 0, passRate: 0.3, bombRate: 0.05, avgPlayLen: 1.5, aggression: 0.5 };
+        return this._data;
+    },
+    // 从一局的动作序列更新画像（指数滑动平均，保留最近倾向）
+    update(game) {
+        if (!game || game.mode !== 'single' || !Array.isArray(game.actions)) return;
+        const myIdx = game.myIndex !== undefined ? game.myIndex : 0;
+        const acts = game.actions.filter(a => a && a.p === myIdx);
+        if (!acts.length) return;
+        const plays = acts.filter(a => !a.pass && a.c && a.c.length);
+        const passes = acts.filter(a => a.pass).length;
+        let bombs = 0, lenSum = 0;
+        for (const a of plays) {
+            lenSum += a.c.length;
+            const cnt = {};
+            for (const c of a.c) cnt[c.value] = (cnt[c.value] || 0) + 1;
+            const kinds = Object.values(cnt);
+            if (kinds.includes(4)) bombs++;
+            if (a.c.length === 2 && a.c[0].value === 13 && a.c[1].value === 14) bombs++;
+        }
+        const passRate = passes / acts.length;
+        const bombRate = bombs / Math.max(1, plays.length);
+        const avgPlayLen = lenSum / Math.max(1, plays.length);
+        // aggression：出牌多、过牌少 → 激进
+        const aggression = Math.max(0, Math.min(1, 1 - passRate));
+        const d = this.init();
+        const alpha = 0.25;  // 新局权重
+        d.games = (d.games || 0) + 1;
+        d.passRate = d.passRate * (1 - alpha) + passRate * alpha;
+        d.bombRate = d.bombRate * (1 - alpha) + bombRate * alpha;
+        d.avgPlayLen = d.avgPlayLen * (1 - alpha) + avgPlayLen * alpha;
+        d.aggression = d.aggression * (1 - alpha) + aggression * alpha;
+        try { localStorage.setItem(this.KEY, JSON.stringify(d)); } catch (e) {}
+    },
+    get() { return this.init(); }
 };
 
 // ======================== 4. PARAMETER OPTIMIZER (DISABLED) ========================
@@ -959,7 +1009,7 @@ const CorrectionRules = {
             const highKicker = (
                 (c.actualType === CardType.TRIPLE_WITH_SINGLE || c.actualType === CardType.TRIPLE_WITH_PAIR) &&
                 c.actualFeat && c.actualFeat.kickerValue >= 11 &&
-                (!c.bestFeat || (c.bestFeat.kickerValue || 0) < c.actualFeat.kickerValue)
+                c.optFeat && (c.optFeat.kickerValue || 0) < c.actualFeat.kickerValue
             );
             if (highKicker) specs.push({
                 context: {
@@ -1001,13 +1051,20 @@ const CorrectionRules = {
         let rule = this._rules.find(r => JSON.stringify(r.context) === JSON.stringify(spec.context) && JSON.stringify(r.comparators || {}) === JSON.stringify(spec.comparators || {}));
         if (rule) {
             rule.triggerCount++;
-            rule.confidence = Math.min(0.98, rule.confidence + 0.05);
+            // 按对局去重：同一局里重复触发只算一次样本，避免置信度无样本地爬到 0.98
+            const gameKey = spec.gameId || 0;
+            if (rule.lastGameId !== gameKey) {
+                rule.confidence = Math.min(0.95, rule.confidence + 0.04);
+                rule.lastGameId = gameKey;
+            }
             rule.penalty = Math.round((rule.penalty + spec.penalty) / 2);
             rule.ts = Date.now();
             return;
         }
         if (this._rules.length >= this.MAX_RULES) this._rules.shift();
         this._rules.push({
+            gameId: spec.gameId || 0,
+            lastGameId: spec.gameId || 0,
             context: spec.context,
             comparators: spec.comparators || null,
             penalty: spec.penalty,
