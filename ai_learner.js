@@ -145,7 +145,13 @@ const GameDatabase = {
                     let tx = db.transaction(this.STORE_NAME, 'readwrite');
                     let store = tx.objectStore(this.STORE_NAME);
                     store.add(record);
-                    tx.oncomplete = () => resolve(true);
+                    tx.oncomplete = () => {
+                        resolve(true);
+                        // 滚动裁剪：每局都存会无限增长（每条含 54 张初始手牌+全部动作+reasoning）
+                        this.count().then(n => {
+                            if (n > 200) this.deleteOldest(n - 200).catch(() => {});
+                        }).catch(() => {});
+                    };
                     tx.onerror = () => resolve(false);
                 } catch (e) { resolve(false); }
             });
@@ -1167,7 +1173,8 @@ const GodViewLearner = {
         'playPower','isBomb','isRocket','remainTotal','remainSingle','remainPair',
         'remainTriple','remainBomb','remainMaxStraight','remainBigCards','hasRocket',
         'opponentHandCount','partnerHandCount','outsideBombCount','isCritical','needBeat',
-        'turnsToFinish','sureTricks','controlCount','oppThreat','isPartnerLead'
+        'turnsToFinish','sureTricks','controlCount','oppThreat','isPartnerLead',
+        'turnsDelta','controlRetained','partnerFit','leadOppClose','bombUrgency'
     ],
 
     learn(game) {
@@ -1535,7 +1542,8 @@ const GodViewLearner = {
         remainTriple: 6, remainBomb: 4, remainMaxStraight: 12, remainBigCards: 8, hasRocket: 1,
         isLandlord: 1, isFarmer: 1, opponentHandCount: 20, partnerHandCount: 20, outsideBombCount: 8,
         isCritical: 1, needBeat: 1,
-        turnsToFinish: 6, sureTricks: 6, controlCount: 6, oppThreat: 8, isPartnerLead: 1
+        turnsToFinish: 6, sureTricks: 6, controlCount: 6, oppThreat: 8, isPartnerLead: 1,
+        turnsDelta: 6, controlRetained: 1, partnerFit: 6, leadOppClose: 1, bombUrgency: 1
     },
 
     _effectiveParams() {

@@ -17,6 +17,7 @@ const SYMBOLS = [
     'evaluateHandStrength', 'extractPlayFeatures', 'scorePlay', 'computePassScore',
     'extractHandFeatures', 'decomposeHandDP', 'simulateOpponentResponseV2',
     'heuristicPlayoutWithMode', 'AICore', 'cfg', 'DEFAULT_PARAMS', 'HandBelief', '_fastHandTurns',
+    'handPotential', '_withRefParams', 'scorePlay', 'extractPlayFeatures',
 ];
 const mod = loadAI('ai_core.js', SYMBOLS, makeRng(1));
 
@@ -242,6 +243,45 @@ console.log('== 11. 世界模型 / 概率 / 拆牌 / 组合牌型 回归 ==');
     // 5) 新特征权重为保守非零先验
     check('手数/控制特征有非零先验', mod.DEFAULT_PARAMS.weights.turnsToFinish < 0 &&
         mod.DEFAULT_PARAMS.weights.controlCount > 0 && mod.DEFAULT_PARAMS.weights.oppThreat < 0);
+}
+
+// ---------------------------------------------------------------- 本轮全面优化回归
+console.log('== 12. 统一评估 / 特征 / 参考权重 回归 ==');
+{
+    // 1) 统一参数表存在且四处共享
+    const hpCoeffs = mod.cfg('handPotentialCoeffs');
+    check('handPotentialCoeffs 已定义', !!hpCoeffs && hpCoeffs.bomb > 0);
+    const h = [C(12),C(12,'b'),C(12,'c'),C(12,'d'),C(14,'j')];
+    check('handPotential 有正值', mod.handPotential(h) > 0, 'got ' + mod.handPotential(h));
+    check('evaluateHandStrength 与 handPotential 同涨',
+        mod.evaluateHandStrength(h, null, false, 0) > mod.evaluateHandStrength([C(0)], null, false, 0));
+
+    // 2) 角色分桶有差异化先验
+    const wr = mod.cfg('weightsByRole');
+    check('角色分桶权重非空且差异化', !!wr.landlord && !!wr.farmer &&
+        Object.keys(wr.landlord).length > 0 && Object.keys(wr.farmer).length > 0 &&
+        wr.landlord.needBeat !== wr.farmer.needBeat);
+
+    // 3) 新特征存在且默认非零
+    const w = mod.DEFAULT_PARAMS.weights;
+    check('新特征有权重', ['turnsDelta','controlRetained','partnerFit','leadOppClose','bombUrgency']
+        .every(k => typeof w[k] === 'number'));
+
+    // 4) 冻结参考参数生效且能恢复
+    const st = { players: [[C(9),C(9,'b')], [C(5)], []], landlord: 0, currentPlayer: 0,
+        lastPlay: null, lastPlayerId: -1, passCount: 0, phase: 'playing' };
+    const mem = new mod.MasterMemory();
+    const feat = mod.extractPlayFeatures([C(9),C(9,'b')], [C(9),C(9,'b')], null, 'landlord', mem, st);
+    check('新特征值可计算', typeof feat.turnsDelta === 'number' && typeof feat.controlRetained === 'number');
+    const before = mod.cfg('weights.playPower');
+    mod._withRefParams({ weights: { playPower: 999 } }, () => {
+        check('冻结参考参数覆盖 cfg', mod.cfg('weights.playPower') === 999);
+    });
+    check('冻结参数后恢复正常', mod.cfg('weights.playPower') === before);
+
+    // 5) nodeBudget 已提升
+    check('残局 nodeBudget ≥ 20000', mod.cfg('search.nodeBudget') >= 20000,
+        'got ' + mod.cfg('search.nodeBudget'));
 }
 
 // ---------------------------------------------------------------- 死代码

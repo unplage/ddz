@@ -309,7 +309,8 @@ const GodViewLearner = {
         'playPower','isBomb','isRocket','remainTotal','remainSingle','remainPair',
         'remainTriple','remainBomb','remainMaxStraight','remainBigCards','hasRocket',
         'opponentHandCount','partnerHandCount','outsideBombCount','isCritical','needBeat',
-        'turnsToFinish','sureTricks','controlCount','oppThreat','isPartnerLead'
+        'turnsToFinish','sureTricks','controlCount','oppThreat','isPartnerLead',
+        'turnsDelta','controlRetained','partnerFit','leadOppClose','bombUrgency'
     ],
 
     learn(game) {
@@ -501,11 +502,18 @@ const GodViewLearner = {
     _solveRollout(state, playerId, allPlays) {
         let memory = this._buildMemoryFromState(state);
         let role = playerId === state.landlord ? 'landlord' : 'farmer';
-        let scored = allPlays.map(p => {
+        // 冻结参考权重：标签生成用固定的默认参数，与正在被学习的权重解耦。
+        // 旧实现用当前权重生成 rollout 又反过来更新同一批权重 → 闭环自证，学不出新策略。
+        const refParams = (typeof DEFAULT_PARAMS !== 'undefined') ? DEFAULT_PARAMS : null;
+        const withRef = (fn) => {
+            if (typeof _withRefParams === 'function' && refParams) return _withRefParams(refParams, fn);
+            return fn();
+        };
+        let scored = withRef(() => allPlays.map(p => {
             if (!p || p.length === 0) return { play: [], score: computePassScore(role, state) };
             let feat = extractPlayFeatures(p, state.players[playerId], state.lastPlay, role, memory, state);
             return { play: p, score: scorePlay(feat, role, memory, state, state.players[playerId]) };
-        });
+        }));
         scored.sort((a, b) => b.score - a.score);
         // 不再只看启发式 top-8：保留全部候选中的高分项 + 牌型多样性 + 少量探索项，
         // 让复盘能发现启发式之外的更优动作。
@@ -673,7 +681,8 @@ const GodViewLearner = {
         remainTriple: 6, remainBomb: 4, remainMaxStraight: 12, remainBigCards: 8, hasRocket: 1,
         isLandlord: 1, isFarmer: 1, opponentHandCount: 20, partnerHandCount: 20, outsideBombCount: 8,
         isCritical: 1, needBeat: 1,
-        turnsToFinish: 6, sureTricks: 6, controlCount: 6, oppThreat: 8, isPartnerLead: 1
+        turnsToFinish: 6, sureTricks: 6, controlCount: 6, oppThreat: 8, isPartnerLead: 1,
+        turnsDelta: 6, controlRetained: 1, partnerFit: 6, leadOppClose: 1, bombUrgency: 1
     },
 
     _effectiveParams() {

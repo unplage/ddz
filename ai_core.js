@@ -10,6 +10,18 @@ function invalidateParamCache() {
     try { _CFG_CACHE.clear(); } catch (e) {}
 }
 function cfg(path) {
+    // 冻结参考参数：反事实标签生成时设置，使 scorePlay 用固定的上一代权重，
+    // 与正在被学习的权重解耦（避免"用被学习权重给自己打标签"的闭环自证）。
+    // 只在 _withRefParams 保护下生效，且跳过缓存以防污染正常决策。
+    if (typeof globalThis !== 'undefined' && globalThis.__aiRefParams) {
+        const rp = globalThis.__aiRefParams;
+        let val = rp;
+        for (const part of path.split('.')) {
+            if (val && typeof val === 'object' && part in val) val = val[part];
+            else { val = undefined; break; }
+        }
+        if (val !== undefined) return val;
+    }
     const cached = _CFG_CACHE.get(path);
     if (cached !== undefined) return cached.value;
     let out;
@@ -250,16 +262,31 @@ const DEFAULT_PARAMS = {
         opponentHandCount: -1, partnerHandCount: 3, outsideBombCount: -5,
         isCritical: 40, needBeat: 25,
         // 新特征：保守先验（原本全为 0 → 出厂 AI 完全不看手数/控制/威胁）
-        turnsToFinish: -4, sureTricks: 3, controlCount: 2, oppThreat: -1.5, isPartnerLead: 6
+        turnsToFinish: -4, sureTricks: 3, controlCount: 2, oppThreat: -1.5, isPartnerLead: 6,
+        turnsDelta: 5, controlRetained: 4, partnerFit: 1, leadOppClose: 3, bombUrgency: 12
     },
-    // 按角色分桶的权重（缺省回落到上面的全局 weights）
-    weightsByRole: { landlord: {}, farmer: {} },
+    // 按角色分桶权重：地主要压制/速胜，农民要配合/抢跑，目标不同不能共用一套。
+    // 这里只填「方向性差异」的小先验，其余键仍回落到全局 weights。
+    weightsByRole: {
+        landlord: { remainSingle: -2.5, needBeat: 8, controlCount: 1.5, oppThreat: -0.8 },
+        farmer:   { partnerHandCount: 5, isPartnerLead: 10, oppThreat: -2.2, turnsToFinish: -1.5 }
+    },
     evalCoeffs: {
         bomb: 50, triple: 10, pair: 3,
         bothJokers: 50, bigJokerOnly: 18, smallJokerOnly: 10,
         ace: 9, king: 7, queen: 5, straightLenFactor: 4,
         singlePenalty: -3, pairExtra: 2, tripleExtra: 3,
         bombOutsideBonus: 8, position2Bonus: 8, landlordBonus: 20
+    },
+    // 统一手牌潜力参数表：callDecision / 世界模型 / 残局估值 / 特征抽取
+    // 四处此前各用一套公式，学习只调 weights → 其余三套永不进化。
+    // 默认值与旧 evalCoeffs 结构分完全等价（数值不变），但集中到一处可学习。
+    handPotentialCoeffs: {
+        bomb: 50, triple: 10, pair: 3,
+        bothJokers: 50, bigJokerOnly: 18, smallJokerOnly: 10,
+        ace: 9, king: 7, queen: 5, two: 11, straightLenFactor: 4,
+        singlePenalty: -3, pairExtra: 2, tripleExtra: 3,
+        turnsPenalty: 3.5, bigCardBonus: 1.2
     },
     callThresholds: {
         easy: { one: 28 },
@@ -402,7 +429,10 @@ const DEFAULT_PARAMS = {
         // 以下三项只在确定性模式（离线评测）下生效。
         // 默认值刻意取小：评测要跑几十上百局，预算太大单局就要好几秒。
         // 注意：nodeBudget 是「本次残局求解的总节点数」，不是每候选的。
-        nodeBudget: 1200,
+        // nodeBudget 是「本次残局求解的总节点数」。
+        // 旧值 1200 分给 8候选×6世界 → 每单元 25（下限 40）节点，残局 minimax
+        // 实际退化成静态评估。20000 让每个单元有 ~400 节点，能搜到 2~3 层。
+        nodeBudget: 20000,
         mctsIterations: 40,
         mctsWorlds: 1
     },
@@ -810,18 +840,8 @@ class HandBelief {
     }
     // 手牌牌力（用于与叫分档位对照）：只依赖点数结构，不看花色
     _handStrengthScore(hand) {
-        if (!hand || !hand.length) return 0;
-        let score = 0;
-        const cnt = new Array(15).fill(0);
-        for (const c of hand) cnt[c.value]++;
-        for (let v = 0; v <= 14; v++) {
-            if (cnt[v] === 4) score += 30;
-            else if (cnt[v] === 3) score += 12;
-            else if (cnt[v] === 2) score += 4;
-            else score -= 2;
-            if (v >= 12) score += cnt[v] * 4;
-        }
-        return score;
+        // 与 evaluateHandStrength 共用同一张可学习参数表（旧实现是独立的硬编码公式）
+        return handPotential(hand) * 0.6;
     }
     // 给一个采样世界打分：公开历史越吻合分越高（纯公开信息推断）
     _worldLikelihood(worldPlayers) {
@@ -1046,6 +1066,14 @@ class HandBelief {
     }
 }
 
+// 在冻结参考参数下执行 fn（反事实标签生成用）
+function _withRefParams(refParams, fn) {
+    const prev = globalThis.__aiRefParams;
+    globalThis.__aiRefParams = refParams || null;
+    try { return fn(); }
+    finally { globalThis.__aiRefParams = prev; }
+}
+
 // ======================== 手牌分析 ========================
 // 手牌特征只取决于点数多重集 → 用点数计数签名做缓存键。
 // 这个函数在搜索里被调用极多次（每个候选 × 每个 rollout 步），缓存收益很大。
@@ -1093,28 +1121,42 @@ function _extractHandFeaturesUncached(hand) {
     return features;
 }
 
+// ======================== 统一手牌潜力 ========================
+// 四套旧公式（evaluateHandStrength / HandBelief._handStrengthScore /
+// _staticEvalHands / extractHandFeatures）此前各自为政，学习闭环只调 weights，
+// 其余永不进化。这里把「结构分」集中成一个函数 + 一张参数表；
+// 各调用方只保留自己的上下文修正（记牌器/角色/值域缩放）。
+const _HAND_POTENTIAL_CACHE = new Map();
+const _HAND_POTENTIAL_CACHE_MAX = 2000;
+function handPotential(hand) {
+    if (!hand || !hand.length) return 0;
+    const sig = _cardTypeSignature(hand);
+    const hit = _HAND_POTENTIAL_CACHE.get(sig);
+    if (hit !== undefined) return hit;
+    const c = cfg('handPotentialCoeffs');
+    const f = extractHandFeatures(hand);
+    let score = 0;
+    score += f.bomb * c.bomb + f.triple * c.triple + f.pair * c.pair;
+    if (f.hasRocket) score += c.bothJokers;
+    else {
+        if (hand.some(x => x.value === 14)) score += c.bigJokerOnly;
+        if (hand.some(x => x.value === 13)) score += c.smallJokerOnly;
+    }
+    score += hand.filter(x => x.value === 12).length * c.two;
+    score += hand.filter(x => x.value === 11).length * c.ace;
+    score += hand.filter(x => x.value === 10).length * c.king;
+    score += hand.filter(x => x.value === 9).length * c.queen;
+    score += f.maxStraightLen * c.straightLenFactor;
+    score += f.single * c.singlePenalty + f.pair * c.pairExtra + f.triple * c.tripleExtra;
+    if (_HAND_POTENTIAL_CACHE.size >= _HAND_POTENTIAL_CACHE_MAX) _HAND_POTENTIAL_CACHE.clear();
+    _HAND_POTENTIAL_CACHE.set(sig, score);
+    return score;
+}
+
 function evaluateHandStrength(hand, memory, isLandlord, callPosition) {
     let ec = cfg('evalCoeffs');
-    let score = 0, values = hand.map(c=>c.value), cnt = countValues(values);
-    for (let v in cnt) {
-        if (cnt[v] === 4) score += ec.bomb;
-        else if (cnt[v] === 3) score += ec.triple;
-        else if (cnt[v] === 2) score += ec.pair;
-    }
-    if (hand.some(c=>c.value===14) && hand.some(c=>c.value===13)) score += ec.bothJokers;
-    else { if (hand.some(c=>c.value===14)) score += ec.bigJokerOnly; if (hand.some(c=>c.value===13)) score += ec.smallJokerOnly; }
-    score += (cnt[12]||0)*ec.ace + (cnt[11]||0)*ec.king + (cnt[10]||0)*ec.queen;
-    let sortedUnique = [...new Set(values.filter(v=>v<12))].sort((a,b)=>a-b);
-    let maxLen = 1, cur = 1;
-    for (let i=1;i<sortedUnique.length;i++) { if (sortedUnique[i] === sortedUnique[i-1]+1) cur++; else { maxLen = Math.max(maxLen, cur); cur=1; } }
-    maxLen = Math.max(maxLen, cur);
-    score += maxLen * ec.straightLenFactor;
-    let singleCount = Object.values(cnt).filter(c => c === 1).length;
-    score += singleCount * ec.singlePenalty;
-    let pairCount = Object.values(cnt).filter(c => c === 2).length;
-    score += pairCount * ec.pairExtra;
-    let tripleCount = Object.values(cnt).filter(c => c === 3).length;
-    score += tripleCount * ec.tripleExtra;
+    // 结构分统一走 handPotential（可学习参数表）；这里只保留上下文修正
+    let score = handPotential(hand);
     if (memory && memory.isBombPossible()) score += ec.bombOutsideBonus;
     if (callPosition === 2) score += ec.position2Bonus;
     if (isLandlord) score += ec.landlordBonus;
@@ -1208,7 +1250,20 @@ function extractPlayFeatures(play, hand, lastPlay, role, memory, state) {
         lastPlayPower: lastPlay ? typePowerOf(lastPlay.type, lastPlay.value, lastPlay.length) : 0,
         lastPlayLength: lastPlay ? (lastPlay.length || 0) : 0,
         playType: playType.type, kickerValue, mainValue: playType.value,
-        turnsToFinish, sureTricks, controlCount, oppThreat, isPartnerLead: isPartnerLead ? 1 : 0
+        turnsToFinish, sureTricks, controlCount, oppThreat, isPartnerLead: isPartnerLead ? 1 : 0,
+        // ===== 时机 / 牌权 / 配合 / 交叉特征 =====
+        // turnsDelta：出这手让"还差几手"下降多少（>0 = 加速出完）
+        turnsDelta: Math.max(0, _fastHandTurns(hand) - turnsToFinish),
+        // controlRetained：这手出完后我方是否大概率仍握有下一轮牌权
+        controlRetained: (playPower > maxOutside || isBomb || playType.type === CardType.ROCKET) ? 1 : 0,
+        // partnerFit：队友残牌结构与本手的互补（只有张数可用时的廉价代理）
+        partnerFit: (role === 'farmer' && partnerId !== -1)
+            ? Math.max(0, 6 - Math.abs((state.players[partnerId]?.length || 0) - play.length)) : 0,
+        // 交叉：领出且对手快走完（该不该冲）/ 炸弹且对手快走完（该不该引爆）
+        leadOppClose: (!needBeat && [0,1,2].some(i => i !== state.currentPlayer &&
+            (state.players[i]?.length || 20) <= 2)) ? 1 : 0,
+        bombUrgency: (isBomb || playType.type === CardType.ROCKET) &&
+            [0,1,2].some(i => (state.players[i]?.length || 20) <= 2) ? 1 : 0
     };
 }
 
@@ -1799,10 +1854,17 @@ function simulateOpponentResponseV2(play, hand, state, role, memory, depth = 1) 
         if (!plays || plays.length === 0) return null;
         let n = depth >= 2 ? 15 : 8;
         if (plays.length <= n) return plays;
-        let step = Math.floor(plays.length / n);
-        let result = [];
-        for (let i = 0; i < n; i++) result.push(plays[Math.min(i * step, plays.length - 1)]);
-        return result;
+        // 旧实现等距抽样（按生成器顺序，近乎随机出牌）→ 高估己方收益。
+        // 改为按 scorePlay 的 softmax 抽样，让对手优先出"合理"的牌。
+        const oppRole = (oppHand === s.players[s.landlord]) ? 'landlord' : 'farmer';
+        let scored = plays.map(p => {
+            let sc = 0;
+            try { sc = scorePlay(extractPlayFeatures(p, oppHand, targetPlay, oppRole, memory, s), oppRole, memory, s, oppHand); }
+            catch (e) { sc = 0; }
+            return { p, sc };
+        });
+        scored.sort((a, b) => b.sc - a.sc);
+        return scored.slice(0, n * 2).map(e => e.p);   // 保留强度靠前的一批
     }
     function evalState(s, pid, myRoleId, remainingDepth) {
         const term = terminalScore(s);
@@ -2245,9 +2307,10 @@ function _staticEvalHands(hands, mySide) {
         const sign = mySide.includes(i) ? 1 : -1;
         const p = hands[i] || [];
         if (!p.length) continue;
+        // 残局估值也消费统一参数表：结构分（缩放进 ±60 值域）+ 手数主导项
         const turns = _fastHandTurns(p);
-        let v = 8 - turns * 3.5 - p.length * 0.5;
-        for (let j = 0; j < p.length; j++) if (p[j].value >= 12) v += 1.2;
+        const hp = handPotential(p) * 0.06;
+        let v = hp + 8 - turns * (cfg('handPotentialCoeffs').turnsPenalty || 3.5) - p.length * 0.5;
         score += sign * v;
     }
     return Math.max(-60, Math.min(60, score));
@@ -2571,7 +2634,8 @@ function solveEndgameBlind(state, playerId, belief, opts) {
         const mean = e.sum / e.n;
         const variance = Math.max(0, e.sq / e.n - mean * mean);
         const coverage = evaluatedWorlds > 0 ? e.n / evaluatedWorlds : 0;
-        const score = mean - lambda * Math.sqrt(variance) - 0.2 * (1 - coverage);
+        // coverage 惩罚按终局值域（±100）缩放：旧 0.2 相对收益完全可忽略
+        const score = mean - lambda * Math.sqrt(variance) - 3 * (1 - coverage);
         if (score > bestScore) { bestScore = score; bestPlay = e.play; found = true; }
     }
     if (found) return bestPlay;
@@ -3191,6 +3255,13 @@ function _ismctsOpponentMove(st, cp) {
         const t = playTypeOf(p);
         if (!t) continue;
         let sc = p.length * 4 - typePowerOf(t.type, t.value, t.length) * 0.25;
+        // 与 rollout 策略同源：用 scorePlay 精排（缓存后成本可控），
+        // 旧实现的 90/10 贪心+次优比 PIMC 里真实搜索弱得多。
+        try {
+            const role = cp === st.landlord ? 'landlord' : 'farmer';
+            const mem = null;
+            sc = scorePlay(extractPlayFeatures(p, hand, st.lastPlay, role, mem, st), role, mem, st, hand);
+        } catch (e) {}
         if (t.type === CardType.STRAIGHT || t.type === CardType.STRAIGHT_PAIR || t.type === CardType.PLANE) sc += 8;
         if (t.type === CardType.BOMB || t.type === CardType.ROCKET) sc -= 60;
         if (!needBeat) {
@@ -3290,7 +3361,10 @@ function mctsSearchISMCTS(state, playerId, belief, opts) {
                 }
             } else {
                 const move = _ismctsOpponentMove(st, cp);
-                const key = keyOfPlay(move);
+                // 牌型抽象键：不同采样世界里同语义的对手动作应合并到同一信息集节点，
+                // 用具体牌 id 作键会让跨世界节点永远不重合（ISMCTS 失效的根因之一）。
+                const mt = move && move.length ? getCardType(move) : null;
+                const key = mt ? (CardType[mt.type] || mt.type) + ':' + mt.value + ':' + (mt.length || 0) : 'pass';
                 child = node.children.get(key);
                 if (!child) {
                     child = new ISMCTSNode(move || [], (cp + 1) % 3, node, key);
@@ -3565,7 +3639,10 @@ class AICore {
                 // 所以 EV = bid*(2*winRate − 1)，胜率 > 0.5 就该叫。
                 // 旧公式 bid*(3*winRate − 2) 错误地假设"输要赔两倍"，
                 // 阈值被抬到 2/3 → 连双王四个A的牌都不叫（hard/legendary 从不叫地主）。
-                let ev = bid * (2 * winRate - 1);
+                // 风险建模：叫得越高，被他人抢地主/加倍后输的代价越大。
+                // 用 bid 的幂次轻微惩罚高叫分（不是简单线性），并要求胜率高于 0.5 一定余量。
+                const riskPremium = 0.02 * (bid - 1) * (bid - 1);
+                let ev = bid * (2 * (winRate - riskPremium) - 1);
                 if (ev > bestEV) { bestEV = ev; bestBid = bid; }
             }
             return bestBid;
@@ -3906,6 +3983,9 @@ class AICore {
         const plan = decomposeHandDP(hand);
         const planKeys = new Set();
         if (plan && plan.plays) for (const pl of plan.plays) planKeys.add(pl.map(c=>c.id).sort().join(','));
+        // 拆牌算出的首手是最优出牌序列的第一步：直接给大额奖励，而不是只当集合用
+        const planFirst = (plan && plan.plays && plan.plays[0])
+            ? plan.plays[0].map(c => c.id).sort().join(',') : null;
         // 对手手里可能还留着的最大牌（记牌器口径）：用它判断"这手牌能不能守住"
         let maxOutside = 0;
         try { maxOutside = this.memory && this.memory.getMaxOutside ? this.memory.getMaxOutside(hand) : 0; } catch (e) { maxOutside = 0; }
@@ -3913,13 +3993,19 @@ class AICore {
             const t = getCardType(p);
             if (!t) return -1e9;
             const power = getPlayPower(p);
-            let sc = p.length * 12 - power * 0.5;
+            const rest = hand.filter(c => !p.some(x => x.id === c.id));
+            const turnsBefore = _fastHandTurns(hand);
+            const turnsAfter = rest.length ? _fastHandTurns(rest) : 0;
+            // 手数下降量主导：出这手让"还差几手"减少越多越好（与残局/rollout 同口径）
+            let sc = (turnsBefore - turnsAfter) * 18 + p.length * 6 - power * 0.35;
             if (t.type === CardType.BOMB || t.type === CardType.ROCKET) sc -= 420;
             if (t.type === CardType.STRAIGHT || t.type === CardType.STRAIGHT_PAIR ||
                 t.type === CardType.PLANE || t.type === CardType.PLANE_WITH_SINGLE || t.type === CardType.PLANE_WITH_PAIR) sc += 8;
             if (t.type === CardType.TRIPLE_WITH_SINGLE || t.type === CardType.TRIPLE_WITH_PAIR) sc += 4;
             if (p.length === handLen) sc += 400;
-            if (planKeys.has(p.map(c=>c.id).sort().join(','))) sc += 14;
+            const key = p.map(c=>c.id).sort().join(',');
+            if (key === planFirst) sc += 40;             // 拆牌首手：最优先
+            else if (planKeys.has(key)) sc += 14;        // 拆牌后续步骤
             // 控制权奖励：这手牌对手压不住 → 下一轮还是我方领出（斗地主的硬通货）
             if (power > maxOutside && t.type !== CardType.BOMB && t.type !== CardType.ROCKET) sc += 26;
             return sc;
