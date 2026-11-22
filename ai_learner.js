@@ -1160,7 +1160,8 @@ const GodViewLearner = {
     _WEIGHT_KEYS: [
         'playPower','isBomb','isRocket','remainTotal','remainSingle','remainPair',
         'remainTriple','remainBomb','remainMaxStraight','remainBigCards','hasRocket',
-        'opponentHandCount','partnerHandCount','outsideBombCount','isCritical','needBeat'
+        'opponentHandCount','partnerHandCount','outsideBombCount','isCritical','needBeat',
+        'turnsToFinish','sureTricks','controlCount','oppThreat','isPartnerLead'
     ],
 
     learn(game) {
@@ -1527,7 +1528,8 @@ const GodViewLearner = {
         playPower: 1000, isBomb: 1, isRocket: 1, remainTotal: 20, remainSingle: 8, remainPair: 8,
         remainTriple: 6, remainBomb: 4, remainMaxStraight: 12, remainBigCards: 8, hasRocket: 1,
         isLandlord: 1, isFarmer: 1, opponentHandCount: 20, partnerHandCount: 20, outsideBombCount: 8,
-        isCritical: 1, needBeat: 1
+        isCritical: 1, needBeat: 1,
+        turnsToFinish: 6, sureTricks: 6, controlCount: 6, oppThreat: 8, isPartnerLead: 1
     },
 
     _effectiveParams() {

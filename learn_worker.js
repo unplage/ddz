@@ -304,7 +304,8 @@ const GodViewLearner = {
     _WEIGHT_KEYS: [
         'playPower','isBomb','isRocket','remainTotal','remainSingle','remainPair',
         'remainTriple','remainBomb','remainMaxStraight','remainBigCards','hasRocket',
-        'opponentHandCount','partnerHandCount','outsideBombCount','isCritical','needBeat'
+        'opponentHandCount','partnerHandCount','outsideBombCount','isCritical','needBeat',
+        'turnsToFinish','sureTricks','controlCount','oppThreat','isPartnerLead'
     ],
 
     learn(game) {
@@ -661,7 +662,8 @@ const GodViewLearner = {
         playPower: 20, isBomb: 1, isRocket: 1, remainTotal: 20, remainSingle: 8, remainPair: 8,
         remainTriple: 6, remainBomb: 4, remainMaxStraight: 12, remainBigCards: 8, hasRocket: 1,
         isLandlord: 1, isFarmer: 1, opponentHandCount: 20, partnerHandCount: 20, outsideBombCount: 8,
-        isCritical: 1, needBeat: 1
+        isCritical: 1, needBeat: 1,
+        turnsToFinish: 6, sureTricks: 6, controlCount: 6, oppThreat: 8, isPartnerLead: 1
     },
 
     _effectiveParams() {
@@ -704,6 +706,8 @@ const GodViewLearner = {
             if (corr.diff < 0.25) continue;
 
             // --- A: 线性权重更新（特征差按量纲归一化 → 取均值 → 乘学习率）---
+            // 地主与农民目标不同 → 权重按角色分桶统计（weightsByRole.<role>.<key>）
+            const roleKey = corr.role === 'landlord' ? 'landlord' : 'farmer';
             if (corr.optFeat && corr.actualFeat) {
                 for (let key of this._WEIGHT_KEYS) {
                     let vOpt = corr.optFeat[key];
@@ -714,8 +718,12 @@ const GodViewLearner = {
                     let scale = this._FEATURE_SCALE[key] || 10;
                     const norm = delta / scale;              // 归一化到约 [-1,1]
                     if (Math.abs(norm) < 0.02) continue;
-                    if (!acc[key]) acc[key] = { sum: 0, n: 0 };
-                    acc[key].sum += norm; acc[key].n++;
+                    // 全局桶（所有样本）+ 角色桶（只含该角色样本）
+                    for (const bucket of ['*', roleKey]) {
+                        const ak = bucket + '.' + key;
+                        if (!acc[ak]) acc[ak] = { sum: 0, n: 0 };
+                        acc[ak].sum += norm; acc[ak].n++;
+                    }
                 }
             }
 
@@ -738,22 +746,27 @@ const GodViewLearner = {
         }
 
         // 构建候选参数（权重按默认值附近的有界窗口裁剪，防止漂移失控）
-        for (const key in acc) {
-            const mean = acc[key].sum / Math.max(1, acc[key].n);
-            weightDeltas[key] = mean * lr;
+        for (const ak in acc) {
+            const mean = acc[ak].sum / Math.max(1, acc[ak].n);
+            weightDeltas[ak] = mean * lr;
         }
 
         let candidate = this._effectiveParams();
         let changed = 0;
-        for (let key in weightDeltas) {
-            let path = 'weights.' + key;
+        for (const ak in weightDeltas) {
+            // ak 形如 "*.playPower"（全局桶）/ "landlord.playPower"（角色桶）
+            const dot = ak.indexOf('.');
+            const role = ak.slice(0, dot);
+            const key = ak.slice(dot + 1);
+            const isGlobal = role === '*';
+            const path = isGlobal ? ('weights.' + key) : ('weightsByRole.' + role + '.' + key);
             let cur = paramGet(path);
-            if (typeof cur !== 'number') continue;
+            if (typeof cur !== 'number') cur = 0;
             let def = this._defaultWeight(key);
             let range = Math.max(4, Math.abs(def) * 3.0);
-            // 单批次步长上限：避免一次学崩（上限为默认权重的 15%）
-            let maxStep = Math.max(0.05, Math.abs(def) * 0.15);
-            let step = Math.max(-maxStep, Math.min(maxStep, weightDeltas[key]));
+            // 单批次步长上限：避免一次学崩（上限为默认权重的 15%，新特征用绝对上限）
+            let maxStep = def === 0 ? 0.4 : Math.max(0.05, Math.abs(def) * 0.15);
+            let step = Math.max(-maxStep, Math.min(maxStep, weightDeltas[ak]));
             let nv = Math.max(def - range, Math.min(def + range, cur + step));
             if (Math.abs(nv - cur) < 0.002) continue;
             this._setNested(candidate, path, Math.round(nv * 10000) / 10000);

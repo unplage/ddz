@@ -77,9 +77,11 @@ function getCombinations(arr, k) {
 }
 // 牌型只取决于「点数多重集」（王炸额外取决于 joker id），
 // 因此缓存键用点数计数签名 —— 比按 id 排序便宜得多。
-// 命中时返回副本：调用方会改 .cards（例如 getAllValidPlays 里回填 canonical 牌），
-// 直接返回缓存对象会污染缓存。
-// 直接返回缓存对象会污染缓存。
+//
+// 重要：缓存**只保存牌型元数据**（type/value/length），绝不保存牌对象。
+// 旧实现把首次调用那手牌的牌对象存进缓存（键不含花色），命中时返回"别手的牌"，
+// 导致 GameState.lastPlay.cards 指向另一手牌 → UI 显示错误花色 / 动作日志错乱。
+// 需要牌对象时用 getCardTypeWithCards()，它总是返回当前入参的牌。
 const _CARD_TYPE_CACHE = new Map();
 const _CARD_TYPE_CACHE_MAX = 6000;
 function _cardTypeSignature(cards) {
@@ -94,28 +96,35 @@ function _cardTypeSignature(cards) {
     // Array.join 在 V8 里比逐段字符串拼接快得多
     return cards.length + '|' + cnt.join(',') + (j1 ? 'J1' : '') + (j2 ? 'J2' : '');
 }
-function _cacheCardType(sig, type, value, length, cards) {
+function _cacheCardType(sig, type, value, length) {
     if (_CARD_TYPE_CACHE.size >= _CARD_TYPE_CACHE_MAX) _CARD_TYPE_CACHE.clear();
-    _CARD_TYPE_CACHE.set(sig, { type, value, length, cards });
-    return { type, value, length, cards };
+    _CARD_TYPE_CACHE.set(sig, { type, value, length });
+    return { type, value, length };
+}
+// 返回牌型 + 当前这手牌（牌对象永远来自入参，不会串味）
+function getCardTypeWithCards(cards) {
+    const t = getCardType(cards);
+    if (!t) return null;
+    t.cards = cards.slice();
+    return t;
 }
 function getCardType(cards) {
     if (!cards || cards.length === 0) return null;
     const sig = _cardTypeSignature(cards);
     const hit = _CARD_TYPE_CACHE.get(sig);
     if (hit) {
-        return { type: hit.type, value: hit.value, length: hit.length, cards: hit.cards ? [...hit.cards] : undefined };
+        return { type: hit.type, value: hit.value, length: hit.length };
     }
     const sorted = [...cards].sort((a,b)=>a.value-b.value);
     const values = sorted.map(c=>c.value);
     const uniq = [...new Set(values)];
-    if (cards.length === 2 && cards.some(c=>c.id==='joker1') && cards.some(c=>c.id==='joker2')) return _cacheCardType(sig, CardType.ROCKET, 100, undefined, sorted);
-    if (cards.length === 1) return _cacheCardType(sig, CardType.SINGLE, values[0], undefined, sorted);
-    if (cards.length === 2 && uniq.length === 1) return _cacheCardType(sig, CardType.PAIR, values[0], undefined, sorted);
-    if (cards.length === 3 && uniq.length === 1) return _cacheCardType(sig, CardType.TRIPLE, values[0], undefined, sorted);
-    if (cards.length === 4 && uniq.length === 1) return _cacheCardType(sig, CardType.BOMB, values[0]+50, undefined, sorted);
-    if (cards.length === 4 && uniq.length === 2) { let cnt = countValues(values); if (Object.values(cnt).includes(3)) return _cacheCardType(sig, CardType.TRIPLE_WITH_SINGLE, parseInt(Object.keys(cnt).find(k=>cnt[k]===3)), undefined, sorted); }
-    if (cards.length === 5 && uniq.length === 2) { let cnt = countValues(values); if (Object.values(cnt).includes(3) && Object.values(cnt).includes(2)) return _cacheCardType(sig, CardType.TRIPLE_WITH_PAIR, parseInt(Object.keys(cnt).find(k=>cnt[k]===3)), undefined, sorted); }
+    if (cards.length === 2 && cards.some(c=>c.id==='joker1') && cards.some(c=>c.id==='joker2')) return _cacheCardType(sig, CardType.ROCKET, 100, undefined);
+    if (cards.length === 1) return _cacheCardType(sig, CardType.SINGLE, values[0], undefined);
+    if (cards.length === 2 && uniq.length === 1) return _cacheCardType(sig, CardType.PAIR, values[0], undefined);
+    if (cards.length === 3 && uniq.length === 1) return _cacheCardType(sig, CardType.TRIPLE, values[0], undefined);
+    if (cards.length === 4 && uniq.length === 1) return _cacheCardType(sig, CardType.BOMB, values[0]+50, undefined);
+    if (cards.length === 4 && uniq.length === 2) { let cnt = countValues(values); if (Object.values(cnt).includes(3)) return _cacheCardType(sig, CardType.TRIPLE_WITH_SINGLE, parseInt(Object.keys(cnt).find(k=>cnt[k]===3)), undefined); }
+    if (cards.length === 5 && uniq.length === 2) { let cnt = countValues(values); if (Object.values(cnt).includes(3) && Object.values(cnt).includes(2)) return _cacheCardType(sig, CardType.TRIPLE_WITH_PAIR, parseInt(Object.keys(cnt).find(k=>cnt[k]===3)), undefined); }
     if (cards.length === 6) {
         let cnt = countValues(values);
         let four = Object.keys(cnt).find(k=>cnt[k]===4);
@@ -124,22 +133,22 @@ function getCardType(cards) {
             const wingKeys = Object.keys(cnt).filter(k=>parseInt(k)!==fv);
             const wingCards = wingKeys.reduce((sum,k)=>sum+cnt[k],0);
             if (wingCards === 2 && wingKeys.every(k=>cnt[k]<=2))
-                return _cacheCardType(sig, CardType.FOUR_WITH_TWO_SINGLE, fv, undefined, sorted);
+                return _cacheCardType(sig, CardType.FOUR_WITH_TWO_SINGLE, fv, undefined);
         }
     }
-    if (cards.length === 8) { let cnt = countValues(values); let four = Object.keys(cnt).find(k=>cnt[k]===4); if (four && Object.values(cnt).filter(v=>v===2).length === 2) return _cacheCardType(sig, CardType.FOUR_WITH_TWO_PAIR, parseInt(four), undefined, sorted); }
-    if (cards.length >= 5 && uniq.length === cards.length && isStraight(values) && values[cards.length-1] <= 11 && !values.includes(12)) return _cacheCardType(sig, CardType.STRAIGHT, values[0], cards.length, sorted);
+    if (cards.length === 8) { let cnt = countValues(values); let four = Object.keys(cnt).find(k=>cnt[k]===4); if (four && Object.values(cnt).filter(v=>v===2).length === 2) return _cacheCardType(sig, CardType.FOUR_WITH_TWO_PAIR, parseInt(four), undefined); }
+    if (cards.length >= 5 && uniq.length === cards.length && isStraight(values) && values[cards.length-1] <= 11 && !values.includes(12)) return _cacheCardType(sig, CardType.STRAIGHT, values[0], cards.length);
     if (cards.length >= 6 && cards.length % 2 === 0) {
         let cnt = countValues(values);
         let pairs = Object.keys(cnt).filter(k=>cnt[k]===2).map(Number).sort((a,b)=>a-b);
-        if (pairs.length === cards.length/2 && isStraight(pairs) && pairs[pairs.length-1] <= 11) return _cacheCardType(sig, CardType.STRAIGHT_PAIR, pairs[0], pairs.length, sorted);
+        if (pairs.length === cards.length/2 && isStraight(pairs) && pairs[pairs.length-1] <= 11) return _cacheCardType(sig, CardType.STRAIGHT_PAIR, pairs[0], pairs.length);
     }
     if (cards.length >= 6 && cards.length % 3 === 0) {
         let cnt = countValues(values);
         let tripVals = Object.keys(cnt).filter(k=>cnt[k]===3).map(Number).sort((a,b)=>a-b);
         let groupLen = cards.length / 3;
         if (tripVals.length === groupLen && groupLen >= 2 && isStraight(tripVals) && tripVals[groupLen-1] <= 11)
-            return _cacheCardType(sig, CardType.PLANE, tripVals[0], groupLen, sorted);
+            return _cacheCardType(sig, CardType.PLANE, tripVals[0], groupLen);
     }
     if (cards.length >= 8 && cards.length % 4 === 0) {
         let cnt = countValues(values);
@@ -153,7 +162,7 @@ function getCardType(cards) {
             let wingCards = wingKeys.reduce((sum,k)=>sum+cnt[k],0);
             if (wingCards !== groupLen) continue;
             if (wingKeys.some(k=>cnt[k]>2)) continue;
-            return _cacheCardType(sig, CardType.PLANE_WITH_SINGLE, seq[0], groupLen, sorted);
+            return _cacheCardType(sig, CardType.PLANE_WITH_SINGLE, seq[0], groupLen);
         }
     }
     if (cards.length >= 10 && cards.length % 5 === 0) {
@@ -166,7 +175,7 @@ function getCardType(cards) {
             let used = new Set(seq);
             let remain = Object.keys(cnt).filter(k=>!used.has(parseInt(k)) && cnt[k]===2);
             if (remain.length === groupLen)
-                return _cacheCardType(sig, CardType.PLANE_WITH_PAIR, seq[0], groupLen, sorted);
+                return _cacheCardType(sig, CardType.PLANE_WITH_PAIR, seq[0], groupLen);
         }
     }
     return null;
@@ -239,8 +248,12 @@ const DEFAULT_PARAMS = {
         remainTriple: -4, remainBomb: 15, remainMaxStraight: 3,
         remainBigCards: 3, hasRocket: 10, isLandlord: 5, isFarmer: 0,
         opponentHandCount: -1, partnerHandCount: 3, outsideBombCount: -5,
-        isCritical: 40, needBeat: 25
+        isCritical: 40, needBeat: 25,
+        // 新特征（默认 0 = 中性，由学习闭环自行学出）
+        turnsToFinish: 0, sureTricks: 0, controlCount: 0, oppThreat: 0, isPartnerLead: 0
     },
+    // 按角色分桶的权重（缺省回落到上面的全局 weights）
+    weightsByRole: { landlord: {}, farmer: {} },
     evalCoeffs: {
         bomb: 50, triple: 10, pair: 3,
         bothJokers: 50, bigJokerOnly: 18, smallJokerOnly: 10,
@@ -283,6 +296,10 @@ const DEFAULT_PARAMS = {
         mctsRootPriors: { easy: 0, medium: 0, hard: 1, grandmaster: 1, legendary: 1 },
         // 信念采样是否按「手牌形状」分配（1 = 结构化，更接近真实牌局；0 = 均匀随机）
         structuredBelief: 1,
+        // MCTS 模式：'pimc' = 每世界各搜一棵树再聚合；'ismcts' = 信息集共享树（再确定性化）
+        mctsMode: 'pimc',
+        // 每个世界采样多少个候选并按「与公开历史的一致性」择优（叫分/过牌线索）
+        worldQuality: { easy: 1, medium: 2, hard: 3, grandmaster: 3, legendary: 4 },
         // 叫分模拟次数（传奇难度）
         callTrials: { legendary: 60 }
     },
@@ -331,7 +348,7 @@ const DEFAULT_PARAMS = {
     },
     leadAdjust: {
         // 农民下一位就是地主时，不要把 ≤3 这种“白送控制权”的单张直接喂出去
-        farmerTinySingleVsLandlord: 1000,
+        farmerTinySingleVsLandlord: 320,
         // 终局炸弹/王炸领出奖励（不再是绝对死规则）
         bombLeadLate: { bomb: 20, rocket: 30 }
     },
@@ -518,6 +535,27 @@ function allCards() {
     return cards;
 }
 function comb(n, k) { if (k < 0 || k > n || n < 0) return 0; let r = 1; for (let i = 1; i <= k; i++) r = r * (n - k + i) / i; return r; }
+// 超几何分布：从大小 poolSize 的牌池里取 slots 张，其中来自 avail 张指定牌的
+// 数量 ≥ k 的概率。用于解析式计算"对手能否压过"（比采样又快又稳）。
+function _hyperAtLeast(avail, poolSize, slots, k) {
+    if (k <= 0) return 1;
+    if (avail <= 0 || slots <= 0 || poolSize <= 0) return 0;
+    if (slots > poolSize) return 0;
+    if (poolSize - avail < slots - k) return 1;   // 必含
+    const denom = comb(poolSize, slots);
+    if (!denom) return 0;
+    let p = 0;
+    const maxTake = Math.min(avail, slots);
+    for (let take = k; take <= maxTake; take++) {
+        p += comb(avail, take) * comb(poolSize - avail, slots - take);
+    }
+    return p / denom;
+}
+function _hyperAtMost(avail, max, poolSize, slots) {
+    if (max < 0) return 0;
+    if (max >= slots) return 1;
+    return 1 - _hyperAtLeast(avail, poolSize, slots, max + 1);
+}
 
 class HandBelief {
     constructor(playerId, state, memory) {
@@ -579,22 +617,43 @@ class HandBelief {
             pool.push(c);
         }
         // 牌池不足以填满对手手牌（记牌器滞后）→ 从"已打出"里回收，保持世界划分完整
+        // 注意：回收的牌其实是"已经打出去的"，塞进对手手里会让世界失真。
+        // 这里记录回收数量，在世界评分里降权（而不是硬塞完事）。
+        let recycleCount = 0;
         if (pool.length < oppNeed) {
             const arr = [...playedSet];
             while (pool.length < oppNeed && arr.length > 0) {
                 const id = arr.pop();
                 playedSet.delete(id);
                 const card = allCards().find(c => c.id === id);
-                if (card) pool.push(card);
+                if (card) { pool.push(card); recycleCount++; }
             }
         }
         this.playedIds = playedSet;
         this.pool = pool;
         this.poolCounts = new Array(15).fill(0);
         for (const c of pool) this.poolCounts[c.value]++;
+        this.recycleCount = recycleCount;
         // 对手个体化线索：各对手曾在需要跟牌时 pass 过的上下文（公开信息）
         this.passHints = memory && memory.passHints ? memory.passHints : [[], [], []];
         this.memory = memory;
+
+        // ======================== 公开历史线索 ========================
+        // 叫分是公开信息：叫分越高牌力通常越强（多半有炸/王炸/大对子）。
+        // 旧的世界模型完全没用这条线索 —— 明明知道谁叫了 3 分，却照样把炸弹
+        // 随机发给任何对手，白白浪费了大量可推断信息。
+        this.callScores = (state.callScores && state.callScores.length === 3) ? state.callScores.slice() : [0, 0, 0];
+        this.bidStrength = [0, 0, 0];
+        this.maxBid = 0;
+        for (let i = 0; i < 3; i++) {
+            const b = this.callScores[i] || 0;
+            if (b > this.maxBid) this.maxBid = b;
+        }
+        for (let i = 0; i < 3; i++) {
+            const b = this.callScores[i] || 0;
+            this.bidStrength[i] = b >= 3 ? 2 : (b === 2 ? 1 : 0);
+        }
+        if (this.landlord >= 0) this.bidStrength[this.landlord] = 2;
     }
 
     // 采样一个"可能世界"：自己的手牌精确，对手手牌按未见牌池分配（保留地主底牌归属）
@@ -606,7 +665,21 @@ class HandBelief {
     //   · 对手几乎不可能有炸弹 → 炸弹风险估计失真
     // 真实手牌是对子/三张/顺子成团的。这里按点数分组、整组优先分配，
     // 让采样出的手牌在结构上接近真实牌局。
-    sampleWorld() {
+    //
+    // quality > 1 时：生成多个候选并按「与公开历史的一致性」择优（见 _worldLikelihood）。
+    // 这是纯公开信息（叫分 / 过牌上下文 / 已打出的牌）驱动的推断，不违反公平性红线。
+    sampleWorld(quality) {
+        const tries = Math.max(1, quality || 1);
+        if (tries === 1) return this._sampleWorldStructured();
+        let best = null, bestScore = -Infinity;
+        for (let i = 0; i < tries; i++) {
+            const w = this._sampleWorldStructured();
+            const s = this._worldLikelihood(w);
+            if (s > bestScore) { bestScore = s; best = w; }
+        }
+        return best || this._sampleWorldStructured();
+    }
+    _sampleWorldStructured() {
         const players = [[], [], []];
         players[this.playerId] = this.ownHand.map(c => ({ ...c }));
         // 结构化采样开关：1 = 按手牌形状分配（默认，更接近真实牌局）
@@ -690,10 +763,84 @@ class HandBelief {
         }
         return players;
     }
+    // 采样 n 个可能世界：按「与公开历史的一致性」择优。
+    // 旧实现是 n 个完全独立的随机世界 —— 里面有大量与已观察到的叫分/过牌行为
+    // 明显矛盾的世界（例如叫了 3 分的对手手里一把散牌）。
     sampleWorlds(n) {
+        const want = Math.max(1, n || 1);
+        const tries = Math.min(want + 12, want * 4);
+        const cands = [];
+        for (let i = 0; i < tries; i++) {
+            const w = this._sampleWorldStructured();
+            // 抖动打破同分并列，保证世界之间仍有差异（离线评测里 Math.random 是种子化的）
+            const s = this._worldLikelihood(w) + Math.random() * 0.4;
+            cands.push({ players: w, s });
+        }
+        cands.sort((a, b) => b.s - a.s);
         const out = [];
-        for (let i = 0; i < n; i++) out.push(this.sampleWorld());
+        for (let i = 0; i < cands.length && out.length < want; i++) out.push(cands[i].players);
         return out;
+    }
+    // 手牌牌力（用于与叫分档位对照）：只依赖点数结构，不看花色
+    _handStrengthScore(hand) {
+        if (!hand || !hand.length) return 0;
+        let score = 0;
+        const cnt = new Array(15).fill(0);
+        for (const c of hand) cnt[c.value]++;
+        for (let v = 0; v <= 14; v++) {
+            if (cnt[v] === 4) score += 30;
+            else if (cnt[v] === 3) score += 12;
+            else if (cnt[v] === 2) score += 4;
+            else score -= 2;
+            if (v >= 12) score += cnt[v] * 4;
+        }
+        return score;
+    }
+    // 给一个采样世界打分：公开历史越吻合分越高（纯公开信息推断）
+    _worldLikelihood(worldPlayers) {
+        let score = 0;
+        const oppIds = [];
+        for (let i = 0; i < 3; i++) if (i !== this.playerId) oppIds.push(i);
+        // 1) 叫分档位 ↔ 实际牌力 的秩一致性
+        const entries = oppIds.map(id => ({
+            id,
+            tier: this.bidStrength[id],
+            s: this._handStrengthScore(worldPlayers[id] || [])
+        }));
+        const byTier = entries.slice().sort((a, b) => b.tier - a.tier);
+        const byStrength = entries.slice().sort((a, b) => b.s - a.s);
+        for (let k = 0; k < byTier.length; k++) {
+            score += (byTier[k].id === byStrength[k].id) ? 8 : -4;
+        }
+        // 2) 叫高分者通常握着炸/王炸
+        for (const id of oppIds) {
+            if (this.bidStrength[id] < 2) continue;
+            const hand = worldPlayers[id] || [];
+            const cnt = new Array(15).fill(0);
+            for (const c of hand) cnt[c.value]++;
+            let bombs = 0;
+            for (let v = 0; v <= 12; v++) if (cnt[v] >= 4) bombs++;
+            if (cnt[13] > 0 && cnt[14] > 0) bombs++;
+            if (bombs > 0) score += 6;
+        }
+        // 3) 过牌一致性：对手 pass 过的高牌，他手里通常没有同区间的大单张
+        for (const id of oppIds) {
+            const hints = this.passHints[id] || [];
+            if (!hints.length) continue;
+            const hand = worldPlayers[id] || [];
+            const cnt = new Array(15).fill(0);
+            for (const c of hand) cnt[c.value]++;
+            for (const h of hints) {
+                if (!h || h.type !== 'single') continue;
+                const v = h.value;
+                let violations = 0;
+                for (let x = v + 1; x <= 14; x++) if (cnt[x] === 1) violations++;
+                score -= Math.min(4, violations * 0.6);
+            }
+        }
+        // 4) 记牌器滞后导致回收已打出的牌 → 世界本身不可信，降权
+        score -= this.recycleCount * 0.5;
+        return score;
     }
     // 某对手握有炸弹的概率：结合"未见牌池"与"地主底牌已明确归属该对手"的信息。
     // 对每个点数，按超几何分布计算该对手至少拿到 4 张的概率；已知底牌直接减少所需张数。
@@ -756,21 +903,22 @@ class HandBelief {
         if ((this.poolCounts[13] || 0) < 1 || (this.poolCounts[14] || 0) < 1) return 0;
         return Math.min(1, comb(poolSize - 2, unknownSlots - 2) / comb(poolSize, unknownSlots));
     }
-    // 估计某对手能压过 play 的概率（采样其可能手牌 → 检查是否存在合法应对）
+    // 估计某对手能压过 play 的概率。
+    //
+    // 解析式（单/对/三/炸/王）比采样式又快又稳：采样式每次都要生成完整世界
+    // 并跑一遍 getAllValidPlays（对 17 张手牌很贵），而且 10 个样本的方差极大。
+    // 这里用未见牌池上的超几何分布直接算；顺子/连对/飞机等组合型仍走采样兜底。
     beatProbability(play, oppId, samples) {
         const type = getCardType(play);
         if (!type) return 0;
-        let hit = 0, total = 0;
-        for (let s = 0; s < samples; s++) {
-            const players = this.sampleWorld();
-            const hand = players[oppId];
-            total++;
-            if (!hand || hand.length === 0) continue;
-            let can = false;
-            try { can = getAllValidPlays(hand, type).length > 0; } catch (e) { can = false; }
-            if (can) hit++;
+        let base = -1;
+        if (type.type === CardType.ROCKET) return 0;
+        if (type.type === CardType.SINGLE || type.type === CardType.PAIR || type.type === CardType.TRIPLE ||
+            type.type === CardType.TRIPLE_WITH_SINGLE || type.type === CardType.TRIPLE_WITH_PAIR ||
+            type.type === CardType.BOMB) {
+            base = this._analyticBeatProb(type, oppId);
         }
-        let base = total > 0 ? hit / total : 0;
+        if (base < 0) base = this._sampledBeatProb(type, oppId, samples);
         // 对手曾在该点数区间 pass 过，降低其能压过的概率（公开行为约束信念）
         let hintPenalty = 0;
         const hints = this.passHints[oppId] || [];
@@ -780,6 +928,85 @@ class HandBelief {
             if ((h.type === 'bomb' || h.type === 'rocket') && type.type !== CardType.ROCKET) hintPenalty += 0.08;
         }
         return Math.max(0, Math.min(1, base - Math.min(0.5, hintPenalty)));
+    }
+    // 解析式：对手从未见牌池里随机拿 u 张牌，其中能凑出压过 type 的牌型的概率
+    _analyticBeatProb(type, oppId) {
+        const n = this.counts[oppId] || 0;
+        const known = this.knownByPlayer[oppId] || [];
+        const knownCounts = new Array(15).fill(0);
+        for (const c of known) knownCounts[c.value]++;
+        const unknownSlots = n - known.length;
+        const poolSize = this.pool.length;
+        if (unknownSlots <= 0 || poolSize <= 0) return 0;
+        const pool = this.poolCounts;
+        // 单张：至少一张比 value 大的牌
+        if (type.type === CardType.SINGLE) {
+            let higher = 0, leq = 0;
+            for (let v = 0; v <= 14; v++) {
+                if (v > type.value) higher += pool[v];
+                else leq += pool[v];
+            }
+            if (higher <= 0) return 0;
+            // 已知牌里已经有的更大牌也算
+            for (let v = type.value + 1; v <= 14; v++) if (knownCounts[v] > 0) return 1;
+            return 1 - _hyperAtLeast(leq, poolSize, unknownSlots, 1);
+        }
+        // 对子 / 三张 / 炸弹：存在一个更大点数凑够 k 张
+        if (type.type === CardType.PAIR || type.type === CardType.TRIPLE || type.type === CardType.BOMB) {
+            const need = type.type === CardType.PAIR ? 2 : (type.type === CardType.TRIPLE ? 3 : 4);
+            // 对三带一/三带二：本体是三张，对手需要更大的三张（翅膀好找，忽略）
+            let noBeat = 1;
+            let anyKnown = false;
+            for (let v = type.value + 1; v <= 14; v++) {
+                if (knownCounts[v] >= need) return 1;
+                const avail = pool[v] || 0;
+                if (avail < need) continue;
+                // P(该点数在对手手里 < need 张)
+                const pLess = _hyperAtMost(avail, need - 1, poolSize, unknownSlots);
+                noBeat *= pLess;
+            }
+            if (type.type === CardType.BOMB) {
+                // 对手有王炸也能压炸弹
+                const sAvail = pool[13] || 0, bAvail = pool[14] || 0;
+                const sKnown = knownCounts[13] > 0, bKnown = knownCounts[14] > 0;
+                if (sKnown && bKnown) return 1;
+                let rocketProb = 0;
+                if (sAvail > 0 && bAvail > 0) {
+                    if (sKnown) rocketProb = _hyperAtLeast(bAvail - 1, poolSize - 1, unknownSlots, 1);
+                    else if (bKnown) rocketProb = _hyperAtLeast(sAvail - 1, poolSize - 1, unknownSlots, 1);
+                    else rocketProb = _hyperAtLeast(poolSize - 2, poolSize, unknownSlots, 2);
+                }
+                return Math.max(1 - noBeat, rocketProb);
+            }
+            return 1 - noBeat;
+        }
+        // 三带一 / 三带二：需要更大的三张（翅膀通常够）
+        if (type.type === CardType.TRIPLE_WITH_SINGLE || type.type === CardType.TRIPLE_WITH_PAIR) {
+            let noBeat = 1;
+            for (let v = type.value + 1; v <= 14; v++) {
+                if (knownCounts[v] >= 3) return 1;
+                const avail = pool[v] || 0;
+                if (avail < 3) continue;
+                noBeat *= _hyperAtMost(avail, 2, poolSize, unknownSlots);
+            }
+            return 1 - noBeat;
+        }
+        return -1;
+    }
+    // 采样兜底（顺子/连对/飞机等组合型）
+    _sampledBeatProb(type, oppId, samples) {
+        let hit = 0, total = 0;
+        const n = Math.max(1, samples || 4);
+        for (let s = 0; s < n; s++) {
+            const players = this.sampleWorld();
+            const hand = players[oppId];
+            total++;
+            if (!hand || hand.length === 0) continue;
+            let can = false;
+            try { can = getAllValidPlays(hand, type).length > 0; } catch (e) { can = false; }
+            if (can) hit++;
+        }
+        return total > 0 ? hit / total : 0;
     }
 }
 
@@ -906,6 +1133,31 @@ function extractPlayFeatures(play, hand, lastPlay, role, memory, state) {
         kickerValue = kickerVals.length > 0 ? Math.max(...kickerVals) : 0;
     }
     let nextPlayerId = (state.currentPlayer + 1) % 3;
+    // ===== 新增特征（默认权重 0 → 行为不变，可由学习闭环逐步学出）=====
+    // turnsToFinish：出完这手后，按点数分解估的「还差几手」
+    // sureTricks  ：剩余手牌里"对手基本压不住"的控制牌数量（控制权是斗地主的硬通货）
+    // controlCount：剩余手牌里的控制牌（2 / 王）数量
+    // oppThreat   ：对手手里未被消耗的大牌数量（威胁度）
+    // isPartnerLead：上一手是队友出的（协作语义）
+    let turnsToFinish = newHand.length ? _fastHandTurns(newHand) : 0;
+    let maxOutside = 0;
+    try { maxOutside = memory && memory.getMaxOutside ? memory.getMaxOutside(hand) : 0; } catch (e) { maxOutside = 0; }
+    let sureTricks = 0, controlCount = 0;
+    for (const c of newHand) {
+        if (c.value >= 12) controlCount++;
+        if (c.value > maxOutside) sureTricks++;
+    }
+    let oppThreat = 0;
+    try {
+        if (memory && memory.getRemainingCounts) {
+            const rem = memory.getRemainingCounts();
+            const mine = new Array(15).fill(0);
+            for (const c of hand) mine[c.value]++;
+            for (let v = 12; v <= 14; v++) oppThreat += Math.max(0, (rem[v] || 0) - mine[v]);
+        }
+    } catch (e) { oppThreat = 0; }
+    const isPartnerLead = !!(lastPlay && role === 'farmer' && state.lastPlayerId !== -1 &&
+        state.lastPlayerId !== state.currentPlayer && state.lastPlayerId !== state.landlord);
     return {
         playLength: play.length, playPower, isBomb: isBomb ? 1 : 0, isRocket: (playType.type === CardType.ROCKET) ? 1 : 0,
         remainTotal: newHand.length, remainSingle: handFeatures.single, remainPair: handFeatures.pair,
@@ -918,7 +1170,8 @@ function extractPlayFeatures(play, hand, lastPlay, role, memory, state) {
         outsideBombCount: _outsideBombCountMemo(memory, hand), isCritical: (newHand.length <= 3) ? 1 : 0,
         needBeat: needBeat ? 1 : 0, lastPlayType: lastPlay ? lastPlay.type : 'none', lastPlayPower: lastPlay ? lastPlay.value : 0,
         lastPlayLength: lastPlay ? (lastPlay.length || 0) : 0,
-        playType: playType.type, kickerValue, mainValue: playType.value
+        playType: playType.type, kickerValue, mainValue: playType.value,
+        turnsToFinish, sureTricks, controlCount, oppThreat, isPartnerLead: isPartnerLead ? 1 : 0
     };
 }
 
@@ -994,6 +1247,40 @@ function playTypeOf(play) {
     if (t) { if (_PLAY_TYPE_CACHE.size > 4000) _PLAY_TYPE_CACHE.clear(); _PLAY_TYPE_CACHE.set(key, t); }
     return t;
 }
+// ======================== 翅膀（挂件）组合枚举 ========================
+// 按「点数」而不是「牌」枚举翅膀：斗地主里同点数的不同花色策略上完全等价，
+// 旧实现按牌枚举会产生大量等价分支（稀释 MCTS 搜索预算、撑爆拆牌 DP 的状态数），
+// 而飞机带翅膀的 C(n,k) 组合会直接组合爆炸。
+//
+// groups: [{v: 点数, cards: 该点数的 canonical 牌}]，每个点数可贡献 1..maxPerRank 张。
+// 输出按「翅膀总点数」升序（优先用小牌当翅膀），再截断到 cap。
+function _wingCombos(groups, need, maxPerRank, cap) {
+    const out = [];
+    const n = groups.length;
+    if (need <= 0) return [[]];
+    let avail = 0;
+    for (const g of groups) avail += Math.min(g.cards.length, maxPerRank);
+    if (need > avail) return [];
+    const limit = Math.max(1, cap || 64);
+    const hardCap = limit * 4;
+    function rec(i, remaining, acc, sum) {
+        if (out.length >= hardCap) return;
+        if (remaining === 0) { out.push({ cards: acc.slice(), sum }); return; }
+        if (i >= n) return;
+        const g = groups[i];
+        const maxTake = Math.min(g.cards.length, maxPerRank, remaining);
+        for (let k = maxTake; k >= 1; k--) {
+            for (let j = 0; j < k; j++) acc.push(g.cards[j]);
+            rec(i + 1, remaining - k, acc, sum + g.v * k);
+            for (let j = 0; j < k; j++) acc.pop();
+            if (out.length >= hardCap) return;
+        }
+        rec(i + 1, remaining, acc, sum);
+    }
+    rec(0, need, [], 0);
+    out.sort((a, b) => a.sum - b.sum);
+    return out.slice(0, limit).map(o => o.cards);
+}
 // opts.maxComboPerGroup：限制「每组底牌」派生的组合数上限（0 = 不限）。
 //
 // 为什么需要它：三带一/四带二/飞机带翅膀这些牌型的候选数是组合爆炸的
@@ -1025,11 +1312,14 @@ function getAllValidPlays(hand, lastPlay = null, opts) {
     if (byValue[13] && byValue[14]) push([byValue[13][0], byValue[14][0]], { type: CardType.ROCKET, value: 100 });
     if (_canContend(lastPlay, CardType.TRIPLE_WITH_SINGLE)) {
         for (let triple of Object.values(byValue).filter(arr=>arr.length>=3)) {
+            // 挂件按点数枚举：每个不同点数只出一个 canonical 牌（旧实现按牌枚举会产生等价分支）
             let n = 0;
-            for (let single of hand2) if (single.value !== triple[0].value) {
+            for (const v of Object.keys(byValue)) {
+                const val = Number(v);
+                if (val === triple[0].value) continue;
                 if (comboCap && n >= comboCap) break;
                 n++;
-                push([...triple.slice(0,3), single], { type: CardType.TRIPLE_WITH_SINGLE, value: triple[0].value });
+                push([...triple.slice(0,3), byValue[v][0]], { type: CardType.TRIPLE_WITH_SINGLE, value: triple[0].value });
             }
         }
     }
@@ -1045,13 +1335,15 @@ function getAllValidPlays(hand, lastPlay = null, opts) {
     }
     if (_canContend(lastPlay, CardType.FOUR_WITH_TWO_SINGLE)) {
         for (let quad of Object.values(byValue).filter(arr=>arr.length===4)) {
-            let singles = hand2.filter(c => c.value !== quad[0].value);
-            let n = 0;
-            for (let i=0;i<singles.length;i++) for (let j=i+1;j<singles.length;j++) {
-                if (comboCap && n >= comboCap) break;
-                n++;
-                push([...quad, singles[i], singles[j]], { type: CardType.FOUR_WITH_TWO_SINGLE, value: quad[0].value });
+            // 翅膀按点数枚举：两张不同点数各取一张，或同一点数取两张（拆对子）
+            let wingGroups = [];
+            for (const v of Object.keys(byValue)) {
+                const val = Number(v);
+                if (val === quad[0].value) continue;
+                wingGroups.push({ v: val, cards: byValue[v].slice(0, 2) });
             }
+            let combos = _wingCombos(wingGroups, 2, 2, comboCap || 128);
+            for (let w of combos) push([...quad, ...w], { type: CardType.FOUR_WITH_TWO_SINGLE, value: quad[0].value });
         }
     }
     if (_canContend(lastPlay, CardType.FOUR_WITH_TWO_PAIR)) {
@@ -1108,18 +1400,22 @@ function getAllValidPlays(hand, lastPlay = null, opts) {
         let tripleValues = Object.keys(byValue).filter(v => byValue[v].length >= 3 && v<12).map(Number).sort((a,b)=>a-b);
         for (let len=2; len<=tripleValues.length; len++) {
             for (let i=0; i+len<=tripleValues.length; i++) {
-                let seq = tripleValues.slice(i, i+len);
+                const seq = tripleValues.slice(i, i+len);
                 if (!isStraight(seq)) continue;
                 let tripleCards = [], ok=true;
-                for (let v of seq) { if (!byValue[v] || byValue[v].length<3) { ok=false; break; } tripleCards.push(byValue[v][0], byValue[v][1], byValue[v][2]); }
+                for (const v of seq) { if (!byValue[v] || byValue[v].length<3) { ok=false; break; } tripleCards.push(byValue[v][0], byValue[v][1], byValue[v][2]); }
                 if (!ok) continue;
-                let usedIds = new Set(tripleCards.map(c=>c.id));
-                let kickers = hand2.filter(c => !usedIds.has(c.id));
-                let n = 0;
-                for (let combo of getCombinations(kickers, len)) {
-                    if (comboCap && n >= comboCap) break;
-                    n++;
-                    const cards = [...tripleCards, ...combo];
+                // 翅膀点数不能与飞机本体点数相同（getCardType 会把同点数算进本体）
+                const bodyVals = new Set(seq);
+                let wingGroups = [];
+                for (const v of Object.keys(byValue)) {
+                    const val = Number(v);
+                    if (bodyVals.has(val)) continue;
+                    wingGroups.push({ v: val, cards: byValue[v].slice(0, 2) });
+                }
+                let combos = _wingCombos(wingGroups, len, 2, comboCap || 48);
+                for (let w of combos) {
+                    const cards = [...tripleCards, ...w];
                     const vt = getCardType(cards);
                     if (vt && vt.type === CardType.PLANE_WITH_SINGLE) push(cards, vt);
                 }
@@ -1180,7 +1476,18 @@ function getAllValidPlays(hand, lastPlay = null, opts) {
 // ======================== 评分系统 ========================
 function scorePlay(features, role, memory, state, playerHand) {
     let score = 0;
+    // 权重按角色分桶：地主与农民的目标完全不同（地主要压制，农民要配合 + 抢跑），
+    // 共用一套权重会让学习闭环在两个目标之间来回拉扯。
+    // weightsByRole.<role>.<key> 缺省时回落到全局 weights.<key>。
     let W = cfg('weights');
+    try {
+        const roleW = cfg('weightsByRole.' + role);
+        if (roleW && typeof roleW === 'object') {
+            let merged = Object.assign({}, W);
+            for (const k in roleW) if (typeof roleW[k] === 'number') merged[k] = roleW[k];
+            W = merged;
+        }
+    } catch (e) {}
     for (let key in W) if (features[key] !== undefined) score += features[key] * W[key];
     let isPartnerPlay = role === 'farmer' && state.lastPlayerId !== -1 && state.lastPlayerId !== state.currentPlayer && state.lastPlayerId !== state.landlord;
     let ph = cfg('playHeuristics');
@@ -1546,110 +1853,225 @@ function simulateOpponentResponseBlind(play, hand, state, role, memory, belief, 
     return count > 0 ? total / count : 0;
 }
 
-// ======================== DP 手牌分解 ========================
+// ======================== 手牌分解（点数计数状态 + 最少手数） ========================
+// 斗地主里「手数」就是胜利货币：出牌次数越少越有利，因此分解的主目标必须是手数，
+// 而不是手调分。旧实现是 2^n 位掩码 DP，只覆盖 ≤15 张（>15 直接返回 -999），
+// 且优化的是 dpScores 手调分 → 16~20 张的局面完全没有拆牌推理。
+//
+// 新实现：
+//   · 状态 = 点数计数向量（每个点数剩几张），状态数远小于 2^n，覆盖到 20 张；
+//   · 目标 = 最少手数，同手数时再比较结构分（沿用 dpScores 的偏好）；
+//   · 算法 = beam search（有界、可预测耗时），beam 宽度可配；
+//   · 缓存按「点数多重集」，命中后按当前手牌重新物化牌对象（避免花色串味）。
 const _DP_CACHE = new Map();
-const _DP_CACHE_MAX = 96;
-function _dpCacheKey(hand) { return hand.map(c => c.id).sort().join('|'); }
+const _DP_CACHE_MAX = 256;
+const _TURNS_CACHE = new Map();
+const _TURNS_CACHE_MAX = 4096;
+
+function _countVector(hand) {
+    const counts = new Array(15).fill(0);
+    for (const c of hand) if (c.value >= 0 && c.value <= 14) counts[c.value]++;
+    return counts;
+}
+// 贪心估计「还需几手才能出完」——用于 beam 排序与残局静态估值。
+// O(点数×段) 的轻量估算，不走完整分解（完整分解在 rollout 里太贵）。
+function _fastTurnsFromCounts(counts) {
+    const c = counts.slice();
+    let turns = 0;
+    // 顺子（连续单张，≥5）
+    for (let v = 0; v <= 11; v++) {
+        let len = 0;
+        while (v + len <= 11 && c[v + len] > 0) len++;
+        while (len >= 5) {
+            for (let k = 0; k < len; k++) c[v + k]--;
+            turns++;
+            len = 0;
+            while (v + len <= 11 && c[v + len] > 0) len++;
+        }
+    }
+    // 连对（≥3）
+    for (let v = 0; v <= 11; v++) {
+        let len = 0;
+        while (v + len <= 11 && c[v + len] >= 2) len++;
+        while (len >= 3) {
+            for (let k = 0; k < len; k++) c[v + k] -= 2;
+            turns++;
+            len = 0;
+            while (v + len <= 11 && c[v + len] >= 2) len++;
+        }
+    }
+    // 飞机（连续三张，≥2 组）
+    for (let v = 0; v <= 11; v++) {
+        let len = 0;
+        while (v + len <= 11 && c[v + len] >= 3) len++;
+        while (len >= 2) {
+            for (let k = 0; k < len; k++) c[v + k] -= 3;
+            turns++;
+            len = 0;
+            while (v + len <= 11 && c[v + len] >= 3) len++;
+        }
+    }
+    // 炸弹 / 火箭
+    for (let v = 0; v <= 12; v++) if (c[v] >= 4) { turns++; c[v] -= 4; }
+    if (c[13] > 0 && c[14] > 0) { turns++; c[13]--; c[14]--; }
+    // 三带一
+    for (let v = 0; v <= 12; v++) {
+        if (c[v] >= 3) {
+            c[v] -= 3;
+            turns++;
+            for (let w = 0; w <= 14; w++) {
+                if (w === v || c[w] <= 0) continue;
+                c[w]--; break;
+            }
+        }
+    }
+    // 对子 / 单张
+    for (let v = 0; v <= 14; v++) {
+        while (c[v] >= 2) { c[v] -= 2; turns++; }
+        if (c[v] > 0) { c[v]--; turns++; }
+    }
+    return turns;
+}
+function _cachedTurns(counts) {
+    const key = counts.join(',');
+    let v = _TURNS_CACHE.get(key);
+    if (v === undefined) {
+        v = _fastTurnsFromCounts(counts);
+        if (_TURNS_CACHE.size >= _TURNS_CACHE_MAX) _TURNS_CACHE.clear();
+        _TURNS_CACHE.set(key, v);
+    }
+    return v;
+}
+function _fastHandTurns(hand) {
+    if (!hand || !hand.length) return 0;
+    return _cachedTurns(_countVector(hand));
+}
+// 单个走法的结构分（沿用 dpScores 偏好：成型组合好、散牌差）
+function _decompActionScore(play, ds) {
+    const t = getCardType(play);
+    if (!t) return 0;
+    if (t.type === CardType.ROCKET) return ds.rocket;
+    if (t.type === CardType.BOMB) return ds.bomb;
+    if (t.type === CardType.STRAIGHT) return ds.straight + t.length * ds.straightLenFactor;
+    if (t.type === CardType.STRAIGHT_PAIR) return ds.straightPair + t.length * ds.straightPairLenFactor;
+    if (t.type === CardType.PLANE) return ds.plane + t.length * ds.planeLenFactor;
+    if (t.type === CardType.PLANE_WITH_SINGLE || t.type === CardType.PLANE_WITH_PAIR) {
+        const target = t.type === CardType.PLANE_WITH_SINGLE ? 1 : 2;
+        const cnt = countValues(play.map(c => c.value));
+        const kickerVals = Object.keys(cnt).filter(k => cnt[k] === target).map(Number);
+        const maxKicker = kickerVals.length > 0 ? Math.max(...kickerVals) : 0;
+        return ds.planeWith - Math.max(0, maxKicker - 7) * 3 * t.length;
+    }
+    if (t.type === CardType.TRIPLE_WITH_SINGLE || t.type === CardType.TRIPLE_WITH_PAIR) {
+        const target = t.type === CardType.TRIPLE_WITH_SINGLE ? 1 : 2;
+        const cnt = countValues(play.map(c => c.value));
+        const kickerVal = parseInt(Object.keys(cnt).find(k => cnt[k] === target && parseInt(k) !== t.value)) || 0;
+        let s = ds.tripleWith - Math.max(0, kickerVal - 7) * 3;
+        if (t.value >= 11) s -= 30;
+        return s;
+    }
+    if (t.type === CardType.FOUR_WITH_TWO_SINGLE) return ds.planeWith;
+    if (t.type === CardType.FOUR_WITH_TWO_PAIR) return ds.planeWith + 10;
+    if (t.type === CardType.PAIR) return ds.pair;
+    if (t.type === CardType.TRIPLE) { let s = ds.triple; if (t.value >= 11) s -= 30; return s; }
+    return ds.single;
+}
+// 按点数计划物化出真实牌对象（缓存只存点数，避免不同花色的手牌互相污染）
+function _materializePlan(plan, hand) {
+    const pools = new Map();
+    for (const c of hand) {
+        if (!pools.has(c.value)) pools.set(c.value, []);
+        pools.get(c.value).push(c);
+    }
+    const out = [];
+    for (const vals of plan) {
+        const cards = [];
+        for (const v of vals) {
+            const pool = pools.get(v);
+            if (!pool || !pool.length) return null;
+            cards.push(pool.pop());
+        }
+        out.push(cards);
+    }
+    return out;
+}
 function decomposeHandDP(hand) {
     if (!hand || hand.length === 0) return { plays: [], score: 0 };
-    if (hand.length > 15) return { plays: [], score: -999 };
-    const _ck = _dpCacheKey(hand);
+    const _ck = hand.map(c => c.value).sort((a, b) => a - b).join('|');
     const _hit = _DP_CACHE.get(_ck);
-    if (_hit) return _hit;
-    const n = hand.length;
-    const idxToCard = hand;
-    let cardIndex = {};
-    hand.forEach((c, i) => { if (!cardIndex[c.id]) cardIndex[c.id] = []; cardIndex[c.id].push(i); });
-    function cardsFromMask(mask) {
-        let result = [];
-        for (let i = 0; i < n; i++) if (mask & (1 << i)) result.push(idxToCard[i]);
-        return result;
+    if (_hit) {
+        const mat = _materializePlan(_hit.plan, hand);
+        if (mat) return { plays: mat, score: _hit.score };
     }
+    const ds = cfg('dpScores');
+    const beamWidth = cfg('decompose.beam') || 48;
+    const maxLevels = cfg('decompose.maxLevels') || 14;
+    // 候选动作：除单张外全部合法走法（单张永远是兜底，不参与 beam 扩展）
     let allPlays = getAllValidPlays(hand, null);
-    let playEntries = [];
+    let actions = [];
     for (let play of allPlays) {
-        let mask = 0;
-        let used = {};
-        for (let c of play) {
-            let idx = -1;
-            let arr = cardIndex[c.id] || [];
-            for (let j of arr) {
-                if (!(mask & (1 << j)) && !used[j]) { idx = j; break; }
-            }
-            if (idx >= 0) { mask |= (1 << idx); used[idx] = true; }
-        }
-        let type = getCardType(play);
-        let ds = cfg('dpScores');
-        let pscore = 0;
-        if (type.type === CardType.ROCKET) pscore = ds.rocket;
-        else if (type.type === CardType.BOMB) pscore = ds.bomb;
-        else if (type.type === CardType.STRAIGHT) pscore = ds.straight + type.length * ds.straightLenFactor;
-        else if (type.type === CardType.STRAIGHT_PAIR) pscore = ds.straightPair + type.length * ds.straightPairLenFactor;
-        else if (type.type === CardType.PLANE) pscore = ds.plane + type.length * ds.planeLenFactor;
-        else if (type.type === CardType.PLANE_WITH_SINGLE || type.type === CardType.PLANE_WITH_PAIR) {
-            let target = type.type === CardType.PLANE_WITH_SINGLE ? 1 : 2;
-            let cnt = countValues(play.map(c=>c.value));
-            let kickerVals = Object.keys(cnt).filter(k => cnt[k] === target).map(Number);
-            let maxKicker = kickerVals.length > 0 ? Math.max(...kickerVals) : 0;
-            pscore = ds.planeWith - Math.max(0, maxKicker - 7) * 3 * type.length;
-        }
-        else if (type.type === CardType.TRIPLE_WITH_SINGLE || type.type === CardType.TRIPLE_WITH_PAIR) {
-            let target = type.type === CardType.TRIPLE_WITH_SINGLE ? 1 : 2;
-            let cnt = countValues(play.map(c=>c.value));
-            let kickerVal = parseInt(Object.keys(cnt).find(k => cnt[k] === target && parseInt(k) !== type.value)) || 0;
-            pscore = ds.tripleWith - Math.max(0, kickerVal - 7) * 3;
-            if (type.value >= 11) pscore -= 30;
-        }
-        else if (type.type === CardType.PAIR) pscore = ds.pair;
-        else if (type.type === CardType.TRIPLE) { pscore = ds.triple; if (type.value >= 11) pscore -= 30; }
-        else pscore = ds.single;
-        if (play.length === hand.length) pscore += ds.completeBonus;
-        playEntries.push({ mask, score: pscore, play });
+        const t = getCardType(play);
+        if (!t || t.type === CardType.SINGLE) continue;
+        const vec = new Array(15).fill(0);
+        for (const c of play) vec[c.value]++;
+        actions.push({ vec, score: _decompActionScore(play, ds), len: play.length });
     }
-    const _seenMask = new Set();
-    playEntries = playEntries.filter(pe => {
-        if (_seenMask.has(pe.mask)) return false;
-        _seenMask.add(pe.mask);
-        return true;
-    });
-    let totalMasks = 1 << n;
-    let dp = new Array(totalMasks).fill(null);
-    let prev = new Array(totalMasks).fill(null);
-    dp[0] = 0;
-    for (let mask = 0; mask < totalMasks; mask++) {
-        if (dp[mask] === null) continue;
-        for (let pe of playEntries) {
-            if (mask & pe.mask) continue;
-            let newMask = mask | pe.mask;
-            let newScore = dp[mask] + pe.score;
-            if (dp[newMask] === null || newScore > dp[newMask]) {
-                dp[newMask] = newScore;
-                prev[newMask] = { from: mask, entry: pe };
+    // 一次出更多张的走法优先（同手数时更可能凑出成型组合）
+    actions.sort((a, b) => (b.len - a.len) || (b.score - a.score));
+    if (actions.length > 160) actions = actions.slice(0, 160);
+
+    let beam = [{ counts: _countVector(hand), turns: 0, score: 0, path: [] }];
+    let best = null;
+    for (let level = 0; level < maxLevels; level++) {
+        const next = [];
+        for (const st of beam) {
+            const est = _cachedTurns(st.counts);
+            const total = st.turns + est;
+            if (!best || total < best.turns || (total === best.turns && st.score > best.score)) {
+                best = { turns: total, score: st.score, path: st.path.slice(), counts: st.counts.slice(), est };
+            }
+            if (est === 0) continue;
+            for (const a of actions) {
+                let fits = true;
+                for (let v = 0; v < 15; v++) {
+                    if (a.vec[v] > st.counts[v]) { fits = false; break; }
+                }
+                if (!fits) continue;
+                const nc = st.counts.slice();
+                for (let v = 0; v < 15; v++) nc[v] -= a.vec[v];
+                next.push({ counts: nc, turns: st.turns + 1, score: st.score + a.score, path: st.path.concat([a]) });
             }
         }
+        if (!next.length) break;
+        next.sort((a, b) => {
+            const ea = a.turns + _cachedTurns(a.counts);
+            const eb = b.turns + _cachedTurns(b.counts);
+            return (ea - eb) || (b.score - a.score);
+        });
+        beam = next.slice(0, beamWidth);
     }
-    let bestMask = 0, bestScore = (dp[totalMasks-1] !== null) ? dp[totalMasks-1] : -999;
-    if (dp[totalMasks-1] !== null) bestMask = totalMasks - 1;
-    else {
-        for (let mask = 0; mask < totalMasks; mask++) {
-            if (dp[mask] !== null && dp[mask] > bestScore) { bestScore = dp[mask]; bestMask = mask; }
-        }
-    }
+    // 组装具体点数计划（beam 的 path 只记录了点数向量）
     let plays = [];
-    let m = bestMask;
-    while (m > 0 && prev[m] !== null) {
-        plays.push(prev[m].entry.play);
-        m = prev[m].from;
+    if (best) {
+        let remain = _countVector(hand);
+        for (const a of best.path) {
+            const vals = [];
+            for (let v = 0; v < 15; v++) for (let k = 0; k < a.vec[v]; k++) vals.push(v);
+            vals.sort((x, y) => x - y);
+            for (const v of vals) remain[v]--;
+            plays.push(vals);
+        }
+        for (let v = 0; v < 15; v++) for (let k = 0; k < remain[v]; k++) plays.push([v]);
+    } else {
+        plays = hand.map(c => [c.value]);
     }
-    let uncovered = cardsFromMask(bestMask ^ (totalMasks - 1));
-    for (let c of uncovered) plays.push([c]);
-    plays.reverse();
-    let remaining = hand.filter(c => !plays.flat().includes(c));
-    for (let c of remaining) plays.push([c]);
-    const _out = { plays, score: bestScore };
+    const plan = plays.map(vals => vals.slice().sort((a, b) => a - b));
+    const mat = _materializePlan(plan, hand) || plan.map(vals => vals.map(v => ({ value: v, id: 'v' + v })));
+    let score = best ? best.score : 0;
+    if (mat.length === 1 && mat[0].length === hand.length) score += ds.completeBonus;
     if (_DP_CACHE.size >= _DP_CACHE_MAX) _DP_CACHE.clear();
-    _DP_CACHE.set(_ck, _out);
-    return _out;
+    _DP_CACHE.set(_ck, { plan, score });
+    return { plays: mat, score };
 }
 
 function greedyDecompose(hand) {
@@ -1773,12 +2195,18 @@ const ENDGAME_PASS = { __endgamePass: true };
 //           ② 终局收益与深度解耦，置换表可跨路径复用（原实现按深度存，复用不安全）
 //           ③ 手牌以"点数多重集"做键，同点不同花视为等价，TT 命中率显著提升
 //           ④ 不再 JSON 深拷贝整个 state，改为对当前手牌 make/undo
+// 残局被预算截断时的静态估值：改用「还差几手出完」而不是牌数，
+// 与真实目标（手数）一致；牌数/大牌只作为平手时的微调。
 function _staticEvalHands(hands, mySide) {
     let score = 0;
     for (let i = 0; i < 3; i++) {
         const sign = mySide.includes(i) ? 1 : -1;
-        const p = hands[i];
-        for (let j = 0; j < p.length; j++) score += sign * (1 + (p[j].value >= 12 ? 2 : 0));
+        const p = hands[i] || [];
+        if (!p.length) continue;
+        const turns = _fastHandTurns(p);
+        let v = 8 - turns * 3.5 - p.length * 0.5;
+        for (let j = 0; j < p.length; j++) if (p[j].value >= 12) v += 1.2;
+        score += sign * v;
     }
     return Math.max(-60, Math.min(60, score));
 }
@@ -2028,6 +2456,9 @@ function solveEndgameBlind(state, playerId, belief, opts) {
     if (needBeat && !trimmedOptions.includes(ENDGAME_PASS)) trimmedOptions.push(ENDGAME_PASS);
 
     const worlds = Math.max(1, opts.worlds || 4);
+    // 世界质量：按难度取配置（每个世界采样多个候选并按公开历史一致性择优）
+    const worldQuality = Math.max(1, opts.worldQuality ||
+        (cfg('blind.worldQuality.' + (opts.difficulty || 'hard')) || 1));
     const budgetMs = opts.timeBudgetMs !== undefined ? opts.timeBudgetMs : (cfg('blind.endgameTimeBudgetMs') || 600);
     const determin = isDeterministicSearch();
     const deadline = determin ? 0 : (Date.now() + budgetMs);
@@ -2044,22 +2475,29 @@ function solveEndgameBlind(state, playerId, belief, opts) {
     const mySide = (playerId === state.landlord) ? [playerId] : [0, 1, 2].filter(i => i !== state.landlord);
     const keyOf = (p) => (p === null || p === ENDGAME_PASS) ? 'pass' : p.map(c => c.id).sort().join(',');
     const agg = new Map();
+    // 跨候选/跨世界共享置换表：
+    // _endgameKeyFast 用的是「点数多重集」，不同候选走出的后续局面经常重合，
+    // 每个候选各建一张 TT 等于把同一批子局面反复算一遍。共享 TT 可以把同样的
+    // 节点预算换成更多世界/候选（节点数与候选数解耦）。
+    // TT 条目带 exact/lower/upper 标记，跨候选复用是安全的（键已包含全部必要信息）。
+    const sharedTT = new Map();
 
     let evaluatedWorlds = 0;
     // 每个候选平均分到的时间片；候选越多每片越短，但总时间受全局 deadline 约束
     const perCandidateMs = Math.max(30, Math.floor(budgetMs / Math.max(1, worlds * trimmedOptions.length)));
     for (let w = 0; w < worlds; w++) {
         if (!determin && Date.now() > deadline) break;
-        const worldPlayers = belief.sampleWorld();
+        const worldPlayers = belief.sampleWorld(worldQuality);
         const hands = worldPlayers.map(p => [...p]);
         evaluatedWorlds++;
-        // 每个候选使用独立 ctx：某个候选被截断时不会污染后续候选，也不会把整轮搜索提前结束。
+        // 每个候选使用独立 ctx（节点计数/截断标记各自独立），
+        // 但置换表共享；某个候选被截断时不会污染后续候选，也不会把整轮搜索提前结束。
         for (const p of trimmedOptions) {
             if (!determin && Date.now() > deadline) break;
             const ctx = determin ? {
-                nodes: 0, limit: perCandidateNodes, tt: new Map(), truncated: false, deadline: 0
+                nodes: 0, limit: perCandidateNodes, tt: sharedTT, truncated: false, deadline: 0
             } : {
-                nodes: 0, limit: perWorldLimit, tt: new Map(), truncated: false,
+                nodes: 0, limit: perWorldLimit, tt: sharedTT, truncated: false,
                 deadline: Math.min(deadline, Date.now() + perCandidateMs)
             };
             let val;
@@ -2130,14 +2568,15 @@ function endgameStats() {
 }
 
 // ======================== 启发式模拟 ========================
-function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministic) {
+// continuous = true 时返回 [-1,1] 的连续值（MCTS 用，信息量比二值胜负大得多）
+function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministic, continuous) {
     let s = _cloneStateShallow(state);
     let cp = startPlayer;
     let mySide = (myId === s.landlord) ? [myId] : [0,1,2].filter(i => i !== s.landlord);
     const hp = cfg('heuristicPlayout');
     for (let step = 0; step < hp.stepLimit; step++) {
         for (let i = 0; i < 3; i++) {
-            if (s.players[i].length === 0) return mySide.includes(i);
+            if (s.players[i].length === 0) return continuous ? (mySide.includes(i) ? 1 : -1) : mySide.includes(i);
         }
         if (s.passCount >= 2) { s.lastPlay = null; s.lastPlayerId = -1; s.passCount = 0; }
         s.currentPlayer = cp;
@@ -2261,19 +2700,17 @@ function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministi
         s.lastPlay = getCardType(chosenPlay);
         s.lastPlayerId = cp;
         s.passCount = 0;
-        if (s.players[cp].length === 0) return mySide.includes(cp);
+        if (s.players[cp].length === 0) return continuous ? (mySide.includes(cp) ? 1 : -1) : mySide.includes(cp);
         cp = (cp + 1) % 3;
     }
-    return _playoutTerminalEval(s, mySide);
+    return continuous ? _playoutTerminalScore(s, mySide) : _playoutTerminalEval(s, mySide);
 }
 
 function _handTurnsEstimate(hand) {
     if (!hand || hand.length === 0) return 0;
     if (hand.length > 20) return Math.ceil(hand.length / 2);
-    let plan = null;
-    try { plan = (hand.length <= 15) ? decomposeHandDP(hand) : greedyDecompose(hand); }
-    catch (e) { plan = greedyDecompose(hand); }
-    return plan && plan.plays ? Math.max(1, plan.plays.length) : Math.max(1, hand.length);
+    // rollout 里每秒要调用很多次 → 用轻量贪心估计，不跑完整 beam 分解
+    return Math.max(1, _fastHandTurns(hand));
 }
 function _sideTurnsEstimate(players, side) {
     let turns = 0;
@@ -2281,23 +2718,42 @@ function _sideTurnsEstimate(players, side) {
     return turns;
 }
 
-function _playoutTerminalEval(s, mySide) {
-    let mine = 0, theirs = 0, myPower = 0, theirPower = 0;
-    for (let i = 0; i < 3; i++) {
+// 终局估值：按**赛跑语义**比较，而不是简单比较双方牌数。
+//   地主赢的条件 = 地主比**最快的那个农民**先走完；
+//   农民赢的条件 = **最快的农民**比地主先走完。
+// 旧实现比较「我方牌数 vs 对方牌数」，把两个农民的牌数加起来跟地主比 ——
+// 口径不对（地主只要先走完就赢，不需要比农民两张牌谁多）。
+function _playoutTerminalScore(s, mySide) {
+    const landlord = s.landlord;
+    const lordTurns = _fastHandTurns(s.players[landlord] || []);
+    const farmerIds = [0, 1, 2].filter(i => i !== landlord);
+    let farmerTurns = Infinity, farmerCards = 0, farmerPower = 0;
+    for (const i of farmerIds) {
         const p = s.players[i] || [];
-        let pw = 0;
-        for (let j = 0; j < p.length; j++) {
-            const v = p[j].value;
-            pw += 1 + (v >= 12 ? 3 : 0) + (v >= 11 ? 1 : 0);
-        }
-        if (mySide.includes(i)) { mine += p.length; myPower += pw; }
-        else { theirs += p.length; theirPower += pw; }
+        farmerTurns = Math.min(farmerTurns, _fastHandTurns(p));
+        farmerCards += p.length;
+        for (const c of p) farmerPower += 1 + (c.value >= 12 ? 3 : 0) + (c.value >= 11 ? 1 : 0);
     }
-    if (mine !== theirs) return mine < theirs;
-    if (myPower !== theirPower) return myPower > theirPower;
-    const myTurns = _sideTurnsEstimate(s.players, mySide);
-    const theirTurns = _sideTurnsEstimate(s.players, [0, 1, 2].filter(i => !mySide.includes(i)));
-    return myTurns <= theirTurns;
+    const lordHand = s.players[landlord] || [];
+    let lordCards = lordHand.length, lordPower = 0;
+    for (const c of lordHand) lordPower += 1 + (c.value >= 12 ? 3 : 0) + (c.value >= 11 ? 1 : 0);
+    const iAmLandlord = mySide.includes(landlord);
+    const myTurns = iAmLandlord ? lordTurns : farmerTurns;
+    const oppTurns = iAmLandlord ? farmerTurns : lordTurns;
+    const myCards = iAmLandlord ? lordCards : farmerCards;
+    const oppCards = iAmLandlord ? farmerCards : lordCards;
+    const myPower = iAmLandlord ? lordPower : farmerPower;
+    const oppPower = iAmLandlord ? farmerPower : lordPower;
+    if (myTurns !== oppTurns) {
+        // 连续值：领先 1 手 ≈ 0.34，领先 3 手及以上接近饱和
+        return Math.max(-1, Math.min(1, (oppTurns - myTurns) / 3));
+    }
+    if (myCards !== oppCards) return (myCards < oppCards) ? 0.2 : -0.2;
+    if (myPower !== oppPower) return (myPower > oppPower) ? 0.1 : -0.1;
+    return 0;
+}
+function _playoutTerminalEval(s, mySide) {
+    return _playoutTerminalScore(s, mySide) >= 0;
 }
 
 // ======================== MCTS ========================
@@ -2397,18 +2853,12 @@ class MCTSNode {
                         plays = noBomb;
                     }
                 }
+                // 「压牌幅度上限」的硬过滤已移除：
+                // 它会直接剪掉"必须用大牌压住才能保住结构"的正解。
+                // scorePlay 里本来就有 overshoot 惩罚（超大牌压小牌扣分），
+                // 改成软先验更安全：让搜索自己判断，而不是规则替它判断。
                 if (needBeat) {
-                    const minP = minBeatPower(st.lastPlay.type, st.lastPlay.value, st.lastPlay.length);
-                    const partnerLed = role === 'farmer' && st.lastPlayerId === partnerId;
-                    const maxOver = urgent ? 99 : (partnerLed ? 3 : (role === 'farmer' ? 4 : 5));
-                    const kept = plays.filter(p => {
-                        const t = playTypeOf(p);
-                        if (!t) return false;
-                        if (t.type === CardType.BOMB || t.type === CardType.ROCKET) return true;
-                        const pw = typePowerOf(t.type, t.value, t.length);
-                        return pw - minP <= maxOver;
-                    });
-                    if (kept.length) plays = kept;
+                    // 队友领出时，压牌幅度小的走法保留在分支里，但先验更低（见 _buildRootPriors）
                 }
             }
             if (needBeat) plays.push([]);
@@ -2494,19 +2944,21 @@ function mctsSearch(state, playerId, iterations, memory, timeLimit, opts) {
         let result;
         if (node.isTerminal) {
             let mySide = (playerId === node.state.landlord) ? [playerId] : [0,1,2].filter(i => i !== node.state.landlord);
-            result = node.state.players.some((p, i) => mySide.includes(i) && p && p.length === 0);
+            result = node.state.players.some((p, i) => mySide.includes(i) && p && p.length === 0) ? 1 : -1;
         } else {
-            result = heuristicPlayoutWithMode(node.state, node.playerToMove, playerId, memory, false);
+            // 连续值 [-1,1]（按"谁更接近走完"评估），比二值胜负信息量大得多：
+            // 二值时"赢"和"差一步就输"在统计上完全等价，搜索无法朝后者收敛。
+            result = heuristicPlayoutWithMode(node.state, node.playerToMove, playerId, memory, false, true);
         }
-        // 反向传播：每个节点记录"走到该节点的-player-的胜率"，
+        // 反向传播：每个节点记录"走到该节点的-player-的期望收益"，
         // 不同阵营的走法必须取反（否则 MCTS 会把对手也当成在帮己方走牌，搜索完全失效）。
         let mySide = (playerId === state.landlord) ? [playerId] : [0, 1, 2].filter(i => i !== state.landlord);
         let cur = node;
         while (cur && cur.parent) {
             const moverIsMySide = mySide.includes(cur.parent.playerToMove);
-            const winForMover = moverIsMySide ? result : !result;
+            const val = moverIsMySide ? result : -result;
             cur.visits++;
-            if (winForMover) cur.wins++;
+            cur.wins += val;
             cur = cur.parent;
         }
         if (root) root.visits++;
@@ -2525,37 +2977,51 @@ function mctsSearch(state, playerId, iterations, memory, timeLimit, opts) {
     return null;
 }
 // 跨 Worker / 跨世界聚合 MCTS 根统计，返回最稳健的走法。
+// 优先用「最小最大遗憾」聚合（各 Worker 已按自己的世界集合算好遗憾）；
+// 没有遗憾数据时退回「均值 − λ×标准差」。
 function selectPlayFromMctsAgg(entries, worlds, lambda) {
     const agg = new Map();
     for (const item of entries || []) {
         if (!item || !item.key) continue;
         let a = agg.get(item.key);
-        if (!a) { a = { visits: 0, wins: 0, play: item.play || [], rates: [] }; agg.set(item.key, a); }
+        if (!a) { a = { visits: 0, wins: 0, play: item.play || [], rates: [], regretW: 0, regretSum: 0, regretSq: 0, regretN: 0 }; agg.set(item.key, a); }
         a.visits += item.visits || 0;
         a.wins += item.wins || 0;
         if (Array.isArray(item.rates)) a.rates.push(...item.rates);
         else if (item.visits > 0) a.rates.push(item.wins / item.visits);
+        if (typeof item.meanRegret === 'number') {
+            const w = Math.max(1, item.visits || 1);
+            a.regretSum += item.meanRegret * w;
+            a.regretSq += (item.stdRegret || 0) * w;
+            a.regretW += w;
+            a.regretN++;
+        }
     }
     if (!agg.size) return null;
     let maxVisits = 0;
     for (const a of agg.values()) maxVisits = Math.max(maxVisits, a.visits);
-    let best = null, bestScore = -Infinity;
     const totalWorlds = Math.max(1, worlds || 1);
+    const lam = lambda === undefined ? 0.25 : lambda;
+    let best = null, bestScore = Infinity;
     for (const a of agg.values()) {
-        if (a.visits < Math.max(1, maxVisits * 0.1)) continue;
         const rate = a.visits > 0 ? a.wins / a.visits : 0;
-        let score = rate;
-        if (a.rates.length > 0) {
-            const mean = a.rates.reduce((x, y) => x + y, 0) / a.rates.length;
+        let score;
+        if (a.regretW > 0) {
+            const meanRegret = a.regretSum / a.regretW;
+            const stdRegret = a.regretSq / a.regretW;
+            const coverage = a.rates.length / totalWorlds;
+            score = meanRegret + lam * stdRegret + 0.5 * (1 - Math.min(1, coverage));
+        } else {
+            const mean = a.rates.length ? a.rates.reduce((x, y) => x + y, 0) / a.rates.length : rate;
             let std = 0;
             if (a.rates.length > 1) {
                 const variance = a.rates.reduce((x, y) => x + (y - mean) * (y - mean), 0) / a.rates.length;
                 std = Math.sqrt(variance);
             }
             const coverage = a.rates.length / totalWorlds;
-            score = mean - (lambda || 0.25) * std - 0.15 * (1 - coverage);
+            score = -(mean - lam * std - 0.15 * (1 - coverage));   // 越小越好
         }
-        if (score > bestScore) { bestScore = score; best = a.play; }
+        if (score < bestScore) { bestScore = score; best = a.play; }
     }
     if (best) return best;
     let top = null;
@@ -2595,35 +3061,264 @@ function _buildRootPriors(state, playerId, memory) {
     }).sort((a, b) => b.s - a.s);
     const map = new Map();
     const K = Math.min(scored.length, 12);
+    // 先验是「期望收益」的软先验（连续值语义，取值范围约 [-1,1]），
+    // 不是「胜率」—— 早期实现用 0.5~0.85 的胜率语义，在连续奖励下会过度乐观。
     // 过牌先验：角色协作（队友领出→倾向过牌；地主领出且未接近走完→倾向压牌）
     if (needBeat) {
         let partnerId = -1;
         if (role === 'farmer') for (let i = 0; i < 3; i++) if (i !== playerId && i !== state.landlord) { partnerId = i; break; }
         const lordRem = state.players[state.landlord] ? state.players[state.landlord].length : 17;
-        let passPrior = 0.5;
+        let passPrior = 0.12;
         if (role === 'farmer') {
-            if (state.lastPlayerId === partnerId) passPrior = (state.players[partnerId] && state.players[partnerId].length <= 2) ? 0.85 : 0.7;
-            else if (state.lastPlayerId === state.landlord) passPrior = lordRem <= 3 ? 0.8 : 0.22;
+            if (state.lastPlayerId === partnerId) passPrior = (state.players[partnerId] && state.players[partnerId].length <= 2) ? 0.22 : 0.16;
+            else if (state.lastPlayerId === state.landlord) passPrior = lordRem <= 3 ? 0.18 : 0.04;
         } else {
             const farmerRem = Math.min(
                 state.players[(playerId + 1) % 3] ? state.players[(playerId + 1) % 3].length : 17,
                 state.players[(playerId + 2) % 3] ? state.players[(playerId + 2) % 3].length : 17);
-            passPrior = farmerRem <= 2 ? 0.7 : 0.25;
+            passPrior = farmerRem <= 2 ? 0.16 : 0.05;
         }
         map.set('pass', passPrior);
     }
+    const minP = needBeat ? minBeatPower(state.lastPlay.type, state.lastPlay.value, state.lastPlay.length) : 0;
     for (let i = 0; i < scored.length; i++) {
         const key = scored[i].p.map(c => c.id).sort().join(',');
         const rank = Math.min(i, K);
-        map.set(key, 0.5 + 0.3 * (1 - rank / Math.max(1, K)));
+        let prior = 0.26 * (1 - rank / Math.max(1, K));
+        // 压牌幅度惩罚（替代原先的硬过滤）：用大牌硬压小牌要扣先验
+        if (needBeat) {
+            const t = getCardType(scored[i].p);
+            if (t && t.type !== CardType.BOMB && t.type !== CardType.ROCKET) {
+                const over = typePowerOf(t.type, t.value, t.length) - minP;
+                if (over > 0) prior -= Math.min(0.2, over * 0.02);
+            }
+        }
+        map.set(key, Math.max(-0.2, prior));
     }
     return map;
+}
+
+// ======================== ISMCTS（信息集 MCTS / 再确定性化） ========================
+// PIMC（每个世界各搜一棵树再平均）的两个经典缺陷：
+//   ① strategy fusion：不同世界的最优动作不同，均值/惩罚会把"哪个世界都不最优"的走法选出来；
+//   ② 每个世界单独建树 → 搜索深度被世界数摊薄。
+//
+// ISMCTS 把树建在「信息集」上：
+//   · 我方节点的动作选择**跨世界共享统计** → "这个动作在所有世界都站得住"由树结构保证；
+//   · 对手节点是「随机节点」：每次迭代在当前世界里按策略模型抽一个对手动作；
+//   · 每次迭代重新确定性化（从世界池里抽一个世界），避免在单个世界上过拟合。
+//
+// 世界池是预采样的（不是每次迭代都重采），否则采样开销会淹没搜索本身。
+class ISMCTSNode {
+    constructor(play, playerToMove, parent, key) {
+        this.play = play;
+        this.playerToMove = playerToMove;
+        this.parent = parent || null;
+        this.key = key;
+        this.visits = 0;
+        this.value = 0;
+        this.children = new Map();
+    }
+}
+function _ismctsSelectMyChild(node, C) {
+    let best = null, bestScore = -Infinity;
+    const logN = Math.log(Math.max(2, node.visits));
+    for (const child of node.children.values()) {
+        if (child.visits === 0) return child;      // 未访问优先
+        const mean = child.value / child.visits;
+        const score = mean + C * Math.sqrt(logN / child.visits);
+        if (score > bestScore) { bestScore = score; best = child; }
+    }
+    return best;
+}
+// 对手动作模型：在当前世界里按启发式策略选一个动作（90% 最优 / 10% 次优，模拟对手的不确定性）
+function _ismctsOpponentMove(st, cp) {
+    const hand = st.players[cp];
+    if (!hand || !hand.length) return [];
+    const needBeat = st.lastPlay && st.lastPlayerId !== cp;
+    const plays = needBeat ? getAllValidPlays(hand, st.lastPlay) : getAllValidPlays(hand, null);
+    if (!plays.length) return [];
+    let best = null, bestScore = -Infinity, second = null, secondScore = -Infinity;
+    for (const p of plays) {
+        const t = playTypeOf(p);
+        if (!t) continue;
+        let sc = p.length * 4 - typePowerOf(t.type, t.value, t.length) * 0.25;
+        if (t.type === CardType.STRAIGHT || t.type === CardType.STRAIGHT_PAIR || t.type === CardType.PLANE) sc += 8;
+        if (t.type === CardType.BOMB || t.type === CardType.ROCKET) sc -= 60;
+        if (!needBeat) {
+            const nextCards = (st.players[(cp + 1) % 3] && st.players[(cp + 1) % 3].length) || 0;
+            if (nextCards <= 2) {
+                if (p.length >= 3) sc += 35;
+                else if (p.length === 1 && nextCards <= 1) sc -= 90 - Math.min(typePowerOf(t.type, t.value, t.length), 20);
+            }
+        }
+        if (sc > bestScore) { second = best; secondScore = bestScore; best = p; bestScore = sc; }
+        else if (sc > secondScore) { second = p; secondScore = sc; }
+    }
+    if (!best) return [];
+    if (second && Math.random() < 0.1) return second;
+    return best;
+}
+function mctsSearchISMCTS(state, playerId, belief, opts) {
+    opts = opts || {};
+    const determin = isDeterministicSearch();
+    const iterations = determin
+        ? Math.max(1, cfg('search.mctsIterations') || 300)
+        : (opts.iterations || cfg('mcts.iterations.hard') || 600);
+    const budgetMs = opts.timeBudgetMs !== undefined ? opts.timeBudgetMs : (cfg('blind.mctsTimeBudgetMs.hard') || 1000);
+    const deadline = determin ? 0 : (Date.now() + budgetMs);
+    const memory = opts.memory || null;
+    const worldQuality = Math.max(1, opts.worldQuality || (cfg('blind.worldQuality.' + (opts.difficulty || 'hard')) || 1));
+    const priors = (cfg('blind.mctsRootPriors.' + (opts.difficulty || 'hard')) !== 0) ? _buildRootPriors(state, playerId, memory) : null;
+    const C = cfg('mcts.ucbC') || 1.4;
+    const hand = state.players[playerId];
+    if (!hand || !hand.length) return null;
+    const needBeatRoot = state.lastPlay && state.lastPlayerId !== playerId;
+    const rootCandidates = needBeatRoot ? getAllValidPlays(hand, state.lastPlay) : getAllValidPlays(hand, null);
+    if (!rootCandidates.length) return null;
+    const root = new ISMCTSNode(null, state.currentPlayer, null, 'root');
+    const keyOfPlay = (p) => (p && p.length) ? p.map(c => c.id).sort().join(',') : 'pass';
+    const unexpanded = rootCandidates.map(p => ({ play: p, key: keyOfPlay(p) }));
+    if (needBeatRoot) unexpanded.push({ play: [], key: 'pass' });
+    // 根节点必须先把所有候选各展开一次，否则 UCB 会一直挑同一个高值子节点，
+    // 整棵树退化成贪心（其余根走法从未被评估过）。
+    const rootUnexpanded = unexpanded.slice();
+    // 世界池：预采样若干世界，迭代时轮换使用（避免每次迭代都重采导致开销爆炸）
+    const poolSize = Math.max(1, opts.worlds || cfg('blind.worlds.mcts.' + (opts.difficulty || 'hard')) || 3);
+    const worldPool = [];
+    for (let i = 0; i < poolSize; i++) worldPool.push(belief.sampleWorld(worldQuality));
+    const mySide = (playerId === state.landlord) ? [playerId] : [0, 1, 2].filter(i => i !== state.landlord);
+    const maxSteps = 36;
+
+    for (let it = 0; it < iterations; it++) {
+        if (!determin && Date.now() > deadline) break;
+        const worldPlayers = worldPool[it % worldPool.length];
+        const st = Object.assign({}, state, { players: worldPlayers.map(p => p.map(c => ({ ...c }))) });
+        const path = [];
+        let node = root;
+        let result = 0;
+        let steps = 0;
+        while (steps < maxSteps) {
+            steps++;
+            let ended = false;
+            for (let i = 0; i < 3; i++) {
+                if (!st.players[i] || st.players[i].length === 0) {
+                    result = mySide.includes(i) ? 1 : -1;
+                    ended = true;
+                    break;
+                }
+            }
+            if (ended) break;
+            const cp = node.playerToMove;
+            let child = null;
+            if (cp === playerId) {
+                if (node === root && rootUnexpanded.length) {
+                    // 根节点轮转展开：保证每个候选都被至少评估一次
+                    const pick = rootUnexpanded.shift();
+                    child = new ISMCTSNode(pick.play, (cp + 1) % 3, node, pick.key);
+                    node.children.set(pick.key, child);
+                    if (priors) {
+                        const pr = priors.get(pick.key);
+                        if (pr !== undefined && pr !== null) {
+                            child.visits += MCTS_PRIOR_VISITS;
+                            child.value += MCTS_PRIOR_VISITS * pr;
+                        }
+                    }
+                } else {
+                    child = _ismctsSelectMyChild(node, C);
+                    if (!child) {
+                        if (!unexpanded.length) break;
+                        const pick = unexpanded.shift();
+                        child = new ISMCTSNode(pick.play, (cp + 1) % 3, node, pick.key);
+                        node.children.set(pick.key, child);
+                        if (priors) {
+                            const pr = priors.get(pick.key);
+                            if (pr !== undefined && pr !== null) {
+                                child.visits += MCTS_PRIOR_VISITS;
+                                child.value += MCTS_PRIOR_VISITS * pr;
+                            }
+                        }
+                    }
+                }
+            } else {
+                const move = _ismctsOpponentMove(st, cp);
+                const key = keyOfPlay(move);
+                child = node.children.get(key);
+                if (!child) {
+                    child = new ISMCTSNode(move || [], (cp + 1) % 3, node, key);
+                    node.children.set(key, child);
+                }
+            }
+            const chosen = child.play;
+            path.push(child);
+            if (!chosen || !chosen.length) {
+                st.passCount = (st.passCount || 0) + 1;
+            } else {
+                const ids = new Set(chosen.map(c => c.id));
+                st.players[cp] = st.players[cp].filter(c => !ids.has(c.id));
+                st.lastPlay = getCardType(chosen);
+                st.lastPlayerId = cp;
+                st.passCount = 0;
+            }
+            if (st.passCount >= 2) { st.lastPlay = null; st.lastPlayerId = -1; st.passCount = 0; }
+            st.currentPlayer = (cp + 1) % 3;
+            node = child;
+            if (steps >= maxSteps) { result = heuristicPlayoutWithMode(st, st.currentPlayer, playerId, memory, false, true); break; }
+        }
+        if (!result) result = heuristicPlayoutWithMode(st, st.currentPlayer, playerId, memory, false, true);
+        for (let i = path.length - 1; i >= 0; i--) {
+            const n = path[i];
+            const moverIsMySide = n.parent ? mySide.includes(n.parent.playerToMove) : true;
+            n.visits++;
+            n.value += moverIsMySide ? result : -result;
+        }
+        root.visits++;
+    }
+    let best = null, bestScore = -Infinity;
+    const logN = Math.log(Math.max(2, root.visits));
+    for (const child of root.children.values()) {
+        if (child.visits < 2) continue;
+        const mean = child.value / child.visits;
+        const score = mean - Math.sqrt(logN / child.visits);   // 保守下界（少访问的惩罚更重）
+        if (score > bestScore) { bestScore = score; best = child; }
+    }
+    if (!best) {
+        const first = root.children.values().next().value;
+        best = first || null;
+    }
+    if (!best) return null;
+    const play = best.play;
+    if (!play.length && !needBeatRoot) return null;
+    const rate = best.visits > 0 ? best.value / best.visits : 0;
+    const result = { play, visits: best.visits, wins: Math.round(rate * best.visits) };
+    // 根节点统计 → agg（跨 Worker 聚合需要同样的数据结构）
+    if (opts.collectAll) {
+        const entries = [];
+        for (const child of root.children.values()) {
+            if (!child.visits) continue;
+            entries.push({
+                key: child.key, visits: child.visits, wins: Math.round(child.value),
+                play: child.play, rates: [child.value / child.visits],
+                meanRegret: 0, stdRegret: 0, coverage: 1
+            });
+        }
+        if (entries.length) result.agg = entries;
+    }
+    return result;
 }
 
 function mctsSearchBlind(state, playerId, belief, opts) {
     opts = opts || {};
     const hand = state.players[playerId];
-    if (!hand || hand.length === 0) return null;
+    if (!hand || !hand.length) return null;
+    // 搜索模式：'pimc' = 每世界各搜一棵树再聚合；'ismcts' = 信息集共享树（再确定性化）
+    const mode = opts.mode || cfg('blind.mctsMode') || 'pimc';
+    if (mode === 'ismcts') {
+        try {
+            const r = mctsSearchISMCTS(state, playerId, belief, opts);
+            if (r && Array.isArray(r.play)) return r;
+        } catch (e) { /* 回退到 PIMC */ }
+    }
     const determin = isDeterministicSearch();
     const worlds = determin ? Math.max(1, cfg('search.mctsWorlds') || 4) : Math.max(1, opts.worlds || 3);
     const iterations = determin
@@ -2632,16 +3327,18 @@ function mctsSearchBlind(state, playerId, belief, opts) {
     const budgetMs = opts.timeBudgetMs !== undefined ? opts.timeBudgetMs : (cfg('blind.mctsTimeBudgetMs.hard') || 1000);
     const deadline = determin ? 0 : (Date.now() + budgetMs);
     const memory = opts.memory || null;
+    const worldQuality = Math.max(1, opts.worldQuality || (cfg('blind.worldQuality.' + (opts.difficulty || 'hard')) || 1));
     const priors = (cfg('blind.mctsRootPriors.' + (opts.difficulty || 'hard')) !== 0) ? _buildRootPriors(state, playerId, memory) : null;
     if (priors && opts.leadPref && opts.leadPref.length) {
         const lk = opts.leadPref.map(c => c.id).sort().join(',');
-        priors.set(lk, Math.max(priors.get(lk) || 0, 0.82));
+        priors.set(lk, Math.max(priors.get(lk) || 0, 0.3));
     }
     const lambda = opts.robustness !== undefined ? opts.robustness : (cfg('blind.robustness') !== undefined ? cfg('blind.robustness') : 0.25);
     const agg = new Map();
+    const worldAgg = [];   // 每个世界一份根统计（用于计算"遗憾"）
     for (let w = 0; w < worlds; w++) {
         if (!determin && Date.now() > deadline) break;
-        const worldPlayers = belief.sampleWorld();
+        const worldPlayers = belief.sampleWorld(worldQuality);
         const worldState = Object.assign({}, state, { players: worldPlayers });
         const remainMs = deadline - Date.now();
         const perWorldTime = determin ? 1e9 : Math.max(50, Math.floor(remainMs / Math.max(1, worlds - w)));
@@ -2650,34 +3347,55 @@ function mctsSearchBlind(state, playerId, belief, opts) {
             res = mctsSearch(worldState, playerId, iterations, memory, perWorldTime, { collectStats: true, rootPriors: priors });
         } catch (e) { res = null; }
         if (!res || !res.stats) continue;
+        const wmap = new Map();
+        let wMax = -Infinity;
+        for (const [key, e] of res.stats) {
+            const rate = e.visits > 0 ? e.wins / e.visits : 0;
+            wmap.set(key, rate);
+            if (rate > wMax) wMax = rate;
+        }
+        worldAgg.push({ map: wmap, max: wMax });
         for (const [key, e] of res.stats) {
             let a = agg.get(key);
-            if (!a) { a = { visits: 0, wins: 0, play: e.play, rates: [] }; agg.set(key, a); }
+            if (!a) { a = { visits: 0, wins: 0, play: e.play, rates: [], regrets: [] }; agg.set(key, a); }
             a.visits += e.visits;
             a.wins += e.wins;
-            if (e.visits > 0) a.rates.push(e.wins / e.visits);   // 每个世界里的胜率，用于稳健聚合
+            if (e.visits > 0) a.rates.push(e.wins / e.visits);   // 每个世界里的期望收益
         }
     }
     if (!agg.size) return null;
-    let maxVisits = 0;
-    for (const a of agg.values()) maxVisits = Math.max(maxVisits, a.visits);
-    // 跨世界稳健聚合：均值 − λ×标准差（压制"赌对了某个世界"的走法），并对覆盖世界数不足的走法降权
-    let best = null, bestScore = -Infinity, bestRate = 0;
+    // ===== 跨世界聚合：最小最大遗憾（minimax regret）=====
+    //
+    // 旧做法是「均值 − λ×标准差」，属于 PIMC 的经典缺陷：
+    // 当世界 W1 里最优走法是 A、世界 W2 里最优走法是 B 时，均值会把 A/B 都平庸的
+    // C 选出来（strategy fusion）。遗憾聚合直接问："这个走法在每个世界里
+    // 离该世界的最优走法差多少"，再最小化平均遗憾 —— 天然惩罚"只在某个世界好"的走法。
+    const worldCount = Math.max(1, worldAgg.length);
+    let best = null, bestScore = Infinity, bestRate = 0;
     for (const a of agg.values()) {
-        if (a.visits < Math.max(1, maxVisits * 0.1)) continue;
         const rate = a.visits > 0 ? a.wins / a.visits : 0;
-        let score = rate;
-        if (a.rates.length > 0) {
-            const mean = a.rates.reduce((x, y) => x + y, 0) / a.rates.length;
-            let std = 0;
-            if (a.rates.length > 1) {
-                const variance = a.rates.reduce((x, y) => x + (y - mean) * (y - mean), 0) / a.rates.length;
-                std = Math.sqrt(variance);
+        let meanRegret = 0, stdRegret = 0, covered = 0;
+        if (worldAgg.length) {
+            const regrets = [];
+            for (const wa of worldAgg) {
+                const r = wa.map.get(keyOfPlay(a.play));
+                if (r === undefined) { regrets.push(wa.max - (-1)); continue; }  // 该世界没搜到 → 按最差算
+                regrets.push(Math.max(0, wa.max - r));
+                covered++;
             }
-            const coverage = a.rates.length / Math.max(1, worlds);
-            score = mean - lambda * std - 0.15 * (1 - coverage);
+            meanRegret = regrets.reduce((x, y) => x + y, 0) / regrets.length;
+            if (regrets.length > 1) {
+                const varr = regrets.reduce((x, y) => x + (y - meanRegret) * (y - meanRegret), 0) / regrets.length;
+                stdRegret = Math.sqrt(varr);
+            }
         }
-        if (score > bestScore) { bestScore = score; best = a.play; bestRate = rate; }
+        a.meanRegret = meanRegret;
+        a.stdRegret = stdRegret;
+        a.coverage = covered / worldCount;
+    }
+    for (const [key, a] of agg.entries()) {
+        const score = a.meanRegret + lambda * a.stdRegret + 0.5 * (1 - a.coverage);
+        if (score < bestScore) { bestScore = score; best = a.play; bestRate = a.visits > 0 ? a.wins / a.visits : 0; }
     }
     if (!best) {
         let top = null;
@@ -2688,15 +3406,25 @@ function mctsSearchBlind(state, playerId, belief, opts) {
     if (!best) return null;
     const needBeatRoot = state.lastPlay && state.lastPlayerId !== playerId;
     if (best.length > 0 || needBeatRoot) {
-        const result = { play: best, visits: maxVisits, wins: Math.round(bestRate * maxVisits) };
+        const result = { play: best, visits: maxVisitsFor(agg), wins: Math.round(bestRate * maxVisitsFor(agg)) };
         if (opts.collectAll) {
             result.agg = [...agg.entries()].map(([key, a]) => ({
-                key, visits: a.visits, wins: a.wins, play: a.play, rates: a.rates
+                key, visits: a.visits, wins: a.wins, play: a.play, rates: a.rates,
+                meanRegret: a.meanRegret, stdRegret: a.stdRegret, coverage: a.coverage
             }));
         }
         return result;
     }
     return null;
+}
+function keyOfPlay(play) {
+    if (!play || !play.length) return 'pass';
+    return play.map(c => c.id).sort().join(',');
+}
+function maxVisitsFor(agg) {
+    let m = 0;
+    for (const a of agg.values()) if (a.visits > m) m = a.visits;
+    return m;
 }
 
 // ======================== 迷你 AI 引擎 (纯计算版) ========================
@@ -2770,7 +3498,7 @@ class AICore {
                 if (bid <= curr) continue;
                 let wins = 0;
                 for (let i = 0; i < trials; i++) {
-                    const worldPlayers = belief.sampleWorld();
+                    const worldPlayers = belief.sampleWorld(Math.max(1, cfg('blind.worldQuality.' + this.difficulty) || 2));
                     // worldPlayers[this.id] 已经是"我当地主 + 拿底牌"后的 20 张手牌
                     const rs = Object.assign({}, state, {
                         landlord: this.id,
@@ -2799,7 +3527,53 @@ class AICore {
         if (strength > (ct.one || 20) && curr < 1) return 1;
         return 0;
     }
+    // ===== 唯一出口守卫 =====
+    // 所有分支（残局 / MCTS / 领出 / 跟牌 / 封锁）最终都必须给出「合法走法」：
+    // 即属于 getAllValidPlays(hand, lastPlay) 的元素，或者（跟随时的）过牌。
+    // 这里统一校验一次：不合法就打印诊断并回退到合法选择，绝不让非法走法流到上层
+    // （上层会把整局判为 ILLEGAL_PLAY 作废，白白丢掉一局评测数据）。
     playDecision(state) {
+        let play;
+        try { play = this._playDecisionImpl(state); }
+        catch (e) {
+            if (typeof console !== 'undefined') console.warn('[AI] playDecision threw:', e && e.message);
+            play = [];
+        }
+        if (!Array.isArray(play)) play = [];
+        const hand = (state && state.players && state.players[this.id]) || [];
+        const needBeat = !!(state && state.lastPlay && state.lastPlayerId !== this.id);
+        // 与上层校验口径**完全一致**：上层永远用 state.lastPlay 过滤（不管是否需要跟牌）
+        let legalPlays = [];
+        try { legalPlays = getAllValidPlays(hand, state.lastPlay); } catch (e) { legalPlays = []; }
+        if (play.length > 0) {
+            let legal = false;
+            try {
+                const ids = new Set(play.map(c => c && c.id));
+                legal = ids.size === play.length &&
+                    legalPlays.some(p => p.length === play.length && p.every(c => ids.has(c.id)));
+            } catch (e) { legal = false; }
+            if (!legal) {
+                if (typeof console !== 'undefined') {
+                    console.warn('[AI] illegal play blocked:', JSON.stringify({
+                        seat: this.id, diff: this.difficulty, needBeat,
+                        len: play.length, ids: play.map(c => c && c.id),
+                        type: (getCardType(play) || {}).type || null,
+                        handLen: hand.length,
+                        lastPlay: state.lastPlay ? (state.lastPlay.type + ':' + state.lastPlay.value) : null
+                    }));
+                }
+                play = [];
+            }
+        }
+        // 过牌只有在「需要跟牌」时才合法；领出方必须给出一手牌
+        if (play.length === 0 && !needBeat && legalPlays.length) {
+            try {
+                play = this.selectLeadSmart(legalPlays, (this.id === state.landlord) ? 'landlord' : 'farmer', hand, state, null) || legalPlays[0];
+            } catch (e) { play = legalPlays[0] || []; }
+        }
+        return play;
+    }
+    _playDecisionImpl(state) {
         this.lastReasoning = null;
         let hand = [...state.players[this.id]];
         if (hand.length === 0) return [];
@@ -2824,6 +3598,7 @@ class AICore {
         if (hand.length <= endgameLimit) {
             let egResult = solveEndgameBlind(state, this.id, belief, {
                 worlds: cfg('blind.worlds.endgame.' + this.difficulty) || 4,
+                worldQuality: cfg('blind.worldQuality.' + this.difficulty) || 1,
                 timeBudgetMs: this.budgetMs('blind.endgameTimeBudgetMs.' + this.difficulty, 600),
                 memory: this.memory
             });
@@ -2872,6 +3647,23 @@ class AICore {
         }
         let beatable = getAllValidPlays(hand, lastPlay);
         if (beatable.length === 0) { this._recordReasoning([], 'rule', []); return []; }
+        // ===== 绝杀封锁：下家（对手）只剩 1 张 = 他再拿到一次出牌机会就赢了 =====
+        // 用「对手绝对压不住」的单张（value > 记牌器算出的对手最大可能牌）堵住他这一手，
+        // 他只能过牌，我们就多买到一个回合。对手只剩 1 张时不可能握有炸弹，封锁是确定的。
+        {
+            const nextP = (state.currentPlayer + 1) % 3;
+            const nextHand = state.players[nextP] || [];
+            const nextIsOpp = role === 'farmer' ? nextP === state.landlord : nextP !== state.landlord;
+            if (nextIsOpp && nextHand.length === 1 && lastPlay && lastPlay.type === CardType.SINGLE) {
+                let maxOut = 0;
+                try { maxOut = this.memory.getMaxOutside(hand); } catch (e) { maxOut = 0; }
+                const blocker = beatable.find(p => p.length === 1 && p[0].value > maxOut);
+                if (blocker) {
+                    this._recordReasoning(blocker, 'block', []);
+                    return blocker;
+                }
+            }
+        }
         let simWorlds = Math.max(1, cfg('blind.worlds.sim.' + this.difficulty) || 3);
         let simCache = null;
         let simDepth = cfg('simulation.depth.' + this.difficulty) || 0;
@@ -2884,7 +3676,8 @@ class AICore {
         const _structScore = (newHand) => {
             if (!newHand || newHand.length === 0) return 60;
             if (newHand.length > 12) return 0;
-            let plan = newHand.length <= 15 ? decomposeHandDP(newHand) : greedyDecompose(newHand);
+            // 拆牌已改为"点数计数 + 最少手数"目标，>15 张也能算（不再退化成贪心）
+            let plan = decomposeHandDP(newHand);
             let turns = plan && plan.plays ? plan.plays.length : newHand.length;
             let feats = extractHandFeatures(newHand);
             return 50 - turns * 2.5 - feats.single * 1.5;
@@ -2943,7 +3736,15 @@ class AICore {
             const _isBombRocket = _topType && (_topType.type === CardType.BOMB || _topType.type === CardType.ROCKET);
             const _oppClose = (state.lastPlayerId >= 0 && state.players[state.lastPlayerId]
                 ? state.players[state.lastPlayerId].length : 17) <= 2;
-            if (!_isBombRocket && (_gap < 0 || (_oppClose && _gap < 18))) {
+            // 信念修正：若对手很可能压住我方这手跟牌 → 跟牌多半是送牌+丢控制权 → 倾向过牌
+            let _likelyBeaten = false;
+            try {
+                if (state.lastPlayerId >= 0 && state.lastPlayerId !== this.id) {
+                    const _bp = belief.beatProbability(_bestEntry.play, state.lastPlayerId, state);
+                    _likelyBeaten = _bp > 0.5;
+                }
+            } catch (e) { _likelyBeaten = false; }
+            if (!_isBombRocket && (_gap < 0 || (_oppClose && _gap < 18) || (_likelyBeaten && _gap < 25))) {
                 this._recordReasoning([], 'macro_pass', scored.map(s => ({ play: s.play, score: s.score, chosen: s.play.length === 0 })));
                 return [];
             }
@@ -3023,9 +3824,13 @@ class AICore {
         const oppCounts = [0,1,2].filter(i => i !== landlordId).map(countOf);
         const minOpp = Math.min.apply(null, oppCounts);
         // 手里有"结构牌"(顺子/连对/飞机)时优先成组出，别一张一张地磨
-        const plan = handLen <= 17 ? (handLen <= 15 ? decomposeHandDP(hand) : greedyDecompose(hand)) : null;
+        // 拆牌已支持全部手牌数（点数计数 + 最少手数），不再对 >15 张退化
+        const plan = decomposeHandDP(hand);
         const planKeys = new Set();
         if (plan && plan.plays) for (const pl of plan.plays) planKeys.add(pl.map(c=>c.id).sort().join(','));
+        // 对手手里可能还留着的最大牌（记牌器口径）：用它判断"这手牌能不能守住"
+        let maxOutside = 0;
+        try { maxOutside = this.memory && this.memory.getMaxOutside ? this.memory.getMaxOutside(hand) : 0; } catch (e) { maxOutside = 0; }
         const leadScore = (p) => {
             const t = getCardType(p);
             if (!t) return -1e9;
@@ -3036,7 +3841,9 @@ class AICore {
                 t.type === CardType.PLANE || t.type === CardType.PLANE_WITH_SINGLE || t.type === CardType.PLANE_WITH_PAIR) sc += 8;
             if (t.type === CardType.TRIPLE_WITH_SINGLE || t.type === CardType.TRIPLE_WITH_PAIR) sc += 4;
             if (p.length === handLen) sc += 400;
-            if (planKeys.has(p.map(c=>c.id).sort().join(','))) sc += 10;
+            if (planKeys.has(p.map(c=>c.id).sort().join(','))) sc += 14;
+            // 控制权奖励：这手牌对手压不住 → 下一轮还是我方领出（斗地主的硬通货）
+            if (power > maxOutside && t.type !== CardType.BOMB && t.type !== CardType.ROCKET) sc += 26;
             return sc;
         };
         const fullHouse = plays.find(p => p.length === handLen);
@@ -3074,10 +3881,17 @@ class AICore {
             let sc = leadScore(p);
             if (role === 'farmer') {
                 // 农民：地主在下一位时优先"便宜"的牌，别替地主拆大牌
-                if (nextId === landlordId) sc = p.length * 8 - getPlayPower(p) * 0.9;
+                if (nextId === landlordId) {
+                    // 相对评分（保留"压得住"的控制权收益，否则会无脑送小牌）
+                    const t2 = getCardType(p);
+                    const control = (getPlayPower(p) > maxOutside &&
+                        t2 && t2.type !== CardType.BOMB && t2.type !== CardType.ROCKET) ? 40 : 0;
+                    sc = p.length * 8 - getPlayPower(p) * 0.9 + control;
+                }
+                // 小单张（2/3）喂给地主：重罚（地主越接近走完，喂牌越致命）
                 if (nextId === landlordId && p.length === 1 && p[0] && p[0].value <= 3) {
                     let _tinyPenalty = cfg('leadAdjust.farmerTinySingleVsLandlord');
-                    if (typeof _tinyPenalty !== 'number') _tinyPenalty = 1000;
+                    if (typeof _tinyPenalty !== 'number') _tinyPenalty = 320;
                     sc -= _tinyPenalty;
                 }
                 // 队友牌多时不要单张磨蹭，尽量成组出

@@ -15,7 +15,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon.png">
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
     <meta name="theme-color" content="#1a1a2e">
-    <meta name="app-version" content="v86">
+    <meta name="app-version" content="v87">
     <meta name="description" content="像素风格斗地主：单机公平 AI 对战 + P2P 联机，离线可玩">
     <style>
         * { image-rendering: pixelated; font-family: 'Press Start 2P', cursive; -webkit-tap-highlight-color: transparent; touch-action: manipulation; box-sizing: border-box; }
@@ -829,12 +829,27 @@
         div.style.boxShadow = '1px 1px 0 rgba(0,0,0,0.35)';
         let rk = Math.max(11, Math.round(size * 0.44));
         let st = Math.max(9, Math.round(size * 0.30));
+        // 用 textContent 而不是 innerHTML：card.rank / card.suit 来自联机对端，
+        // 伪造的字符串若直接拼进 innerHTML 就是 XSS。
+        let corner = document.createElement('div');
+        corner.className = 'corner';
+        let rkSpan = document.createElement('span');
+        rkSpan.className = 'rk';
+        rkSpan.style.fontSize = rk + 'px';
+        let stSpan = document.createElement('span');
+        stSpan.className = 'st';
+        stSpan.style.fontSize = st + 'px';
         if (card.suit === 'JOKER') {
-            div.innerHTML = `<div class="corner"><span class="rk" style="font-size:${rk}px">${card.rank==='大王'?'大':'小'}</span><span class="st" style="font-size:${st}px">王</span></div>`;
+            rkSpan.textContent = card.rank==='大王'?'大':'小';
+            stSpan.textContent = '王';
             if (card.rank === '大王') div.style.background = '#ffebee';
         } else {
-            div.innerHTML = `<div class="corner"><span class="rk" style="font-size:${rk}px">${card.rank}</span><span class="st" style="font-size:${st}px">${card.suit}</span></div>`;
+            rkSpan.textContent = String(card.rank == null ? '' : card.rank);
+            stSpan.textContent = String(card.suit == null ? '' : card.suit);
         }
+        corner.appendChild(rkSpan);
+        corner.appendChild(stSpan);
+        div.appendChild(corner);
         return div;
     }
     function renderPlayedCards(cards) {
@@ -926,7 +941,18 @@
                     GameState.processing = false;
                     clearTimer();
                     setAiThinkingHint(id, false);
-                    executePlayCards(id, cards || []);
+                    // executePlayCards 会做"能否压过"的第三重校验；
+                    // 若 AI 给了一个压不住的走法 → 退化为过牌，而不是把状态机写坏
+                    let ok = executePlayCards(id, cards || []);
+                    if (!ok && cards && cards.length > 0) {
+                        if (!executePlayCards(id, [])) {
+                            // 极端情况：过牌也不合法（领出方）→ 随便出一手合法牌，避免卡死
+                            try {
+                                const valid = getAllValidPlays(GameState.players[id] || [], null);
+                                if (valid && valid.length) executePlayCards(id, valid[valid.length - 1]);
+                            } catch (e) {}
+                        }
+                    }
                 };
                 let result = ai.think('play', GameState);
                 if (result && typeof result.then === 'function') result.then(processResult).catch(() => processResult([]));
@@ -991,7 +1017,6 @@
     function executePlayCards(player, cards) {
         if (Array.isArray(GameState.takeoverStarted)) GameState.takeoverStarted[player] = false;
         clearTimer();
-        updateActionLog(player, cards);
         let isPlay = (cards && cards.length > 0);
         // 领出方过牌非法
         if (!isPlay && (!GameState.lastPlay || GameState.lastPlayerId === player)) {
@@ -999,21 +1024,42 @@
             return false;
         }
         if (!isPlay) {
+            updateActionLog(player, cards);
             GameState.passCount++;
             GameState.lastPassIdx = player;
             document.getElementById('lastPlayer').textContent = getPlayerName(player) + ' 不出';
             speakNow(getPlayerName(player) + ' 不出');
         } else {
-            // 验证牌是否在手中
-            let handIds = new Set(GameState.players[player].map(c => c.id));
-            if (!cards.every(c => handIds.has(c.id))) {
-                showToast('非法出牌：包含不在手中的牌');
-                return false;
+            // 牌型必须用「本方手牌里的真实牌对象」重新解析：
+            // 联机对端可以伪造 {id, value, rank, suit}，只校验 id 归属会让伪造的 value
+            // 参与牌型判定（伪造炸弹/王炸），伪造的 rank/suit 还会进 innerHTML（XSS），
+            // 并污染 MasterMemory 记牌器（value 被用于减牌数）。
+            let hand = GameState.players[player] || [];
+            let byId = new Map();
+            for (const c of hand) byId.set(c.id, c);
+            let realCards = [];
+            for (const c of cards) {
+                let real = c && byId.get(c.id);
+                if (!real) {
+                    showToast('非法出牌：包含不在手中的牌');
+                    return false;
+                }
+                realCards.push(real);
             }
-            let type = getCardType(cards);
+            updateActionLog(player, realCards);
+            let type = getCardTypeWithCards(realCards);
             // 非法牌型：直接忽略，绝不当作"过牌"处理（否则伪造出牌者白送一次 pass，污染状态机）
             if (!type) { showToast('牌型非法'); return false; }
-            let playedIds = new Set(cards.map(c => c.id));
+            // 第三重校验：能否压过上一手。
+            // 出牌执行是唯一的状态变更入口 → 所有调用方（本地玩家 / AI / 联机对端）都在这里收口，
+            // 否则 AI 返回一个压不住的走法就会把状态机写坏（lastPlay 变成不可压）。
+            if (GameState.lastPlay && GameState.lastPlayerId !== player) {
+                if (!canBeat(type, GameState.lastPlay)) {
+                    showToast('需要大过上一手');
+                    return false;
+                }
+            }
+            let playedIds = new Set(realCards.map(c => c.id));
             GameState.players[player] = GameState.players[player].filter(c => !playedIds.has(c.id));
             GameState.lastPlay = type;
             GameState.lastPlayerId = player;
@@ -1033,12 +1079,12 @@
             } else {
                 playSound('play');
             }
-            if (GameState.cardMemory) GameState.cardMemory.recordPlayerPlay(player, cards);
-            displayPlayed(cards);
-            speakPlay(cards);
+            if (GameState.cardMemory) GameState.cardMemory.recordPlayerPlay(player, realCards);
+            displayPlayed(realCards);
+            speakPlay(realCards);
             if (player !== GameState.myIndex) {
-                document.getElementById('lastPlayer').textContent = getPlayerName(player) + ': ' + describePlay(cards);
-                showToast(getPlayerName(player) + ': ' + describePlay(cards));
+                document.getElementById('lastPlayer').textContent = getPlayerName(player) + ': ' + describePlay(realCards);
+                showToast(getPlayerName(player) + ': ' + describePlay(realCards));
             }
             
             if (player === GameState.myIndex) renderPlayerHand();
@@ -1146,10 +1192,35 @@
         div.className += isRed ? ' suit-red' : ' suit-black';
         if (card.suit === 'JOKER') {
             let ch = card.rank === '大王' ? '大' : '小';
-            div.innerHTML = `<div class="corner"><span class="rk" style="font-size:${rankSize}px">${ch}</span><span class="st" style="font-size:${suitSize}px">王</span></div>`;
+            let corner = document.createElement('div');
+            corner.className = 'corner';
+            let rkSpan = document.createElement('span');
+            rkSpan.className = 'rk';
+            rkSpan.style.fontSize = rankSize + 'px';
+            rkSpan.textContent = ch;
+            let stSpan = document.createElement('span');
+            stSpan.className = 'st';
+            stSpan.style.fontSize = suitSize + 'px';
+            stSpan.textContent = '王';
+            corner.appendChild(rkSpan);
+            corner.appendChild(stSpan);
+            div.appendChild(corner);
             if (card.rank === '大王') div.style.background = '#ffebee';
         } else {
-            div.innerHTML = `<div class="corner"><span class="rk" style="font-size:${rankSize}px">${card.rank}</span><span class="st" style="font-size:${suitSize}px">${card.suit}</span></div>`;
+            // 同样走 textContent：联机房主下发的牌数据不可信
+            let corner = document.createElement('div');
+            corner.className = 'corner';
+            let rkSpan = document.createElement('span');
+            rkSpan.className = 'rk';
+            rkSpan.style.fontSize = rankSize + 'px';
+            rkSpan.textContent = String(card.rank == null ? '' : card.rank);
+            let stSpan = document.createElement('span');
+            stSpan.className = 'st';
+            stSpan.style.fontSize = suitSize + 'px';
+            stSpan.textContent = String(card.suit == null ? '' : card.suit);
+            corner.appendChild(rkSpan);
+            corner.appendChild(stSpan);
+            div.appendChild(corner);
         }
         div.onclick = (e)=>{ e.preventDefault(); e.stopPropagation(); toggleCard(card.id); };
         return div;

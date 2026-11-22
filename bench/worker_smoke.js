@@ -145,7 +145,10 @@ mainMem.playerHistory = memData.playerHistory.map(a => a.map(x => [...x]));
 mainMem.totalCardsPlayed = [...memData.totalCardsPlayed];
 mainMem.passHints = memData.passHints.map(a => a.map(h => ({ ...h })));
 const mainCore = new AICore(0, 'hard', mainMem);
-const mainPlay = mainCore.playDecision(JSON.parse(JSON.stringify(slimState).replace(/\{"length":(\d+)\}/g, (m, d) => '[]')));
+// 必须喂「同一个状态」：旧实现把对手手牌 {length:n} 替换成 []，
+// 对手张数从 17 变成 0 → AI 看到的局面根本不是同一个（领出策略会完全不同），
+// 于是这个断言测的不是"Worker 与主线程是否一致"，而是"两个不同局面是否碰巧一致"。
+const mainPlay = mainCore.playDecision(JSON.parse(JSON.stringify(slimState)));
 const mainIds = (mainPlay || []).map(c => c.id).sort().join(',');
 check('Worker 与主线程决策一致', workerIds === mainIds, 'worker=' + workerIds + ' main=' + mainIds);
 check('Worker 返回的记忆含 passHints', !!(thinkMsg && thinkMsg.memory && thinkMsg.memory.passHints),
