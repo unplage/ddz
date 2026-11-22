@@ -15,7 +15,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon.png">
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
     <meta name="theme-color" content="#1a1a2e">
-    <meta name="app-version" content="v89">
+    <meta name="app-version" content="v90">
     <meta name="description" content="像素风格斗地主：单机公平 AI 对战 + P2P 联机，离线可玩">
     <style>
         * { image-rendering: pixelated; font-family: 'Press Start 2P', cursive; -webkit-tap-highlight-color: transparent; touch-action: manipulation; box-sizing: border-box; }
@@ -2507,6 +2507,49 @@ function broadcastFullState() {
     }
     window.addEventListener('resize', ()=>{ if(GameState.players[GameState.myIndex]?.length) renderPlayerHand(); });
 
+    // ======================== 学习 Worker（反事实分析 / 权重更新 / 配对自对弈验证） ========================
+    // 旧实现在主线程同步跑 GodViewLearner（数秒到数十秒），界面直接卡死；
+    // 这里把整条学习闭环放进 Worker，主线程只负责录盘与落盘。
+    const LearnWorker = {
+        worker: null,
+        ready: false,
+        taskSeq: 0,
+        init() {
+            if (typeof Worker === 'undefined') return;
+            try {
+                this.worker = new Worker('./learn_worker.js');
+                this.worker.onmessage = (e) => this._onResult(e.data);
+                this.worker.onerror = () => { this.worker = null; this.ready = false; };
+                let base = null;
+                try { ParamConfig.init(); base = ParamConfig._overrides; } catch (err) {}
+                this.worker.postMessage({ cmd: 'init', baseParams: base });
+            } catch (e) { this.worker = null; }
+        },
+        learn(game) {
+            if (!this.worker || !this.ready) return false;
+            let base = null;
+            try { base = ParamConfig._overrides; } catch (e) {}
+            this.worker.postMessage({ cmd: 'learn', taskId: ++this.taskSeq, game, baseParams: base });
+            return true;
+        },
+        _onResult(data) {
+            if (!data) return;
+            if (data.status === 'ready') { this.ready = true; return; }
+            if (data.accepted && data.params) {
+                // 采纳：落盘 + 广播给所有 AI Worker（ParamConfig.set 会触发广播）
+                try {
+                    for (const key of Object.keys(data.params)) {
+                        if (key === 'version') continue;
+                        ParamConfig.set(key, data.params[key]);
+                    }
+                } catch (e) {}
+            }
+            if (data.cmd === 'corrections' && typeof CorrectionRules !== 'undefined') {
+                try { CorrectionRules._rules = data.corrections; CorrectionRules._persist(); } catch (e) {}
+            }
+        }
+    };
+
     // ======================== AI Worker 池 ========================
     const AiWorkerPool = {
         workers: [],
@@ -2525,14 +2568,18 @@ function broadcastFullState() {
         },
         _createWorkers(n) {
             let readyCount = 0;
+            // 只对真正创建成功的 Worker 计数：失败占位对象永远不会 post ready，
+            // 旧代码用原始 n 判断 → 只要有一个创建失败，池永久 unavailable。
+            let expected = 0;
             for (let i = 0; i < n; i++) {
                 try {
+                    expected++;
                     let w = new Worker('./ai_worker.js');
                     w.onmessage = (e) => {
                         if (e.data.status === 'ready') {
                             readyCount++;
                             w._ready = true;
-                            if (readyCount === n) this._seedWorkers();
+                            if (readyCount === expected) this._seedWorkers();
                             return;
                         }
                         this._onResult(e.data);
@@ -2554,15 +2601,20 @@ function broadcastFullState() {
                     };
                     this.workers.push(w);
                 } catch (e) {
+                    expected--;
                     this.workers.push({ _dead: true, _ready: false, postMessage: () => {} });
                 }
             }
+            if (expected === 0) this.ready = true;   // 全部创建失败 → 走主线程兜底
         },
         _seedWorkers() {
             let params = null;
             if (typeof ParamConfig !== 'undefined') {
-                let overrides = localStorage.getItem('landlord_ai_params');
-                if (overrides) { try { params = JSON.parse(overrides); } catch(e) {} }
+                // 统一从 ParamConfig 取已通过版本校验的参数，避免 Worker 加载过期 JSON
+                try {
+                    ParamConfig.init();
+                    params = ParamConfig._overrides ? JSON.parse(JSON.stringify(ParamConfig._overrides)) : null;
+                } catch (e) { params = null; }
             }
             let cr = [];
             if (typeof CorrectionRules !== 'undefined') {
@@ -2823,7 +2875,8 @@ function broadcastFullState() {
         try { if (typeof calibrateAiSpeed === 'function') calibrateAiSpeed(); } catch (e) {}
         applyLaunchMode();
         loadHistory();
-        AiWorkerPool.init();
+        LearnWorker.init();
+            AiWorkerPool.init();
         if (window.speechSynthesis) {
             window.speechSynthesis.getVoices();
             selectedVoice = getChineseVoice();

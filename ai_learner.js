@@ -86,11 +86,11 @@ const ParamConfig = {
         } else {
             localStorage.removeItem('landlord_ai_params');
         }
-        if (typeof window !== 'undefined' && window.AiWorkerPool && window.AiWorkerPool.ready) {
+        if (typeof AiWorkerPool !== 'undefined' && AiWorkerPool && AiWorkerPool.ready) {
             try {
                 let msg = { cmd: 'init', params: this._overrides ? this._overrides : null };
                 if (typeof CorrectionRules !== 'undefined') { CorrectionRules.init(); msg.correctionRules = CorrectionRules._rules || []; }
-                for (let w of window.AiWorkerPool.workers) {
+                for (let w of AiWorkerPool.workers) {
                     if (w._ready && !w._dead) w.postMessage(msg);
                 }
             } catch (e) {}
@@ -421,10 +421,13 @@ const GameRecorder = {
         if (origExecutePlayCards) {
             window._origExecutePlayCards = origExecutePlayCards;
             window.executePlayCards = function(player, cards) {
-                if (GameState.phase === 'playing') {
+                // 先执行，只有校验通过（返回 true）才记入回放；
+                // 旧实现在校验前记录，被拒的非法走法/兜底过牌会污染动作序列与反事实标签。
+                const ok = origExecutePlayCards(player, cards);
+                if (ok !== false && GameState.phase === 'playing') {
                     self.recordAction(player, cards);
                 }
-                return origExecutePlayCards(player, cards);
+                return ok;
             };
         }
 
@@ -527,7 +530,10 @@ const GameRecorder = {
         this.currentGame = null;
         GameDatabase.save(game).then(() => {
             GameAnalyzer.analyze(game);
-            GodViewLearner.learn(game);
+            // 学习闭环放进 Worker，避免主线程卡顿；Worker 不可用时回退到旧路径
+            let sent = false;
+            try { if (typeof LearnWorker !== 'undefined') sent = LearnWorker.learn(game); } catch (e) {}
+            if (!sent) GodViewLearner.learn(game);
         }).then(() => {
             game.analysed = true;
         });
@@ -841,10 +847,10 @@ const CorrectionRules = {
         try {
             localStorage.setItem('landlord_correction_rules', JSON.stringify(this._rules));
         } catch (e) {}
-        if (typeof window !== 'undefined' && window.AiWorkerPool && window.AiWorkerPool.ready) {
+        if (typeof AiWorkerPool !== 'undefined' && AiWorkerPool && AiWorkerPool.ready) {
             try {
                 let msg = { cmd: 'init', correctionRules: this._rules };
-                for (let w of window.AiWorkerPool.workers) {
+                for (let w of AiWorkerPool.workers) {
                     if (w._ready && !w._dead) w.postMessage(msg);
                 }
             } catch (e) {}

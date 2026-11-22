@@ -249,8 +249,8 @@ const DEFAULT_PARAMS = {
         remainBigCards: 3, hasRocket: 10, isLandlord: 5, isFarmer: 0,
         opponentHandCount: -1, partnerHandCount: 3, outsideBombCount: -5,
         isCritical: 40, needBeat: 25,
-        // 新特征（默认 0 = 中性，由学习闭环自行学出）
-        turnsToFinish: 0, sureTricks: 0, controlCount: 0, oppThreat: 0, isPartnerLead: 0
+        // 新特征：保守先验（原本全为 0 → 出厂 AI 完全不看手数/控制/威胁）
+        turnsToFinish: -4, sureTricks: 3, controlCount: 2, oppThreat: -1.5, isPartnerLead: 6
     },
     // 按角色分桶的权重（缺省回落到上面的全局 weights）
     weightsByRole: { landlord: {}, farmer: {} },
@@ -294,8 +294,11 @@ const DEFAULT_PARAMS = {
         bombRiskWeight: { easy: 0, medium: 0, hard: 40, grandmaster: 40, legendary: 40 },
         // 盲 MCTS 是否使用启发式根先验（1 = 开启）
         mctsRootPriors: { easy: 0, medium: 0, hard: 1, grandmaster: 1, legendary: 1 },
-        // 信念采样是否按「手牌形状」分配（1 = 结构化，更接近真实牌局；0 = 均匀随机）
-        structuredBelief: 1,
+        // 信念采样是否按「手牌形状」分配。
+        // 实测：结构化(1)把未见牌池的整组塞给同一对手 → 采样对手平均 0.89 个炸弹、
+        // 仅 1.83 张单张（真实约 0.07 炸 / 6 单），使所有胜率估计崩溃、AI 过度保守。
+        // 默认改为均匀随机(0)；保留开关供 A/B 对照。
+        structuredBelief: 0,
         // MCTS 模式：'pimc' = 每世界各搜一棵树再聚合；'ismcts' = 信息集共享树（再确定性化）
         mctsMode: 'pimc',
         // 每个世界采样多少个候选并按「与公开历史的一致性」择优（叫分/过牌线索）
@@ -671,13 +674,24 @@ class HandBelief {
     sampleWorld(quality) {
         const tries = Math.max(1, quality || 1);
         if (tries === 1) return this._sampleWorldStructured();
-        let best = null, bestScore = -Infinity;
+        // softmax 加权随机抽样（温度 T=4）：argmax 会让所有世界塌到同一个似然模式，
+        // 跨世界方差消失 → PIMC 的 std 惩罚与 minimax-regret 失去信号。
+        const cands = [];
+        let maxS = -Infinity;
         for (let i = 0; i < tries; i++) {
             const w = this._sampleWorldStructured();
-            const s = this._worldLikelihood(w);
-            if (s > bestScore) { bestScore = s; best = w; }
+            const sc = this._worldLikelihood(w);
+            cands.push({ w, sc });
+            if (sc > maxS) maxS = sc;
         }
-        return best || this._sampleWorldStructured();
+        const weights = cands.map(c => Math.exp((c.sc - maxS) / 4));
+        const sum = weights.reduce((a, b) => a + b, 0);
+        let r = Math.random() * sum;
+        for (let i = 0; i < cands.length; i++) {
+            r -= weights[i];
+            if (r <= 0) return cands[i].w;
+        }
+        return cands[cands.length - 1].w;
     }
     _sampleWorldStructured() {
         const players = [[], [], []];
@@ -768,17 +782,30 @@ class HandBelief {
     // 明显矛盾的世界（例如叫了 3 分的对手手里一把散牌）。
     sampleWorlds(n) {
         const want = Math.max(1, n || 1);
-        const tries = Math.min(want + 12, want * 4);
+        const tries = Math.min(want + 16, want * 5);
         const cands = [];
+        let maxS = -Infinity;
         for (let i = 0; i < tries; i++) {
             const w = this._sampleWorldStructured();
-            // 抖动打破同分并列，保证世界之间仍有差异（离线评测里 Math.random 是种子化的）
-            const s = this._worldLikelihood(w) + Math.random() * 0.4;
-            cands.push({ players: w, s });
+            const sc = this._worldLikelihood(w);
+            cands.push({ players: w, sc });
+            if (sc > maxS) maxS = sc;
         }
-        cands.sort((a, b) => b.s - a.s);
+        // 按似然权重无放回抽样：既偏向高似然世界，又保留世界间方差。
+        // 旧实现取 top-k，系统性压低 std，使 -λ·std 鲁棒项失效。
         const out = [];
-        for (let i = 0; i < cands.length && out.length < want; i++) out.push(cands[i].players);
+        const pool = cands.slice();
+        while (out.length < want && pool.length) {
+            const ws = pool.map(c => Math.exp((c.sc - maxS) / 4));
+            const sum = ws.reduce((a, b) => a + b, 0);
+            let r = Math.random() * sum, idx = pool.length - 1;
+            for (let i = 0; i < pool.length; i++) {
+                r -= ws[i];
+                if (r <= 0) { idx = i; break; }
+            }
+            out.push(pool[idx].players);
+            pool.splice(idx, 1);
+        }
         return out;
     }
     // 手牌牌力（用于与叫分档位对照）：只依赖点数结构，不看花色
@@ -807,21 +834,25 @@ class HandBelief {
             tier: this.bidStrength[id],
             s: this._handStrengthScore(worldPlayers[id] || [])
         }));
-        const byTier = entries.slice().sort((a, b) => b.tier - a.tier);
-        const byStrength = entries.slice().sort((a, b) => b.s - a.s);
-        for (let k = 0; k < byTier.length; k++) {
-            score += (byTier[k].id === byStrength[k].id) ? 8 : -4;
+        // 1) 叫分档位 ↔ 牌力的软单调似然：同 tier 不互为参照（旧实现逐位比较产生 +8/−4 纯噪声）
+        let sMin = Infinity, sMax = -Infinity;
+        for (const e of entries) { if (e.s < sMin) sMin = e.s; if (e.s > sMax) sMax = e.s; }
+        const span = sMax - sMin || 1;
+        for (const e of entries) {
+            const z = (e.s - sMin) / span;
+            score += e.tier * (2 * z - 1) * 4;   // 高档位配强牌得分，低档位配弱牌得分
         }
-        // 2) 叫高分者通常握着炸/王炸
+        // 2) 叫高分者通常握着"控制牌"（炸/王/多个2），但不再是硬条件，按张数软加分
         for (const id of oppIds) {
             if (this.bidStrength[id] < 2) continue;
             const hand = worldPlayers[id] || [];
             const cnt = new Array(15).fill(0);
             for (const c of hand) cnt[c.value]++;
-            let bombs = 0;
-            for (let v = 0; v <= 12; v++) if (cnt[v] >= 4) bombs++;
-            if (cnt[13] > 0 && cnt[14] > 0) bombs++;
-            if (bombs > 0) score += 6;
+            let controls = 0;
+            for (let v = 0; v <= 12; v++) if (cnt[v] >= 4) controls += 2;
+            if (cnt[13] > 0 && cnt[14] > 0) controls += 2;
+            for (let v = 12; v <= 14; v++) controls += cnt[v] >= 2 ? 1 : 0;
+            score += Math.min(6, controls * 2);
         }
         // 3) 过牌一致性：对手 pass 过的高牌，他手里通常没有同区间的大单张
         for (const id of oppIds) {
@@ -871,10 +902,13 @@ class HandBelief {
         }
         // 对手曾在高点区 pass 过，说明其手中大牌较少，下调握炸概率
         let passDiscount = 1.0;
-        for (let v = 0; v <= 12; v++) {
-            const hints = this.memory ? this.memory.passHintsNear(oppId, v, 2) : 0;
-            if (hints > 0) passDiscount -= hints * 0.08;
+        // 旧实现逐点数调用 passHintsNear，同一次 pass 被计最多 5 次 → 风险砍到 0.6。
+        // 改为按 pass 事件去重：只统计"对手在高点数(≥10)跟牌时 pass"的次数。
+        const hints = (this.memory && this.memory.passHints) ? this.memory.passHints[oppId] || [] : [];
+        for (const h of hints) {
+            if (h && h.value >= 10) passDiscount -= 0.08;
         }
+        passDiscount = Math.max(0.5, passDiscount);
         passDiscount = Math.max(0.3, passDiscount);
         return Math.min(1, risk * passDiscount);
     }
@@ -949,7 +983,9 @@ class HandBelief {
             if (higher <= 0) return 0;
             // 已知牌里已经有的更大牌也算
             for (let v = type.value + 1; v <= 14; v++) if (knownCounts[v] > 0) return 1;
-            return 1 - _hyperAtLeast(leq, poolSize, unknownSlots, 1);
+            // 正确：至少抽到 1 张「比它大」的牌。旧代码写成 1−P(至少一张≤它)，
+            // 实际算的是"全部未知牌都比它大" → 41× 低估，领出修正与 macro-pass 对单张失效。
+            return _hyperAtLeast(higher, poolSize, unknownSlots, 1);
         }
         // 对子 / 三张 / 炸弹：存在一个更大点数凑够 k 张
         if (type.type === CardType.PAIR || type.type === CardType.TRIPLE || type.type === CardType.BOMB) {
@@ -1168,7 +1204,8 @@ function extractPlayFeatures(play, hand, lastPlay, role, memory, state) {
         nextPlayerHandCount: state.players[nextPlayerId] ? state.players[nextPlayerId].length : 17,
         partnerHandCount: (role === 'farmer' && partnerId !== -1) ? (state.players[partnerId]?.length || 0) : 0,
         outsideBombCount: _outsideBombCountMemo(memory, hand), isCritical: (newHand.length <= 3) ? 1 : 0,
-        needBeat: needBeat ? 1 : 0, lastPlayType: lastPlay ? lastPlay.type : 'none', lastPlayPower: lastPlay ? lastPlay.value : 0,
+        needBeat: needBeat ? 1 : 0, lastPlayType: lastPlay ? lastPlay.type : 'none',
+        lastPlayPower: lastPlay ? typePowerOf(lastPlay.type, lastPlay.value, lastPlay.length) : 0,
         lastPlayLength: lastPlay ? (lastPlay.length || 0) : 0,
         playType: playType.type, kickerValue, mainValue: playType.value,
         turnsToFinish, sureTricks, controlCount, oppThreat, isPartnerLead: isPartnerLead ? 1 : 0
@@ -1261,7 +1298,9 @@ function _wingCombos(groups, need, maxPerRank, cap) {
     let avail = 0;
     for (const g of groups) avail += Math.min(g.cards.length, maxPerRank);
     if (need > avail) return [];
-    const limit = Math.max(1, cap || 64);
+    // cap<=0 表示「不限」：根节点/DOM 校验需要全部合法走法，
+    // 截断必须在 canBeat 过滤之后，否则唯一能压的翅膀组合会被丢掉。
+    const limit = (cap > 0 ? cap : 4096);
     const hardCap = limit * 4;
     function rec(i, remaining, acc, sum) {
         if (out.length >= hardCap) return;
@@ -1342,7 +1381,7 @@ function getAllValidPlays(hand, lastPlay = null, opts) {
                 if (val === quad[0].value) continue;
                 wingGroups.push({ v: val, cards: byValue[v].slice(0, 2) });
             }
-            let combos = _wingCombos(wingGroups, 2, 2, comboCap || 128);
+            let combos = _wingCombos(wingGroups, 2, 2, comboCap > 0 ? comboCap : 0);
             for (let w of combos) push([...quad, ...w], { type: CardType.FOUR_WITH_TWO_SINGLE, value: quad[0].value });
         }
     }
@@ -1413,7 +1452,7 @@ function getAllValidPlays(hand, lastPlay = null, opts) {
                     if (bodyVals.has(val)) continue;
                     wingGroups.push({ v: val, cards: byValue[v].slice(0, 2) });
                 }
-                let combos = _wingCombos(wingGroups, len, 2, comboCap || 48);
+                let combos = _wingCombos(wingGroups, len, 2, comboCap > 0 ? comboCap : 0);
                 for (let w of combos) {
                     const cards = [...tripleCards, ...w];
                     const vt = getCardType(cards);
@@ -1889,6 +1928,20 @@ function _fastTurnsFromCounts(counts) {
             while (v + len <= 11 && c[v + len] > 0) len++;
         }
     }
+    // 飞机（连续三张，≥2 组）—— 必须先于连对！
+    // 旧顺序先抽连对，会把 333444555666 拆成 1 个连对+4 单（估 5 手），
+    // 而实际是一手飞机（1 手）。这个估值被 beam 排序/残局/rollout 四处复用，
+    // 顺序错误会系统性高估连续三张结构的手数。
+    for (let v = 0; v <= 11; v++) {
+        let len = 0;
+        while (v + len <= 11 && c[v + len] >= 3) len++;
+        while (len >= 2) {
+            for (let k = 0; k < len; k++) c[v + k] -= 3;
+            turns++;
+            len = 0;
+            while (v + len <= 11 && c[v + len] >= 3) len++;
+        }
+    }
     // 连对（≥3）
     for (let v = 0; v <= 11; v++) {
         let len = 0;
@@ -1898,17 +1951,6 @@ function _fastTurnsFromCounts(counts) {
             turns++;
             len = 0;
             while (v + len <= 11 && c[v + len] >= 2) len++;
-        }
-    }
-    // 飞机（连续三张，≥2 组）
-    for (let v = 0; v <= 11; v++) {
-        let len = 0;
-        while (v + len <= 11 && c[v + len] >= 3) len++;
-        while (len >= 2) {
-            for (let k = 0; k < len; k++) c[v + k] -= 3;
-            turns++;
-            len = 0;
-            while (v + len <= 11 && c[v + len] >= 3) len++;
         }
     }
     // 炸弹 / 火箭
@@ -2592,6 +2634,7 @@ function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministi
             : getAllValidPlays(hand, null, comboCap ? { maxComboPerGroup: comboCap } : undefined);
         if (plays.length === 0) { s.passCount++; cp = (cp + 1) % 3; continue; }
         const role = cp === s.landlord ? 'landlord' : 'farmer';
+        const maxOutsideForRollout = memory && memory.getMaxOutside ? memory.getMaxOutside(hand) : 0;
         const minP = needBeat ? minBeatPower(s.lastPlay.type, s.lastPlay.value, s.lastPlay.length) : 0;
         let best = null, bestScore = -Infinity, bestOver = Infinity;
         let second = null, secondScore = -Infinity;
@@ -2602,7 +2645,11 @@ function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministi
             const t = playTypeOf(pl);
             if (!t) continue;
             const pw = typePowerOf(t.type, t.value, t.length);
-            let sc = pl.length * 4 - pw * 0.25;
+            // 粗排加入手数下降量 + 控制权：纯"长度×4 − 牌力×0.25"会让 rollout
+            // 中地主无脑甩长牌、不留 2/王（实测地主胜率因此被压低）。
+            const rest = hand.filter(c => !pl.includes(c));
+            let sc = pl.length * 4 - pw * 0.25 - _fastHandTurns(rest) * 2;
+            if (pw > maxOutsideForRollout) sc += 6;
             const nextCards = (s.players[(cp + 1) % 3] && s.players[(cp + 1) % 3].length) || 0;
             if (!needBeat && nextCards <= 2) {
                 if (pl.length >= 3) sc += 35;
@@ -2992,7 +3039,8 @@ function selectPlayFromMctsAgg(entries, worlds, lambda) {
         if (typeof item.meanRegret === 'number') {
             const w = Math.max(1, item.visits || 1);
             a.regretSum += item.meanRegret * w;
-            a.regretSq += (item.stdRegret || 0) * w;
+            // item.stdRegret 是标准差，合并成方差需先平方；下面的 regretSq/regretW 再开根号
+            a.regretSq += (item.stdRegret || 0) ** 2 * w;
             a.regretW += w;
             a.regretN++;
         }
@@ -3008,7 +3056,7 @@ function selectPlayFromMctsAgg(entries, worlds, lambda) {
         let score;
         if (a.regretW > 0) {
             const meanRegret = a.regretSum / a.regretW;
-            const stdRegret = a.regretSq / a.regretW;
+            const stdRegret = Math.sqrt(a.regretSq / Math.max(1, a.regretW));
             const coverage = a.rates.length / totalWorlds;
             score = meanRegret + lam * stdRegret + 0.5 * (1 - Math.min(1, coverage));
         } else {
@@ -3019,7 +3067,7 @@ function selectPlayFromMctsAgg(entries, worlds, lambda) {
                 std = Math.sqrt(variance);
             }
             const coverage = a.rates.length / totalWorlds;
-            score = -(mean - lam * std - 0.15 * (1 - coverage));   // 越小越好
+            score = -(mean - lam * std - 0.5 * (1 - coverage));   // 越小越好
         }
         if (score < bestScore) { bestScore = score; best = a.play; }
     }
@@ -3298,8 +3346,9 @@ function mctsSearchISMCTS(state, playerId, belief, opts) {
             if (!child.visits) continue;
             entries.push({
                 key: child.key, visits: child.visits, wins: Math.round(child.value),
-                play: child.play, rates: [child.value / child.visits],
-                meanRegret: 0, stdRegret: 0, coverage: 1
+                play: child.play, rates: [child.value / child.visits]
+                // 不写 meanRegret/stdRegret：ISMCTS 没有逐世界遗憾数据，
+                // 让 selectPlayFromMctsAgg 回退到 rates 分支（旧写 0 会被当成"零遗憾最优"→ 必选错）
             });
         }
         if (entries.length) result.agg = entries;
@@ -3493,21 +3542,25 @@ class AICore {
                 players: state.players.map((p, i) => (i === this.id ? [...p, ...lordCards] : p))
             });
             const belief = new HandBelief(this.id, callState, this.memory);
+            // 只算一次胜率：旧的 bid 循环把同样的 rollout 跑三遍（W 相同 → 分档毫无意义，还 3× 开销）。
+            // 世界池一次采样 + 共同随机数降低方差；连续值保留"差一手赢"的信息。
+            const worldPool = belief.sampleWorlds(trials);
+            let scoreSum = 0;
+            for (let i = 0; i < worldPool.length; i++) {
+                const rs = Object.assign({}, state, {
+                    landlord: this.id,
+                    phase: 'playing',
+                    players: worldPool[i].map(p => p.map(c => ({ ...c })))
+                });
+                scoreSum += heuristicPlayoutWithMode(rs, this.id, this.id, this.memory, false, true);
+            }
+            const rawW = (scoreSum / Math.max(1, worldPool.length) + 1) / 2;
+            // 先验收缩：把小样本估计拉向手牌强度映射的先验，降低误叫/漏叫
+            const prior = Math.max(0.1, Math.min(0.9, 0.5 + evaluateHandStrength(state.players[this.id], this.memory, false, this.id) / 400));
+            const winRate = (rawW * worldPool.length + prior * 12) / (worldPool.length + 12);
             let bestBid = 0, bestEV = 0;
             for (let bid = 1; bid <= 3; bid++) {
                 if (bid <= curr) continue;
-                let wins = 0;
-                for (let i = 0; i < trials; i++) {
-                    const worldPlayers = belief.sampleWorld(Math.max(1, cfg('blind.worldQuality.' + this.difficulty) || 2));
-                    // worldPlayers[this.id] 已经是"我当地主 + 拿底牌"后的 20 张手牌
-                    const rs = Object.assign({}, state, {
-                        landlord: this.id,
-                        phase: 'playing',
-                        players: worldPlayers.map(p => p.map(c => ({ ...c })))
-                    });
-                    if (heuristicPlayoutWithMode(rs, this.id, this.id, this.memory, false)) wins++;
-                }
-                let winRate = wins / trials;
                 // 与结算口径一致：赢 +100×底分，输 −100×底分（庄园/春天只是额外翻倍），
                 // 所以 EV = bid*(2*winRate − 1)，胜率 > 0.5 就该叫。
                 // 旧公式 bid*(3*winRate − 2) 错误地假设"输要赔两倍"，
@@ -3546,9 +3599,12 @@ class AICore {
         if (!Array.isArray(play)) play = [];
         const hand = (state && state.players && state.players[this.id]) || [];
         const needBeat = !!(state && state.lastPlay && state.lastPlayerId !== this.id);
-        // 与上层校验口径**完全一致**：上层永远用 state.lastPlay 过滤（不管是否需要跟牌）
+        // 上层校验口径：需要跟牌时用 lastPlay 过滤；自己刚出过牌（lastPlayerId===id，
+        // 即两人过牌后重新领出）时 lastPlay 在真实状态机里已被重置为 null。
+        // 测试/重放状态可能残留 lastPlay → 这里同样按"领出"处理，避免误判合法领出为非法。
+        const beatFilter = needBeat ? state.lastPlay : null;
         let legalPlays = [];
-        try { legalPlays = getAllValidPlays(hand, state.lastPlay); } catch (e) { legalPlays = []; }
+        try { legalPlays = getAllValidPlays(hand, beatFilter); } catch (e) { legalPlays = []; }
         if (play.length > 0) {
             let legal = false;
             try {
@@ -3659,8 +3715,22 @@ class AICore {
             const nextHand = state.players[nextP] || [];
             const nextIsOpp = role === 'farmer' ? nextP === state.landlord : nextP !== state.landlord;
             if (nextIsOpp && nextHand.length === 1 && lastPlay && lastPlay.type === CardType.SINGLE) {
+                // 下家只剩 1 张时不可能握炸；用「除他外的外部牌」推他这张牌的上界，
+                // 而不是全桌 maxOut（大王若在第三者手里，旧规则会漏掉用 2 确定封锁的机会）。
                 let maxOut = 0;
-                try { maxOut = this.memory.getMaxOutside(hand); } catch (e) { maxOut = 0; }
+                try {
+                    const rem = this.memory.getRemainingCounts ? this.memory.getRemainingCounts() : null;
+                    if (rem) {
+                        for (let v = 14; v >= 0; v--) {
+                            let mine = 0;
+                            for (const c of hand) if (c.value === v) mine++;
+                            // "外面"还有这张牌，且握牌方可能是下家（只剩 1 张 → 至多 1 张同点）
+                            if ((rem[v] || 0) - mine > 0) { maxOut = v; break; }
+                        }
+                    } else {
+                        maxOut = this.memory.getMaxOutside(hand);
+                    }
+                } catch (e) { maxOut = 0; }
                 const blocker = beatable.find(p => p.length === 1 && p[0].value > maxOut);
                 if (blocker) {
                     this._recordReasoning(blocker, 'block', []);
@@ -3743,8 +3813,12 @@ class AICore {
             // 信念修正：若对手很可能压住我方这手跟牌 → 跟牌多半是送牌+丢控制权 → 倾向过牌
             let _likelyBeaten = false;
             try {
-                if (state.lastPlayerId >= 0 && state.lastPlayerId !== this.id) {
-                    const _bp = belief.beatProbability(_bestEntry.play, state.lastPlayerId, state);
+                // 威胁源应是「我出牌后的下一个行动者」= 下家，而不是本墩已出牌的 lastPlayerId。
+                // 第三参必须是样本数（旧代码传了 state 对象 → NaN → 组合型恒返回 0）。
+                const _nextId = (state.currentPlayer + 1) % 3;
+                if (_nextId !== this.id) {
+                    const _samples = cfg('blind.beatProbSamples.' + this.difficulty) || 6;
+                    const _bp = belief.beatProbability(_bestEntry.play, _nextId, _samples);
                     _likelyBeaten = _bp > 0.5;
                 }
             } catch (e) { _likelyBeaten = false; }
@@ -3792,15 +3866,15 @@ class AICore {
         const prefKey = keyOf(preferred);
         for (const p of allPlays) {
             if (cands.length >= maxCands) break;
-            if (p.length !== preferred.length) continue;
             if (keyOf(p) === prefKey) continue;
+            // 不再限制同长度：领一手对子若比单张被压概率低得多，应允许切换
             cands.push(p);
         }
         let best = preferred, bestScore = -Infinity;
         for (const p of cands) {
             let prob = 0;
             try { prob = belief.beatProbability(p, nextId, samples); } catch (e) { prob = 0; }
-            // 期望"能守住这手牌"的收益；非首选候选有轻微惩罚，保证不推翻手牌结构启发式
+            // 期望"能守住这手牌"的收益；长度差异越大惩罚越重，避免为小幅概率差牺牲结构
             let s = (1 - prob) * weight - (p === preferred ? 0 : 2);
             if (s > bestScore) { bestScore = s; best = p; }
         }

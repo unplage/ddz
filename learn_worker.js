@@ -203,8 +203,10 @@ const SelfPlayEval = {
         const budget = timeBudgetMs || 120000;
         const candParams = deterministicParams(cand);
         const baseParams = deterministicParams(base);
-        // 最少对局数：与 deals 成比例，且不低于 4（太少时统计无意义）
-        const minGames = Math.max(4, Math.min(Math.floor(deals * 0.6), deals));
+        // 每次评估换种子：固定牌集会过拟合且 bootstrap CI 系统性过自信。
+        this._rngState = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
+        // 与采纳门槛统一：至少 30 局有效对局
+        const minGames = Math.min(deals, 30);
 
         let games = 0, wins = 0, invalid = 0;
         const invalidReasons = {};
@@ -445,9 +447,15 @@ const GodViewLearner = {
         if (!hand || hand.length === 0 || allPlays.length === 0) return null;
         let totalCards = state.players.reduce((s, p) => s + p.length, 0);
 
-        // Phase 1: Exact minimax for small endgames (deterministic optimal)
-        if (hand.length <= 14 && totalCards <= 20) {
-            return this._solveExact(state, playerId, allPlays);
+        // Phase 1: 与线上一致的盲残局求解（旧实现 minimaxEndgame 直接读真实手牌 → 开天眼标签）
+        if (hand.length <= 14 && totalCards <= 20 && typeof solveEndgameBlind !== 'undefined') {
+            try {
+                const belief = new HandBelief(playerId, state, null);
+                const r = solveEndgameBlind(state, playerId, belief, {
+                    worlds: 4, timeBudgetMs: 300, nodeLimit: 20000, difficulty: 'hard', memory: null
+                });
+                if (r && Array.isArray(r.play)) return { bestPlay: r.play, bestWinRate: 0.75 };
+            } catch (e) { /* 回退到 rollout */ }
         }
 
         // Phase 2: Rollout-based approximation
@@ -727,21 +735,25 @@ const GodViewLearner = {
                 }
             }
 
-            // --- B: 启发式惩罚调整 ---
+            // --- B: 启发式惩罚调整（按触发次数求均值，避免 correction 数量放大步长）---
+            const addH = (key, val) => {
+                if (!heuristicDeltas[key]) heuristicDeltas[key] = { sum: 0, n: 0 };
+                heuristicDeltas[key].sum += val; heuristicDeltas[key].n++;
+            };
             if (corr.actualType === 'pass' && corr.bestWinRate > 0.5 && corr.handSize >= 3) {
-                heuristicDeltas['passScores.lordHandGt4'] = (heuristicDeltas['passScores.lordHandGt4'] || 0) - 3 * lr;
-                heuristicDeltas['passScores.farmerPartnerBase'] = (heuristicDeltas['passScores.farmerPartnerBase'] || 0) - 3 * lr;
+                addH('passScores.lordHandGt4', -3);
+                addH('passScores.farmerPartnerBase', -3);
             }
 
             let isBombBest = corr.bestType === 'bomb' || corr.bestType === 'rocket';
             let isBombActual = corr.actualType === 'bomb' || corr.actualType === 'rocket';
 
             if (isBombBest && !isBombActual && corr.bestWinRate > 0.6) {
-                heuristicDeltas['playHeuristics.bombUrgent.oppAboutToWin'] = (heuristicDeltas['playHeuristics.bombUrgent.oppAboutToWin'] || 0) + 8 * lr;
+                addH('playHeuristics.bombUrgent.oppAboutToWin', 8);
             }
             if (!isBombBest && isBombActual && corr.actualWinRate < 0.4) {
-                heuristicDeltas['playHeuristics.bombWasted.lowLastPower'] = (heuristicDeltas['playHeuristics.bombWasted.lowLastPower'] || 0) - 5 * lr;
-                heuristicDeltas['playHeuristics.bombWasted.highLastPower'] = (heuristicDeltas['playHeuristics.bombWasted.highLastPower'] || 0) - 5 * lr;
+                addH('playHeuristics.bombWasted.lowLastPower', -5);
+                addH('playHeuristics.bombWasted.highLastPower', -5);
             }
         }
 
@@ -773,9 +785,11 @@ const GodViewLearner = {
             changed++;
         }
         for (let path in heuristicDeltas) {
+            const hd = heuristicDeltas[path];
+            const delta = (hd.sum / Math.max(1, hd.n)) * lr;
             let cur = paramGet(path);
             if (typeof cur !== 'number') continue;
-            let nv = Math.max(-999, Math.min(999, cur + heuristicDeltas[path]));
+            let nv = Math.max(-999, Math.min(999, cur + delta));
             if (Math.abs(nv - cur) < 0.0005) continue;
             this._setNested(candidate, path, Math.round(nv * 10000) / 10000);
             changed++;
@@ -837,10 +851,14 @@ self.onmessage = async function (e) {
             }
             case 'learn': {
                 if (msg.baseParams) _baseParams = msg.baseParams;
-                const learner = Object.create(GodViewLearner);
-                learner._queue = []; learner._running = false; learner._adjustCount = 0;
-                learner._lastAdjustTime = 0;
-                learner._statsCache = { total: 0, totalAnalyses: 0, recent20: 0, totalAdjustments: 0, avgDiff: 0, accepted: 0, rejected: 0 };
+                // 单例化：旧实现每条 learn 消息重建 learner → _adjustCount 归零、lr 永不退火
+                if (!globalThis.__ddzLearner) {
+                    globalThis.__ddzLearner = Object.create(GodViewLearner);
+                    globalThis.__ddzLearner._queue = []; globalThis.__ddzLearner._running = false;
+                    globalThis.__ddzLearner._adjustCount = 0; globalThis.__ddzLearner._lastAdjustTime = 0;
+                    globalThis.__ddzLearner._statsCache = { total: 0, totalAnalyses: 0, recent20: 0, totalAdjustments: 0, avgDiff: 0, accepted: 0, rejected: 0 };
+                }
+                const learner = globalThis.__ddzLearner;
                 learner._seed((msg.game && msg.game.timestamp) || Date.now());
                 const stats = { checked: 0, corrected: 0, totalDelta: 0 };
                 const corrections = learner._analyzeGame(msg.game, stats);

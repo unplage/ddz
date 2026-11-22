@@ -16,7 +16,7 @@ const SYMBOLS = [
     'CardType', 'getCardType', 'canBeat', 'getPlayPower', 'getAllValidPlays', 'MasterMemory',
     'evaluateHandStrength', 'extractPlayFeatures', 'scorePlay', 'computePassScore',
     'extractHandFeatures', 'decomposeHandDP', 'simulateOpponentResponseV2',
-    'heuristicPlayoutWithMode', 'AICore', 'cfg', 'DEFAULT_PARAMS',
+    'heuristicPlayoutWithMode', 'AICore', 'cfg', 'DEFAULT_PARAMS', 'HandBelief', '_fastHandTurns',
 ];
 const mod = loadAI('ai_core.js', SYMBOLS, makeRng(1));
 
@@ -62,8 +62,9 @@ console.log('== 2. 跟牌：压对子的 efficiency 必须按点数差算 ==');
     };
     const mem = new mod.MasterMemory();
     const f = mod.extractPlayFeatures([C(9, 's1'), C(9, 's2')], hand, pairLast, 'landlord', mem, state);
-    const pairEff = f.playPower - 20 - f.lastPlayPower;
-    check('对子 efficiency = 点数差 (9-3=6)', pairEff === 6, `实际=${pairEff} (playPower=${f.playPower})`);
+    // lastPlayPower 已统一为 typePowerOf 量纲：pair(3)=23，pair(9)=29 → 差 6
+    const pairEff = f.playPower - f.lastPlayPower;
+    check('对子 efficiency = 点数差 (9-3=6)', pairEff === 6, `实际=${pairEff} (playPower=${f.playPower}, lastPlayPower=${f.lastPlayPower})`);
 
     const handS = [C(9), C(3, 'z'), C(0), C(1)];
     const fS = mod.extractPlayFeatures([C(9)], handS, singleLast, 'landlord', mem, state);
@@ -195,6 +196,52 @@ console.log('== 9. 叫分：位置加成不重复、传奇级从地主首攻开�
     check('callDecision 不再二次叠加 positionBonus', !/positionBonus/.test(src));
     check('传奇级叫分模拟从自己（地主）开始领出',
         /heuristicPlayoutWithMode\(rs, this\.id, this\.id/.test(src));
+}
+
+// ---------------------------------------------------------------- 本轮 P0/P1 回归
+console.log('== 11. 世界模型 / 概率 / 拆牌 / 组合牌型 回归 ==');
+{
+    // 1) 结构化采样默认关闭（实测把手对手造成人手一炸，胜率估计崩塌）
+    check('structuredBelief 默认关闭', mod.cfg('blind.structuredBelief') === 0,
+        '实际=' + mod.cfg('blind.structuredBelief'));
+
+    // 2) 飞机优先于连对：333444555666 应估为 1 手（旧实现估 5 手）
+    const plane = [C(0),C(0),C(0), C(1),C(1),C(1), C(2),C(2),C(2), C(3),C(3),C(3)];
+    const turns = mod._fastHandTurns(plane);
+    check('连续三张结构手数估算正确', turns <= 2, 'turns=' + turns);
+
+    // 3) 单张被压概率公式：牌池全是比目标小的牌 → 概率必须为 0；
+    //    牌池全是比目标大的牌 → 概率必须为 1（旧公式会把两者颠倒）
+    const mkBel = (poolCounts, oppCount) => {
+        const st = { players: [[C(4)], Array(oppCount).fill(C(0)), []], landlord: 0,
+            currentPlayer: 0, lastPlay: null, lastPlayerId: -1, passCount: 0, phase: 'playing' };
+        const b = new mod.HandBelief(0, st, new mod.MasterMemory());
+        b.poolCounts = poolCounts; b.pool = [];
+        for (let v = 0; v < 15; v++) for (let k = 0; k < poolCounts[v]; k++) b.pool.push(C(v));
+        b.counts = [1, oppCount, 0];
+        b.knownByPlayer = [[],[],[]];
+        return b;
+    };
+    const lowPool = [0,0,0,0,10,0,0,0,0,0,0,0,0,0,0];    // 全是 ≤4 的小牌
+    const highPool = [0,0,0,0,0,10,0,0,0,0,0,0,0,0,0];   // 全是 >4 的大牌
+    const bpLow = mkBel(lowPool, 4).beatProbability([C(4)], 1, 4);
+    const bpHigh = mkBel(highPool, 4).beatProbability([C(4)], 1, 4);
+    check('单张被压概率方向正确', bpLow < 0.01 && bpHigh > 0.99,
+        'low=' + bpLow.toFixed(3) + ' high=' + bpHigh.toFixed(3));
+
+    // 4) 根节点翅膀不截断：多个三张 × 多个不同点数翅膀 → 组合数应远大于旧 cap(48)
+    const hand4 = [];
+    for (let v = 0; v <= 12; v++) {
+        hand4.push(C(v, 'a'+v)); hand4.push(C(v, 'b'+v));
+        if (v < 6) hand4.push(C(v, 'c'+v));   // 0..5 各 3 张 → 6 个三张
+    }
+    const plays4 = mod.getAllValidPlays(hand4, null);
+    const wings = plays4.filter(p => mod.getCardType(p) && mod.getCardType(p).type === 'triple_single');
+    check('翅膀组合未被静默截断', wings.length > 60, '三带一候选=' + wings.length);
+
+    // 5) 新特征权重为保守非零先验
+    check('手数/控制特征有非零先验', mod.DEFAULT_PARAMS.weights.turnsToFinish < 0 &&
+        mod.DEFAULT_PARAMS.weights.controlCount > 0 && mod.DEFAULT_PARAMS.weights.oppThreat < 0);
 }
 
 // ---------------------------------------------------------------- 死代码
