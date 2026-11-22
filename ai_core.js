@@ -3508,7 +3508,11 @@ class AICore {
                     if (heuristicPlayoutWithMode(rs, this.id, this.id, this.memory, false)) wins++;
                 }
                 let winRate = wins / trials;
-                let ev = winRate * bid - (1 - winRate) * bid * 2;
+                // 与结算口径一致：赢 +100×底分，输 −100×底分（庄园/春天只是额外翻倍），
+                // 所以 EV = bid*(2*winRate − 1)，胜率 > 0.5 就该叫。
+                // 旧公式 bid*(3*winRate − 2) 错误地假设"输要赔两倍"，
+                // 阈值被抬到 2/3 → 连双王四个A的牌都不叫（hard/legendary 从不叫地主）。
+                let ev = bid * (2 * winRate - 1);
                 if (ev > bestEV) { bestEV = ev; bestBid = bid; }
             }
             return bestBid;
