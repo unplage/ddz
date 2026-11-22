@@ -196,7 +196,7 @@ const SelfPlayEval = {
         return { winner, invalid: null };
     },
     // 配对评估：候选 vs 基线，同一副牌、角色平衡
-    async evaluate(cand, base, deals, timeBudgetMs, difficulty) {
+    async evaluate(cand, base, deals, timeBudgetMs, difficulty, seed) {
         if (typeof AICore === 'undefined' || typeof getAllValidPlays === 'undefined') return null;
         difficulty = (typeof difficulty === 'string' && difficulty) ? difficulty : 'grandmaster';
         const t0 = Date.now();
@@ -204,7 +204,9 @@ const SelfPlayEval = {
         const candParams = deterministicParams(cand);
         const baseParams = deterministicParams(base);
         // 每次评估换种子：固定牌集会过拟合且 bootstrap CI 系统性过自信。
-        this._rngState = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
+        // 测试可通过 seed 固定牌集以保证可复现（生产不传 → 随机）。
+        this._rngState = (typeof seed === 'number' && Number.isFinite(seed))
+            ? (seed >>> 0) : ((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0);
         // 与采纳门槛统一：至少 30 局有效对局
         const minGames = Math.min(deals, 30);
 
@@ -845,7 +847,7 @@ self.onmessage = async function (e) {
                 break;
             }
             case 'evaluate': {
-                const res = await SelfPlayEval.evaluate(msg.candParams, msg.baseParams, msg.deals || 30, msg.timeBudgetMs || 90000, msg.difficulty);
+                const res = await SelfPlayEval.evaluate(msg.candParams, msg.baseParams, msg.deals || 30, msg.timeBudgetMs || 90000, msg.difficulty, msg.seed);
                 post({ taskId: msg.taskId, validation: res });
                 break;
             }

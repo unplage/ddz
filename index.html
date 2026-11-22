@@ -15,7 +15,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon.png">
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
     <meta name="theme-color" content="#1a1a2e">
-    <meta name="app-version" content="v90">
+    <meta name="app-version" content="v91">
     <meta name="description" content="像素风格斗地主：单机公平 AI 对战 + P2P 联机，离线可玩">
     <style>
         * { image-rendering: pixelated; font-family: 'Press Start 2P', cursive; -webkit-tap-highlight-color: transparent; touch-action: manipulation; box-sizing: border-box; }
@@ -540,6 +540,9 @@
         turnRemainMs: null,                   // 房主下发的本回合剩余毫秒
         takeoverToken: 0,                     // 托管决策作废令牌
         lastAppliedSeq: 0,                    // 客户端已应用的最大 seq（防倒序/重复）
+        roomEpoch: '',                        // 房主会话纪元（房主刷新/换房时变化）
+        lastAppliedEpoch: '',                 // 客户端已应用的 epoch
+        gameResult: null,                     // 房主权威结算结果（随 sync 下发，客户端对账）
         lordGiven: false                      // becomeLandlord 幂等保护
     };
     // 是否处于联机对局：以会话角色为唯一真值源（mode 仅作兼容字段）
@@ -624,6 +627,10 @@
         }
     }
     function backToMenu() {
+        // 房主退出前通知客户端，避免对方只能靠心跳超时才发现房间已关闭
+        if (GameState.myRole === 'host' && GameState.connections && GameState.connections.length) {
+            GameState.connections.forEach(c => { if (c && !c._disconnected) { try { c.send({ type: 'room-closed' }); } catch (e) {} } });
+        }
         document.getElementById('gameOverScreen').classList.add('hidden');
         document.getElementById('startScreen').classList.remove('hidden');
         document.getElementById('topRightControls').classList.remove('hidden');
@@ -649,6 +656,7 @@
         GameState.disconnected = [false, false, false];
         GameState.takeoverToken++;
         GameState.lastAppliedSeq = 0;
+        GameState.lastAppliedEpoch = '';
         GameState.processing = false;
         bottomCardsShown = false;
     }
@@ -731,6 +739,9 @@
         GameState.phase = 'calling';
         GameState.currentPlayer = Math.floor(Math.random() * 3);
         GameState.callScores = [0,0,0];
+        GameState.gameResult = null;
+        GameState.roomEpoch = (typeof crypto !== 'undefined' && crypto.randomUUID)
+            ? crypto.randomUUID() : ('e' + Date.now() + Math.random().toString(36).slice(2));
         if (!isOnlineMode()) processSingleCall();
         else { broadcastFullState(); processOnlineCallTurn(); }
     }
@@ -1389,7 +1400,15 @@
     function initPeer(customId) {
         if (GameState.peer) { GameState.peer.destroy(); GameState.peer = null; }
         return new Promise((resolve, reject) => {
-            GameState.peer = customId ? new Peer(customId) : new Peer();
+            // P2P 配置：默认公共 STUN；可通过 localStorage('ddz_turn_config') 注入 TURN，
+            // 对称 NAT / 企业防火墙下无 TURN 中继会直连失败。
+            let pc = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+            try {
+                let tc = JSON.parse(localStorage.getItem('ddz_turn_config') || 'null');
+                if (tc && Array.isArray(tc.iceServers) && tc.iceServers.length) pc.iceServers = tc.iceServers;
+            } catch (e) {}
+            let peerOpts = { config: pc, debug: 0 };
+            GameState.peer = customId ? new Peer(customId, peerOpts) : new Peer(peerOpts);
             let peerConnected = false;
             let peerTimeout = trackTimeout(() => {
                 if (!peerConnected) {
@@ -1403,7 +1422,7 @@
                 clearTimeout(peerTimeout);
                 document.getElementById('myPeerId').innerText = id;
                 document.getElementById('connStatus').classList.remove('hidden');
-                document.getElementById('connStatus').innerHTML = `📡 房间码:${id}`;
+                document.getElementById('connStatus').textContent = `📡 房间码:${id}`;
                 document.getElementById('createRoomSection').classList.add('hidden');
                 document.getElementById('myPeerSection').classList.remove('hidden');
                 resolve(id);
@@ -1419,14 +1438,14 @@
             GameState.peer.on('error', e => {
                 console.warn(e);
                 if (e.type === 'unavailable-id') {
-                    showToast('房间码已被使用，请换一个');
+                    showToast('该房间码不可用，请换一个');
                     if (GameState.peer) { GameState.peer.destroy(); GameState.peer = null; }
                     document.getElementById('createRoomSection').classList.remove('hidden');
                     document.getElementById('myPeerSection').classList.add('hidden');
                     reject(e);
                 } else if (e.type === 'peer-unavailable') {
                     // 房间码不存在 / 房主已下线：立即反馈，不要干等 10s joinTimeout
-                    showToast('房间不存在或房主已离线');
+                    showToast('无法加入房间，请检查房间码');
                     if (GameState.peer) { try { GameState.peer.destroy(); } catch (err) {} GameState.peer = null; }
                     reject(e);
                 } else if (e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error') {
@@ -1453,6 +1472,14 @@
         if (GameState.myRole === 'host' || GameState.myRole === 'client') return;
         if (typeof Peer === 'undefined') { showToast('联机组件加载失败，请联网后刷新页面'); return; }
         let code = document.getElementById('roomCodeInput').value.trim();
+        if (!code) {
+            // 不填则生成高熵房间码（16 位 base36 ≈ 82bit），避免弱口令与枚举
+            let arr = new Uint32Array(6);
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(arr);
+            else for (let i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 0xffffffff);
+            code = Array.from(arr).map(x => x.toString(36).padStart(7, '0')).join('').slice(0, 16);
+            document.getElementById('roomCodeInput').value = code;
+        }
         if (!code) { showToast('请输入房间码'); return; }
         if (code.length < 2 || code.length > 20) { showToast('房间码需要2-20个字符'); return; }
         if (!/^[a-zA-Z0-9\u4e00-\u9fff_-]+$/.test(code)) { showToast('仅支持中英文、数字、下划线和短横线'); return; }
@@ -1656,15 +1683,27 @@
                     showToast('对方请求再来一局，请先结束当前对局');
                 }
             }
-            else if (data.type === 'sync' && GameState.myRole !== 'host') handleSync(data.state);
+            else if (data.type === 'sync' && GameState.myRole !== 'host') {
+                // 只接受房主连接的 sync：任意 peer 建连后伪造 seq 会永久毒化 lastAppliedSeq
+                if (conn !== GameState.connections[0] || GameState.myRole !== 'client') return;
+                handleSync(data.state);
+            }
+            else if (data.type === 'room-closed') {
+                showToast('房主已离开，房间关闭');
+                clientIntentionalLeave = true;
+                trackTimeout(backToMenu, 800);
+            }
             else if (data.type === 'full') { clientIntentionalLeave = true; showToast('房间已满，最多' + (data.humans || 3) + '人'); }
             else if (data.type === 'reject') showToast(data.reason || '操作被房主拒绝');
             else if (data.type === 'ping') { try { conn.send({ type: 'pong' }); } catch (e) {} }
             else if (data.type === 'pong') { if (conn) conn._hbWait = 0; }
             else if (data.type === 'emoji') {
-                if (!data.emoji) return;
+                if (!data.emoji || String(data.emoji).length > 20) return;
+                if (conn && conn._emojiLast && Date.now() - conn._emojiLast < 1000) return;
+                if (conn) conn._emojiLast = Date.now();
                 let name = (GameState.myRole === 'host' && conn && conn.playerIdx !== undefined)
                     ? getPlayerName(conn.playerIdx) : getPlayerName(data.from);
+                if (GameState.myRole === 'host') data = { ...data, from: (conn && conn.playerIdx !== undefined) ? conn.playerIdx : null };
                 showToast(`${name}: ${data.emoji}`);
                 if (GameState.myRole === 'host') {
                     GameState.connections.forEach(c => { if (c !== conn) { try { c.send(data); } catch (e) {} } });
@@ -1698,6 +1737,12 @@ function broadcastFullState() {
             disconnected: GameState.disconnected.slice(),
             turnSerial: GameState.turnSerial,
             turnRemainMs: remainMs,
+            epoch: GameState.roomEpoch,          // 房间纪元：房主刷新后变化，客户端据此重置 seq
+            // 重连恢复：记牌器快照 + 最近动作日志（客户端据此重建，不再停在断线时刻）
+            memorySnapshot: (typeof memoryToData === 'function' && GameState.cardMemory)
+                ? memoryToData(GameState.cardMemory) : null,
+            playLogSnapshot: (typeof playLog !== 'undefined' && Array.isArray(playLog)) ? playLog.slice(0, 5) : [],
+            gameResult: GameState.gameResult || null,
             seq: ++GameState.stateSeq
         };
         GameState.autoTakeover = -1;
@@ -1875,6 +1920,11 @@ function broadcastFullState() {
     function applySync(state) {
         if (!state || typeof state !== 'object') return;
         // seq 幂等：只接受单调递增，防止倒序/重复 sync 重启计时器与覆盖新状态
+        // epoch 变化 → 新一届房主会话（或新房），重置 seq 基线并强制应用首条 sync
+        if (state.epoch && state.epoch !== GameState.lastAppliedEpoch) {
+            GameState.lastAppliedEpoch = state.epoch;
+            GameState.lastAppliedSeq = 0;
+        }
         if (typeof state.seq === 'number') {
             if (state.seq <= GameState.lastAppliedSeq) return;
             GameState.lastAppliedSeq = state.seq;
@@ -1913,6 +1963,19 @@ function broadcastFullState() {
         GameState.callScores = state.callScores || [0,0,0];
         GameState.lordCards = state.lordCards || [];
         GameState.mode = 'online';
+        if (state.gameResult) GameState.gameResult = state.gameResult;
+        // 重连恢复：记牌器与动作日志（只在有快照时应用）
+        if (state.memorySnapshot && typeof memoryFromData === 'function' && GameState.cardMemory) {
+            try { memoryFromData(GameState.cardMemory, state.memorySnapshot); } catch (e) {}
+        }
+        if (Array.isArray(state.playLogSnapshot) && state.playLogSnapshot.length && typeof playLog !== 'undefined') {
+            try {
+                playLog.length = 0;
+                for (const entry of state.playLogSnapshot) playLog.push(entry);
+                const el = document.getElementById('actionLog');
+                if (el) el.textContent = playLog.map(a => a.player + ': ' + a.action).join(' | ');
+            } catch (e) {}
+        }
         GameState.disconnected = Array.isArray(state.disconnected) ? state.disconnected.slice(0, 3) : [false,false,false];
         GameState.aborted = !!state.aborted;
         GameState.turnSerial = typeof state.turnSerial === 'number' ? state.turnSerial : GameState.turnSerial;
@@ -1985,16 +2048,28 @@ function broadcastFullState() {
                 return;
             }
             if (prevPhase !== 'gameover') {
-                let isWin = false;
-                if (GameState.landlord === GameState.myIndex) isWin = GameState.lastPlayerId === GameState.myIndex;
-                else isWin = GameState.lastPlayerId !== GameState.landlord;
-                let isLordWin = (GameState.lastPlayerId === GameState.landlord);
-                let multiplier = GameState.baseScore;
-                let isSpring = false, isAntiSpring = false;
-                if (isLordWin && !GameState.farmerPlayed && GameState.firstPlayMade) isSpring = true;
-                if (!isLordWin && GameState.lordPlayCount === 1 && GameState.firstPlayMade) isAntiSpring = true;
-                if (isSpring) multiplier *= 2;
-                if (isAntiSpring) multiplier *= 2;
+                let isWin = false, multiplier = GameState.baseScore, isSpring = false, isAntiSpring = false;
+                if (state.gameResult && typeof state.gameResult === 'object') {
+                    // 房主权威结算：客户端直接展示，不再各自计算（避免两端筹码/战绩不一致）
+                    isWin = GameState.myRole === 'host'
+                        ? (state.gameResult.winner === GameState.myIndex ||
+                           (state.gameResult.winner !== GameState.landlord && GameState.myIndex !== GameState.landlord && state.gameResult.winner !== GameState.myIndex))
+                        : (state.gameResult.winnerBySide === 'farmer')
+                            ? (GameState.myIndex !== GameState.landlord)
+                            : (GameState.myIndex === GameState.landlord);
+                    multiplier = state.gameResult.multiplier || multiplier;
+                    isSpring = !!state.gameResult.isSpring;
+                    isAntiSpring = !!state.gameResult.isAntiSpring;
+                } else {
+                    isWin = (GameState.landlord === GameState.myIndex)
+                        ? GameState.lastPlayerId === GameState.myIndex
+                        : GameState.lastPlayerId !== GameState.landlord;
+                    let isLordWin = (GameState.lastPlayerId === GameState.landlord);
+                    if (isLordWin && !GameState.farmerPlayed && GameState.firstPlayMade) isSpring = true;
+                    if (!isLordWin && GameState.lordPlayCount === 1 && GameState.firstPlayMade) isAntiSpring = true;
+                    if (isSpring) multiplier *= 2;
+                    if (isAntiSpring) multiplier *= 2;
+                }
                 let amount = Math.min(100 * multiplier, 9999);
                 let oldCoins = GameState.coins;
                 GameState.stats.total++;
@@ -2123,11 +2198,12 @@ function broadcastFullState() {
                 document.getElementById('controls').innerHTML = '<button id="waitingBtn" class="pixel-btn bg-gray-600" disabled>等待叫分</button>';
             lastTurnRenderKey = key;
             let isHost = GameState.myRole === 'host';
-            // 掉线玩家不再空等满 10 秒：立刻 AI 接管
+            // 掉线玩家立刻接管；在线但挂机的玩家也要在倒计时结束后接管，
+            // 否则在线 ping 一直续命 → 永远不进 disconnected → 牌局永久卡死。
             let waitMs = (isHost && GameState.disconnected[id]) ? 400 : ONLINE_CALL_SECONDS * 1000;
             startOnlineTimer(ONLINE_CALL_SECONDS, () => {
                 if (GameState.phase !== 'calling' || GameState.currentPlayer !== id || !isHost) return;
-                if (!GameState.disconnected[id]) return;
+                if (GameState.takeoverStarted && GameState.takeoverStarted[id]) return;
                 takeoverCall(id);
             }, id, isHost ? null : onlineDeadline(ONLINE_CALL_SECONDS), waitMs);
         }
@@ -2230,7 +2306,8 @@ function broadcastFullState() {
             let waitMs = (isHost && GameState.disconnected[id]) ? 400 : ONLINE_TURN_SECONDS * 1000;
             startOnlineTimer(ONLINE_TURN_SECONDS, () => {
                 if (GameState.currentPlayer !== id || GameState.phase !== 'playing' || !isHost) return;
-                if (!GameState.disconnected[id]) return;
+                if (GameState.takeoverStarted && GameState.takeoverStarted[id]) return;
+                // 不再要求 disconnected：在线挂机同样托管
                 takeoverPlay(id);
             }, id, isHost ? null : onlineDeadline(ONLINE_TURN_SECONDS), waitMs);
         }
@@ -2349,7 +2426,7 @@ function broadcastFullState() {
             document.getElementById('playerTimerFill').style.width = pct + '%';
             if (remainingSeconds <= 3 && remainingSeconds >= 1 && lastWarnSec !== remainingSeconds && GameState.phase !== 'gameover') {
                 lastWarnSec = remainingSeconds;
-                try { showToast(isOnlineMode() ? remainingSeconds + '秒后AI将自动托管！' : '还剩' + remainingSeconds + '秒'); } catch (e) {}
+                try { showToast(isOnlineMode() ? remainingSeconds + '秒后超时后由房主托管！' : '还剩' + remainingSeconds + '秒'); } catch (e) {}
             }
         } else if (timerPlayerId === leftIdx) {
             document.getElementById('leftTimerFill').style.width = pct + '%';
@@ -2440,6 +2517,11 @@ function broadcastFullState() {
         if (isSpring) { multiplier *= 2; showToast('🌸 春天！ 倍数翻倍'); playSound('win'); }
         if (isAntiSpring) { multiplier *= 2; showToast('⚡ 反春天！ 倍数翻倍'); playSound('win'); }
         let amount = Math.min(100 * multiplier, 9999);
+        // 房主权威结算结果写入状态，随下一次 sync 下发给客户端对账
+        GameState.gameResult = {
+            winner, landlord: GameState.landlord, multiplier, isSpring, isAntiSpring,
+            winnerBySide: isLordWin ? 'landlord' : 'farmer', amount
+        };
         let oldCoins = GameState.coins;
         if (isPlayerWin) { GameState.stats.win++; GameState.coins += amount; playSound('win'); }
         else { GameState.coins = Math.max(0, GameState.coins - amount); }

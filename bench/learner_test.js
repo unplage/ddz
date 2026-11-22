@@ -172,7 +172,7 @@ function cloneParams(base) {
     return JSON.parse(JSON.stringify(b));
 }
 async function callEvaluate(candParams, baseParams, deals) {
-    sandbox.onmessage({ data: { cmd: 'evaluate', taskId: 'ev', candParams, baseParams, deals: deals || 6, timeBudgetMs: 60000, difficulty: 'grandmaster' } });
+    sandbox.onmessage({ data: { cmd: 'evaluate', taskId: 'ev', candParams, baseParams, deals: deals || 6, timeBudgetMs: 60000, difficulty: 'grandmaster', seed: 20261122 } });
     return await waitFor('ev', 180000);
 }
 

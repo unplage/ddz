@@ -492,6 +492,22 @@ async function main() {
         'got ' + host.run('gameTimeouts.length'));
     check('客户端返回菜单后 myRole=null', c1.run('GameState.myRole') === null);
 
+    section('8. P0/P1 联机修复回归');
+    // 静态检查（这些行为依赖真实网络/计时器，动态构造代价大）
+    const mainTxt = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    check('AFK 托管不再以 disconnected 为前提',
+        !/if \(!GameState\.disconnected\[id\]\) return;/.test(mainTxt) &&
+        mainTxt.includes('takeoverPlay(id);'));
+    check('sync 带 epoch 房间纪元', mainTxt.includes('epoch: GameState.roomEpoch'));
+    check('客户端只接受房主连接 sync', mainTxt.includes("conn !== GameState.connections[0]"));
+    check('sync 带记牌器快照', mainTxt.includes('memorySnapshot:'));
+    check('房主退出广播 room-closed', mainTxt.includes("type: 'room-closed'"));
+    check('PeerJS 配置 iceServers（TURN 可注入）', mainTxt.includes('ddz_turn_config'));
+    check('结算结果房主下发对账', mainTxt.includes('gameResult: GameState.gameResult'));
+    // 动态：epoch 字段存在且 sync 携带
+    check('GameState 有 roomEpoch 初值', typeof host.run('GameState.roomEpoch') === 'string');
+    check('GameState 有 gameResult 字段', host.run("Object.keys(GameState).includes('gameResult')"));
+
     console.log('\n----------------------------------------');
     console.log(`通过 ${passed} 项，失败 ${failed} 项`);
     if (failed) {
