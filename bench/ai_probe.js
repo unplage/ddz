@@ -18,6 +18,7 @@ const SYMBOLS = [
     'extractHandFeatures', 'decomposeHandDP', 'simulateOpponentResponseV2',
     'heuristicPlayoutWithMode', 'AICore', 'cfg', 'DEFAULT_PARAMS', 'HandBelief', '_fastHandTurns',
     'handPotential', '_withRefParams', 'scorePlay', 'extractPlayFeatures',
+    'HandBelief', 'MasterMemory', 'getCardType',
 ];
 const mod = loadAI('ai_core.js', SYMBOLS, makeRng(1));
 
@@ -282,6 +283,43 @@ console.log('== 12. 统一评估 / 特征 / 参考权重 回归 ==');
     // 5) nodeBudget 已提升
     check('残局 nodeBudget ≥ 20000', mod.cfg('search.nodeBudget') >= 20000,
         'got ' + mod.cfg('search.nodeBudget'));
+}
+
+// ---------------------------------------------------------------- 公开信息利用回归
+console.log('== 13. 公开信息充分利用 ==');
+{
+    // 1) playerHistory 行为画像：记录一手大牌+一手组合牌后能正确统计
+    const mem = new mod.MasterMemory();
+    const RANKS = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
+    const RC = (v, suit) => {
+        const rank = v <= 12 ? RANKS[v] : (v === 13 ? '小王' : '大王');
+        return { suit, rank, value: v, id: (v >= 13 ? (v === 13 ? 'joker1' : 'joker2') : suit + rank) };
+    };
+    const bigHand = [RC(12,'♠'),RC(12,'♥'),RC(12,'♣'),RC(12,'♦')];  // 炸弹(2)
+    const comboHand = [RC(0,'♠'),RC(1,'♠'),RC(2,'♠'),RC(3,'♠'),RC(4,'♠')]; // 顺子34567
+    mem.recordPlayerPlay(1, bigHand);
+    mem.recordPlayerPlay(1, comboHand);
+    const prof = mem.getPlayerProfile(1);
+    check('行为画像：统计到出牌手数', prof.plays === 2, 'plays=' + prof.plays);
+    check('行为画像：统计到炸弹', prof.bombCount === 1, 'bombs=' + prof.bombCount);
+    check('行为画像：统计到组合牌倾向', prof.comboRate > 0, 'comboRate=' + prof.comboRate);
+    check('行为画像：统计到大牌频率', prof.highCardRate > 0, 'highRate=' + prof.highCardRate);
+
+    // 2) passHints 全牌型记录 + 画像里的 passRate
+    mem.recordPass(1, { type: 'pair', value: 10, length: 2 });
+    const prof2 = mem.getPlayerProfile(1);
+    check('行为画像：passRate 已计入', prof2.passRate > 0, 'passRate=' + prof2.passRate);
+
+    // 3) HandBelief 消费画像 + callOrder
+    const st = { players: [[C(9)], [C(5)], [C(6)]], landlord: 1, currentPlayer: 0,
+        lastPlay: null, lastPlayerId: -1, passCount: 0, phase: 'playing',
+        callScores: [0,3,0], callOrder: [0,2,1], lordCards: [C(12)] };
+    const bel = new mod.HandBelief(0, st, mem);
+    check('HandBelief 消费 playerProfiles', Array.isArray(bel.playerProfiles) &&
+        bel.playerProfiles[1] && bel.playerProfiles[1].plays === 2);
+    check('HandBelief 消费 callOrder', Array.isArray(bel.callOrder) && bel.callOrder[2] === 1,
+        'callOrder=' + JSON.stringify(bel.callOrder));
+    check('叫分档位正确', bel.bidStrength[1] === 2);
 }
 
 // ---------------------------------------------------------------- 死代码

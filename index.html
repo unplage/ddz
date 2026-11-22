@@ -15,7 +15,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon.png">
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
     <meta name="theme-color" content="#1a1a2e">
-    <meta name="app-version" content="v92">
+    <meta name="app-version" content="v93">
     <meta name="description" content="像素风格斗地主：单机公平 AI 对战 + P2P 联机，离线可玩">
     <style>
         * { image-rendering: pixelated; font-family: 'Press Start 2P', cursive; -webkit-tap-highlight-color: transparent; touch-action: manipulation; box-sizing: border-box; }
@@ -529,7 +529,7 @@
         firstPlayMade: false, lordPlayCount: 0, farmerPlayed: false,
         cardMemory: null, aiList: [], processing: false,
         myRole: null, myIndex: -1, hostPeerId: null,
-        peer: null, connections: [], callScores: [0,0,0], stateSeq: 0,
+        peer: null, connections: [], callScores: [0,0,0], callOrder: [], stateSeq: 0,
         autoTakeover: -1,
         // 联机稳定性扩展字段
         disconnected: [false, false, false],  // 掉线托管标记（房主权威，随 sync 下发）
@@ -739,6 +739,7 @@
         GameState.phase = 'calling';
         GameState.currentPlayer = Math.floor(Math.random() * 3);
         GameState.callScores = [0,0,0];
+        GameState.callOrder = [];
         GameState.gameResult = null;
         GameState.roomEpoch = (typeof crypto !== 'undefined' && crypto.randomUUID)
             ? crypto.randomUUID() : ('e' + Date.now() + Math.random().toString(36).slice(2));
@@ -791,6 +792,7 @@
         }
         let id = GameState.currentPlayer;
         singleCallCount++;
+        GameState.callOrder.push(id);
         GameState.callScores[id] = score;
         if (score === 0) showToast(getPlayerName(id)+' 不叫');
         else { GameState.baseScore = Math.max(GameState.baseScore, score); GameState.landlord = id; document.getElementById('scoreDisplay').textContent = '底分: '+GameState.baseScore; showToast(getPlayerName(id)+' '+score+'分'); }
@@ -1731,7 +1733,7 @@ function broadcastFullState() {
             baseScore: GameState.baseScore, bombCount: GameState.bombCount,
             passCount: GameState.passCount, firstPlayMade: GameState.firstPlayMade,
             lordPlayCount: GameState.lordPlayCount, farmerPlayed: GameState.farmerPlayed,
-            callScores: GameState.callScores, lordCards: GameState.lordCards,
+            callScores: GameState.callScores, callOrder: GameState.callOrder, lordCards: GameState.lordCards,
             autoTakeover: takeOver,
             aborted: GameState.aborted,
             disconnected: GameState.disconnected.slice(),
@@ -1961,6 +1963,7 @@ function broadcastFullState() {
         GameState.lordPlayCount = state.lordPlayCount;
         GameState.farmerPlayed = state.farmerPlayed;
         GameState.callScores = state.callScores || [0,0,0];
+        GameState.callOrder = Array.isArray(state.callOrder) ? state.callOrder.slice() : [];
         GameState.lordCards = state.lordCards || [];
         GameState.mode = 'online';
         if (state.gameResult) GameState.gameResult = state.gameResult;
@@ -2238,6 +2241,7 @@ function broadcastFullState() {
     }
     function executeCall(player, score) {
         GameState.takeoverStarted[player] = false;
+        GameState.callOrder.push(player);
         if (score === 0) GameState.callScores[player] = -1;
         else { GameState.callScores[player] = score; GameState.baseScore = Math.max(GameState.baseScore, score); GameState.landlord = player; document.getElementById('scoreDisplay').textContent = '底分: '+GameState.baseScore; }
         let allFinished = GameState.callScores.every(s => s !== 0);
@@ -2877,7 +2881,7 @@ function broadcastFullState() {
                 firstPlayMade: state.firstPlayMade,
                 lordPlayCount: state.lordPlayCount,
                 farmerPlayed: state.farmerPlayed,
-                callScores: state.callScores,
+                callScores: state.callScores, callOrder: state.callOrder || [],
                 lordCards: state.lordCards ? state.lordCards.map(c => ({ id: c.id, suit: c.suit, rank: c.rank, value: c.value })) : [],
                 phase: state.phase
             };

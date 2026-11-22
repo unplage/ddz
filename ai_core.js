@@ -511,6 +511,43 @@ class MasterMemory {
         // 保留最近 60 条，避免无限增长
         if (this.passHints[playerId].length > 60) this.passHints[playerId].shift();
     }
+    // 从某玩家已出的牌型统计行为画像（全部是公开历史）：
+    //  · highCardRate : 出过大牌(≥12)的次数 / 总出牌手数
+    //  · comboRate    : 出过组合牌(≥3张)的次数 / 总手数（结构倾向）
+    //  · bombCount    : 出过的炸/王炸次数（消耗了多少控制牌）
+    //  · lastHighValue: 最近一次出的最大点数（推断"敢出这么大"）
+    //  · passRate     : 需要跟牌时选择 pass 的比例（保守度）
+    getPlayerProfile(oppId) {
+        const empty = { highCardRate: 0, comboRate: 0, bombCount: 0, lastHighValue: 0, passRate: 0, plays: 0 };
+        if (!this.playerHistory || !this.playerHistory[oppId]) return empty;
+        if (!MasterMemory._idToCard) {
+            MasterMemory._idToCard = new Map();
+            for (const c of allCards()) MasterMemory._idToCard.set(c.id, c);
+        }
+        const map = MasterMemory._idToCard;
+        const hist = this.playerHistory[oppId] || [];
+        let high = 0, combo = 0, bombs = 0, lastHigh = 0;
+        for (const ids of hist) {
+            if (!Array.isArray(ids) || !ids.length) continue;
+            const cards = ids.map(id => map.get(id)).filter(Boolean);
+            if (!cards.length) continue;
+            if (cards.length >= 3) combo++;
+            if (cards.some(c => c.value >= 12)) high++;
+            const maxV = Math.max(...cards.map(c => c.value));
+            if (maxV > lastHigh) lastHigh = maxV;
+            const t = getCardType(cards);
+            if (t && (t.type === CardType.BOMB || t.type === CardType.ROCKET)) bombs++;
+        }
+        const passHints = (this.passHints && this.passHints[oppId]) || [];
+        const totalDecisions = hist.length + passHints.length;
+        return {
+            highCardRate: hist.length ? high / hist.length : 0,
+            comboRate: hist.length ? combo / hist.length : 0,
+            bombCount: bombs, lastHighValue: lastHigh,
+            passRate: totalDecisions ? passHints.length / totalDecisions : 0,
+            plays: hist.length
+        };
+    }
     // 获取某对手在指定点数附近曾 pass 过的次数（用于降低其持有该区间大牌的概率）
     passHintsNear(oppId, value, within = 2) {
         if (!this.passHints[oppId]) return 0;
@@ -669,6 +706,12 @@ class HandBelief {
         this.recycleCount = recycleCount;
         // 对手个体化线索：各对手曾在需要跟牌时 pass 过的上下文（公开信息）
         this.passHints = memory && memory.passHints ? memory.passHints : [[], [], []];
+        // 出牌历史画像（公开信息）：谁出过大牌/组合牌/炸弹、谁爱过牌
+        this.playerProfiles = [0, 1, 2].map(i => (memory && memory.getPlayerProfile)
+            ? memory.getPlayerProfile(i) : null);
+        // 叫分顺序（公开信息）：最后叫分者的牌力信号强于第一个叫分者
+        this.callOrder = (state.callOrder && state.callOrder.length === 3)
+            ? state.callOrder.slice() : null;
         this.memory = memory;
 
         // ======================== 公开历史线索 ========================
@@ -860,7 +903,13 @@ class HandBelief {
         const span = sMax - sMin || 1;
         for (const e of entries) {
             const z = (e.s - sMin) / span;
-            score += e.tier * (2 * z - 1) * 4;   // 高档位配强牌得分，低档位配弱牌得分
+            // 最后叫分的人，其叫分是"看过前面人叫分后"的决定 → 信号更强
+            let orderWeight = 1;
+            if (this.callOrder && this.callOrder.length === 3) {
+                const pos = this.callOrder.indexOf(e.id);
+                orderWeight = 1 + Math.max(0, pos) * 0.5;   // 第1叫=1.0, 第2叫=1.5, 第3叫=2.0
+            }
+            score += e.tier * (2 * z - 1) * 4 * orderWeight;
         }
         // 2) 叫高分者通常握着"控制牌"（炸/王/多个2），但不再是硬条件，按张数软加分
         for (const id of oppIds) {
@@ -882,14 +931,38 @@ class HandBelief {
             const cnt = new Array(15).fill(0);
             for (const c of hand) cnt[c.value]++;
             for (const h of hints) {
-                if (!h || h.type !== 'single') continue;
+                if (!h) continue;
                 const v = h.value;
                 let violations = 0;
-                for (let x = v + 1; x <= 14; x++) if (cnt[x] === 1) violations++;
-                score -= Math.min(4, violations * 0.6);
+                if (h.type === CardType.SINGLE) {
+                    for (let x = v + 1; x <= 14; x++) if (cnt[x] === 1) violations++;
+                } else if (h.type === CardType.PAIR || h.type === CardType.TRIPLE) {
+                    const need = h.type === CardType.PAIR ? 2 : 3;
+                    for (let x = v + 1; x <= 14; x++) if (cnt[x] >= need) violations++;
+                } else if (h.type === CardType.BOMB || h.type === CardType.ROCKET) {
+                    // 对手 pass 过炸弹 → 他手里大概率没有能压的炸/王炸
+                    for (let x = 0; x <= 14; x++) if (cnt[x] >= 4) violations++;
+                    if (cnt[13] > 0 && cnt[14] > 0) violations++;
+                }
+                // 组合牌(顺子/连对/飞机)的 pass 较复杂，跳过避免误判
+                score -= Math.min(4, violations * 0.5);
             }
         }
-        // 4) 记牌器滞后导致回收已打出的牌 → 世界本身不可信，降权
+        // 4) 出牌历史画像（结构倾向一致性）：
+        //    历史 comboRate 高的对手 → 采样世界中其手牌也应有更多连续结构（成团）；
+        //    历史 highCardRate 高 → 手里控牌倾向更强。只做温和调整，避免过拟合。
+        for (const id of oppIds) {
+            const prof = this.playerProfiles && this.playerProfiles[id];
+            if (!prof || !prof.plays) continue;
+            const hand = worldPlayers[id] || [];
+            const f = extractHandFeatures(hand);
+            const comboNow = hand.length ? Math.min(1, (f.pair + f.triple + f.bomb + f.maxStraightLen >= 5 ? 1 : 0)) : 0;
+            score += (prof.comboRate - 0.3) * (comboNow - 0.5) * 6;
+            // 出过炸弹的对手手里控制牌少（已被消耗）→ 降低其握炸先验，
+            // 但 bombRiskFor 已按 seen 剔除，这里只做很轻的风格修正
+            if (prof.bombCount >= 1) score -= 0.5;
+        }
+        // 5) 记牌器滞后导致回收已打出的牌 → 世界本身不可信，降权
         score -= this.recycleCount * 0.5;
         return score;
     }
