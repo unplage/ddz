@@ -501,6 +501,10 @@ async function main() {
     check('结算后向所有玩家广播完整剩余手牌',
         /safeState\.phase === 'gameover'\) return \[\.\.\.p\]/.test(mainTxt));
     check('客户端也会显示自动过牌按钮', mainTxt.includes('syncAutoPassButton()'));
+    check('算力切换会取消在途 AI 决策并重算',
+        mainTxt.includes('function restartAiThinking') && mainTxt.includes('cancelForPlayer'));
+    check('小屏顶栏按钮有防挤压样式',
+        /@media \(max-width: 420px\)/.test(mainTxt) && mainTxt.includes('#topRightControls'));
     check('sync 带 epoch 房间纪元', mainTxt.includes('epoch: GameState.roomEpoch'));
     check('客户端只接受房主连接 sync', mainTxt.includes("conn !== GameState.connections[0]"));
     check('sync 带记牌器快照', mainTxt.includes('memorySnapshot:'));

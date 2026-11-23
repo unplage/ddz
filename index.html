@@ -15,7 +15,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon.png">
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
     <meta name="theme-color" content="#1a1a2e">
-    <meta name="app-version" content="v99">
+    <meta name="app-version" content="v100">
     <meta name="description" content="像素风格斗地主：单机公平 AI 对战 + P2P 联机，离线可玩">
     <style>
         * { image-rendering: pixelated; font-family: 'Press Start 2P', cursive; -webkit-tap-highlight-color: transparent; touch-action: manipulation; box-sizing: border-box; }
@@ -83,6 +83,13 @@
         .lord-card { background: #ffd700 !important; border-color: #b8860b !important; box-shadow: 0 0 20px rgba(255,215,0,0.6); transform: scale(1.05); margin-left: 0 !important; }
         /* CDN(Tailwind) 不可用时的兜底：显隐不依赖外部 CSS，且优先级高于任何工具类 */
         [class~="hidden"] { display: none !important; }
+        @media (max-width: 420px) {
+            .status-bar { height: auto; min-height: 50px; flex-wrap: wrap; row-gap: 4px; padding: 6px 8px; }
+            #topRightControls { flex-wrap: wrap; justify-content: flex-end; gap: 4px; max-width: 100%; }
+            .difficulty-select, .speed-select { padding: 4px; font-size: 9px; min-height: 32px; margin-left: 0; }
+            .voice-btn, .stats-btn { margin-left: 0; padding: 2px 5px; font-size: 7px; }
+            .opponent-top { top: calc(88px + env(safe-area-inset-top, 0px)); }
+        }
     </style>
 </head>
 <body class="text-white safe-area-top safe-area-bottom">
@@ -259,6 +266,9 @@
     let matchHistory = [];
     let gameTimeouts = [];
     let dealInterval = null;
+    let aiThinkTimeout = null;
+    let aiDecisionToken = 0;
+    const AI_TASK_CANCELLED = { __aiTaskCancelled: true };
     function trackTimeout(fn, ms) {
         let id = setTimeout(() => { gameTimeouts = gameTimeouts.filter(t => t !== id); fn(); }, ms);
         gameTimeouts.push(id);
@@ -309,7 +319,10 @@
         } catch (e) {}
         if (typeof AiWorkerPool !== 'undefined' && AiWorkerPool.ready &&
             typeof AiWorkerPool.setPerfFactor === 'function') AiWorkerPool.setPerfFactor(v);
-        showToast(v === 'auto' ? 'AI 算力：自动' : 'AI 算力：' + v + '×');
+        const label = v === 'auto' ? 'AI 算力：自动' : 'AI 算力：' + v + '×';
+        let restarted = false;
+        try { restarted = restartAiThinking(); } catch (e) {}
+        showToast(restarted ? label + '，AI 正在重新思考…' : label);
     }
     function initAiPower() {
         const sel = document.getElementById('aiPower');
@@ -519,6 +532,7 @@
                 (this.difficulty === 'hard' || this.difficulty === 'grandmaster' || this.difficulty === 'legendary')) {
                 try {
                     let res = await AiWorkerPool.think(phase, state, this.id, this.difficulty, this.memory);
+                    if (res === AI_TASK_CANCELLED) return new Promise(() => {});
                     if (res !== undefined && res !== null) return res;
                 } catch (e) { /* 回退本地内核 */ }
             }
@@ -959,6 +973,7 @@
         } else {
             if (playBtn) playBtn.disabled = true; if (passBtn) passBtn.disabled = true;
             GameState.processing = true;
+            const token = ++aiDecisionToken;
             let delay = getAIDelay();
             let at = ParamConfig.get('aiTiming');
             // 思考看门狗：取"标称思考上限"与"实际可用预算(已按设备速度缩放)+余量"的较大者。
@@ -970,7 +985,13 @@
             setAiThinkingHint(id, true);
             // 倒计时必须覆盖 delay + 思考两段，否则慢速档会在 AI 还在算的时候判定"思考超时"强制过牌
             startOnlineTimer(thinkingTime + delay / 1000, () => {
+                if (token !== aiDecisionToken) return;
                 if (GameState.processing && GameState.currentPlayer === id) {
+                    if (aiThinkTimeout !== null) {
+                        clearTimeout(aiThinkTimeout);
+                        gameTimeouts = gameTimeouts.filter(t => t !== aiThinkTimeout);
+                        aiThinkTimeout = null;
+                    }
                     showToast(getPlayerName(id)+' 思考超时');
                     setAiThinkingHint(id, false);
                     executePlayCards(id, []);
@@ -978,10 +999,13 @@
                 }
             }, id);
             
-            trackTimeout(() => {
+            aiThinkTimeout = trackTimeout(() => {
+                aiThinkTimeout = null;
+                if (token !== aiDecisionToken) return;
                 if (GameState.currentPlayer !== id || GameState.phase !== 'playing') return;
                 let ai = GameState.aiList[id];
                 let processResult = (cards) => {
+                    if (token !== aiDecisionToken) return;
                     if (GameState.currentPlayer !== id || GameState.phase !== 'playing') return;
                     if (!GameState.processing) return;
                     if (cards && cards.length > 0) {
@@ -1020,6 +1044,25 @@
                 else processResult(result);
             }, delay);
         }
+    }
+
+    function restartAiThinking() {
+        if (GameState.mode !== 'single' || GameState.phase !== 'playing' || !GameState.processing) return false;
+        const id = GameState.currentPlayer;
+        if (id === GameState.myIndex) return false;
+        aiDecisionToken++;
+        if (aiThinkTimeout !== null) {
+            clearTimeout(aiThinkTimeout);
+            gameTimeouts = gameTimeouts.filter(t => t !== aiThinkTimeout);
+            aiThinkTimeout = null;
+        }
+        if (typeof AiWorkerPool !== 'undefined' && AiWorkerPool.ready &&
+            typeof AiWorkerPool.cancelForPlayer === 'function') AiWorkerPool.cancelForPlayer(id);
+        clearTimer();
+        GameState.processing = false;
+        setAiThinkingHint(id, false);
+        processSinglePlay(id);
+        return true;
     }
 
     // AI 思考指示：让玩家看到"AI 正在算"，而不是以为界面卡死
@@ -2784,11 +2827,23 @@ function broadcastFullState() {
         think(phase, state, playerId, difficulty, memory) {
             if (phase === 'play' && this._shouldParallelMcts(state, playerId, difficulty)) {
                 return this._thinkMctsParallel(state, playerId, difficulty, memory).then(play => {
+                    if (play === AI_TASK_CANCELLED) return play;
                     if (Array.isArray(play)) return play;
                     return this._thinkSingle(phase, state, playerId, difficulty, memory);
                 });
             }
             return this._thinkSingle(phase, state, playerId, difficulty, memory);
+        },
+        cancelForPlayer(playerId) {
+            for (const [taskId, entry] of Array.from(this.pending)) {
+                if (entry.playerId !== playerId) continue;
+                if (entry.phase !== 'play' && entry.kind !== 'mcts') continue;
+                this.pending.delete(taskId);
+                try { clearTimeout(entry.timeout); } catch (e) {}
+                const w = this.workers.find(worker => worker && worker._taskId === taskId);
+                if (w) { w._busy = false; w._taskId = null; }
+                try { entry.resolve(AI_TASK_CANCELLED); } catch (e) {}
+            }
         },
         _shouldParallelMcts(state, playerId, difficulty) {
             const active = this.workers.filter(w => !w._dead && w._ready && !w._busy).length;
@@ -2840,6 +2895,10 @@ function broadcastFullState() {
                     }));
                 }
                 Promise.all(tasks).then(results => {
+                    if (results.some(r => r === AI_TASK_CANCELLED)) {
+                        resolve(AI_TASK_CANCELLED);
+                        return;
+                    }
                     const entries = [];
                     for (const r of results) {
                         if (r && Array.isArray(r.agg)) entries.push(...r.agg);
