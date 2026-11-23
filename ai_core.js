@@ -69,6 +69,42 @@ function isDeterministicSearch() {
     try { return !!cfg('search.deterministic'); } catch (e) { return false; }
 }
 
+// 自适应 MCTS 时间预算：候选少/局面简单时不吃满固定预算。
+// 主线程决策与多 Worker 并行路径必须共用同一公式，否则两条路径的耗时/强度不一致。
+function adaptiveMctsBudget(difficulty, candidateCount, handLength, baseBudgetMs) {
+    if (cfg('blind.adaptiveMctsBudget') === false) return baseBudgetMs;
+    const rootBranch = cfg('mcts.rootBranch') || 12;
+    const effective = Math.max(0, Math.min(candidateCount || 0, rootBranch));
+    const minMs = cfg('blind.mctsMinBudgetMs.' + difficulty) || 200;
+    const perCand = cfg('blind.mctsMsPerCandidate.' + difficulty) || 40;
+    const adaptive = effective * perCand + (handLength || 0) * 5;
+    return Math.min(baseBudgetMs, Math.max(minMs, adaptive));
+}
+
+// 是否值得把这一手的盲 MCTS 拆到多个 Worker：
+// 只在 MCTS 区间内、且残局求解器不会接管时启用。
+function canParallelMcts(state, playerId, difficulty, availableWorkers) {
+    if (!state || !state.players || (availableWorkers || 0) < 2) return false;
+    if (difficulty !== 'hard' && difficulty !== 'grandmaster' && difficulty !== 'legendary') return false;
+    const hand = state.players[playerId];
+    const len = Array.isArray(hand) ? hand.length : 0;
+    const mctsLimit = cfg('mcts.handLimit.' + difficulty) || 0;
+    if (!len || len > mctsLimit) return false;
+    // 残局求解器已经能接管时不需要并行 MCTS
+    const endgameLimit = cfg('endgameThresholds.' + difficulty) || 10;
+    const maxTotal = cfg('endgame.maxTotalCards') || 24;
+    const maxHand = cfg('endgame.maxHandCards') || 20;
+    let total = 0;
+    for (const p of state.players) {
+        if (Array.isArray(p)) total += p.length;
+        else if (typeof p === 'number') total += p;
+        else if (p && typeof p.length === 'number') total += p.length;
+    }
+    if (len <= endgameLimit && len <= maxHand && total <= maxTotal) return false;
+    const worlds = cfg('blind.worlds.mcts.' + difficulty) || 0;
+    return worlds >= 2;
+}
+
 const CardType = {
     SINGLE:'single', PAIR:'pair', TRIPLE:'triple', TRIPLE_WITH_SINGLE:'triple_single', TRIPLE_WITH_PAIR:'triple_pair',
     STRAIGHT:'straight', STRAIGHT_PAIR:'straight_pair', FOUR_WITH_TWO_SINGLE:'four_two_single', FOUR_WITH_TWO_PAIR:'four_two_pair',
@@ -303,16 +339,21 @@ const DEFAULT_PARAMS = {
         enabled: true,
         // 各环节采样多少个可能世界（0 = 关闭该环节的世界采样）
         worlds: {
-            endgame: { easy: 2, medium: 3, hard: 6, grandmaster: 8, legendary: 10 },
+            endgame: { easy: 2, medium: 3, hard: 6, grandmaster: 8, legendary: 12 },
             mcts:    { easy: 0, medium: 0, hard: 3, grandmaster: 5, legendary: 6 },
             sim:     { easy: 0, medium: 0, hard: 2, grandmaster: 3, legendary: 4 },
             call:    { easy: 0, medium: 0, hard: 4, grandmaster: 6, legendary: 6 }
         },
         // 单次决策的时间预算（毫秒）
-        endgameTimeBudgetMs: { easy: 120, medium: 200, hard: 1500, grandmaster: 2500, legendary: 3500 },
+        endgameTimeBudgetMs: { easy: 120, medium: 200, hard: 1500, grandmaster: 2500, legendary: 6000 },
         mctsTimeBudgetMs:    { easy: 0, medium: 0, hard: 1800, grandmaster: 3000, legendary: 4500 },
         // 跨世界聚合的鲁棒系数：均值 − λ×标准差（压制"赌对手手牌"的走法）
         robustness: 0.25,
+        // 自适应 MCTS 时间预算：候选少/局面简单时不必吃满固定预算，
+        // 避免 legendary 在每个局面都固定消耗 4.5s。
+        adaptiveMctsBudget: true,
+        mctsMinBudgetMs: { hard: 250, grandmaster: 800, legendary: 2000 },
+        mctsMsPerCandidate: { hard: 30, grandmaster: 100, legendary: 400 },
         // 领出被压概率的估计（样本数 / 权重 / 候选数）
         beatProbSamples:   { easy: 0, medium: 0, hard: 6, grandmaster: 8, legendary: 10 },
         beatProbWeight:    { easy: 0, medium: 0, hard: 10, grandmaster: 14, legendary: 18 },
@@ -331,7 +372,9 @@ const DEFAULT_PARAMS = {
         // 每个世界采样多少个候选并按「与公开历史的一致性」择优（叫分/过牌线索）
         worldQuality: { easy: 1, medium: 2, hard: 3, grandmaster: 3, legendary: 4 },
         // 叫分模拟次数（传奇难度）
-        callTrials: { legendary: 60 }
+        callTrials: { hard: 20, grandmaster: 40, legendary: 80 },
+        // 每个叫分试投采样的候选世界数；过大会让叫分阶段成为耗时热点
+        callWorldQuality: 2
     },
     mcts: {
         ucbC: 1.4,
@@ -350,6 +393,9 @@ const DEFAULT_PARAMS = {
         dpCandidates: { legendary: 6, grandmaster: 6, hard: 6, medium: 0, easy: 0 }
     },
     randomFactors: { legendary: 0, grandmaster: 0.05, hard: 0.1, medium: 0.2, easy: 0.5 },
+    // 随机乱出概率：低难度会偶尔从全部候选中乱选一手，拉开与高档位的差距。
+    // 关键局面（自己快赢/对手快赢）由 noRandom 保护，不会乱出。
+    blunderFactor: { easy: 0.25, medium: 0.08, hard: 0, grandmaster: 0, legendary: 0 },
     playHeuristics: {
         partnerPlay: { handLe3: -320, handLe2: -600, lastPowerGe40: -80, lastPowerLe20: -50 },
         lordBeatPartner: { needBeat: 80, handLe4: 120 },
@@ -383,7 +429,7 @@ const DEFAULT_PARAMS = {
         bombLeadLate: { bomb: 20, rocket: 30 }
     },
     passScores: {
-        farmerPartnerBase: 180, farmerPartnerHandLe3: -80, farmerPartnerHandLe2: 500,
+        farmerPartnerBase: 180, farmerPartnerHandLe3: -80, farmerPartnerHandLe2: 500, farmerPartnerHandLe1: 200,
         lordHandLe2: -999, lordHandLe4: -150, lordHandGt4: -10,
         landlordFarmerPlayed: -50, landlordFarmerHandLe3: -200,
         passCountGe1: -40
@@ -412,12 +458,14 @@ const DEFAULT_PARAMS = {
         // 实测：8 比 4 强（把精排候选砍到 4 会让 rollout 明显变弱），
         // 所以默认值保持 8；提速靠缓存，不靠削弱 rollout。
         richCandidates: 8,
+        // 难度档位：高档位 rollout 精排更多候选，低档位更粗糙
+        richCandidatesByDiff: { easy: 4, medium: 6, hard: 8, grandmaster: 10, legendary: 16 },
         // rollout 里每个底牌组合最多派生多少个组合牌型（0 = 不限）
         maxComboPerGroup: 0
     },
     endgame: {
         maxDepth: 20, bombDepthPenalty: 1,
-        maxTotalCards: 24, maxHandCards: 20, maxOptions: 8,
+        maxTotalCards: 24, maxHandCards: 20, maxOptions: 10,
         nodeLimit: 200000, timeBudgetMs: 700
     },
     // ======================== 搜索预算模式 ========================
@@ -426,6 +474,11 @@ const DEFAULT_PARAMS = {
     // 运行时（浏览器对局）保持 false，用时间预算换取强度。
     search: {
         deterministic: false,
+        // 离线评测可设 true：确定性模式下按难度保留 MCTS 迭代数/世界数差异。
+        // 为避免 legendary(30000 迭代×6 世界) 把评测拖垮，再乘 difficultyBudgetScale。
+        useDifficultyBudgets: false,
+        difficultyBudgetScale: 0.01,
+        minDifficultyIterations: 100,
         // 以下三项只在确定性模式（离线评测）下生效。
         // 默认值刻意取小：评测要跑几十上百局，预算太大单局就要好几秒。
         // 注意：nodeBudget 是「本次残局求解的总节点数」，不是每候选的。
@@ -565,6 +618,23 @@ class MasterMemory {
 //   桌面 ≈ 1.0（预算不变）；中端手机 ≈ 0.4；低端机 ≈ 0.15
 // 目的：移动端既不会因为算太久而"卡住不动"，也不会被看门狗判超时而丢弃着法。
 const AI_PERF = { factor: 1, calibrated: false, refMs: 0 };
+function setAiPerfOverride(value) {
+    try {
+        if (typeof globalThis === 'undefined') return;
+        const auto = value === null || value === undefined || value === '' || value === 'auto';
+        if (auto) {
+            delete globalThis.__aiPerfOverride;
+            AI_PERF.calibrated = false;
+            return;
+        }
+        const n = Number(value);
+        if (!Number.isFinite(n)) return;
+        const v = Math.max(0.1, Math.min(2.5, n));
+        globalThis.__aiPerfOverride = v;
+        AI_PERF.factor = v;
+        AI_PERF.calibrated = true;
+    } catch (e) {}
+}
 function _calibrationHand() {
     // 固定的一手 17 张牌（覆盖各种牌型），保证每次标定的负载一致
     const defs = [['3',0],['3',0],['4',1],['5',2],['6',3],['7',4],['8',5],['9',6],['10',7],
@@ -574,6 +644,10 @@ function _calibrationHand() {
 }
 function calibrateAiSpeed(force) {
     if (AI_PERF.calibrated && !force) return AI_PERF.factor;
+    if (typeof globalThis !== 'undefined' && globalThis.__aiPerfOverride !== undefined) {
+        AI_PERF.factor = globalThis.__aiPerfOverride;
+        return AI_PERF.factor;
+    }
     AI_PERF.calibrated = true;
     try {
         const hand = _calibrationHand();
@@ -958,7 +1032,8 @@ class HandBelief {
             if (!prof || !prof.plays) continue;
             const hand = worldPlayers[id] || [];
             const f = extractHandFeatures(hand);
-            const comboNow = hand.length ? Math.min(1, (f.pair + f.triple + f.bomb + f.maxStraightLen >= 5 ? 1 : 0)) : 0;
+            const structure = f.pair + f.triple + f.bomb + (f.maxStraightLen >= 5 ? 1 : 0);
+            const comboNow = hand.length ? Math.min(1, structure / 4) : 0;
             score += (prof.comboRate - 0.3) * (comboNow - 0.5) * 6;
             // 出过炸弹的对手手里控制牌少（已被消耗）→ 降低其握炸先验，
             // 但 bombRiskFor 已按 seen 剔除，这里只做很轻的风格修正
@@ -1875,6 +1950,7 @@ function computePassScore(role, state) {
             let partnerCards = state.players[state.lastPlayerId] ? state.players[state.lastPlayerId].length : 17;
             if (partnerCards <= 3) score += ps.farmerPartnerHandLe3;
             if (partnerCards <= 2) score += ps.farmerPartnerHandLe2;
+            if (partnerCards <= 1) score += ps.farmerPartnerHandLe1;
         } else if (state.lastPlayerId === state.landlord) {
             if (lordCards <= 2) score += ps.lordHandLe2;
             else if (lordCards <= 4) score += ps.lordHandLe4;
@@ -2649,6 +2725,10 @@ function solveEndgameBlind(state, playerId, belief, opts) {
     // 这里保留启发式排序最靠前的候选（覆盖多种牌型）+ 过牌，限制候选规模。
     const maxOptions = Math.max(4, Math.min(10, opts.maxOptions || (cfg('endgame.maxOptions') || 8)));
     let trimmedOptions = options.slice(0, maxOptions);
+    // 一手清是确定的胜利（自己的手牌是精确信息），不能被启发式排序裁掉
+    for (const p of options) {
+        if (p && p.length === hand.length && !trimmedOptions.includes(p)) trimmedOptions.push(p);
+    }
     if (needBeat && !trimmedOptions.includes(ENDGAME_PASS)) trimmedOptions.push(ENDGAME_PASS);
 
     const worlds = Math.max(1, opts.worlds || 4);
@@ -2835,7 +2915,10 @@ function heuristicPlayoutWithMode(state, startPlayer, myId, memory, deterministi
         //   2) 质量：rollout 策略如果和根节点用同一个 scorePlay，
         //      MCTS 搜索的就是「我自己启发式的延伸」，会把启发式的盲点一起放大。
         //      用「便宜的排序 + 少量精排」能让 rollout 与根评估部分解耦。
-        const RICH_MAX = cfg('heuristicPlayout.richCandidates') || 4;
+        let aiDiff = 'hard';
+        try { if (typeof globalThis !== 'undefined' && globalThis.__aiDifficulty) aiDiff = globalThis.__aiDifficulty; } catch (e) {}
+        const RICH_MAX = cfg('heuristicPlayout.richCandidatesByDiff.' + aiDiff) ||
+            cfg('heuristicPlayout.richCandidates') || 4;
         const richPool = [];
         const seenRich = new Set();
         const pushRich = (pl) => {
@@ -3372,8 +3455,13 @@ function _ismctsOpponentMove(st, cp) {
 function mctsSearchISMCTS(state, playerId, belief, opts) {
     opts = opts || {};
     const determin = isDeterministicSearch();
+    const useDiffBudgets = determin && cfg('search.useDifficultyBudgets') === true;
+    const diffKey = opts.difficulty || 'hard';
     const iterations = determin
-        ? Math.max(1, cfg('search.mctsIterations') || 300)
+        ? (useDiffBudgets
+            ? Math.max(cfg('search.minDifficultyIterations') || 100,
+                Math.round((cfg('mcts.iterations.' + diffKey) || 300) * (cfg('search.difficultyBudgetScale') || 1)))
+            : Math.max(1, cfg('search.mctsIterations') || 300))
         : (opts.iterations || cfg('mcts.iterations.hard') || 600);
     const budgetMs = opts.timeBudgetMs !== undefined ? opts.timeBudgetMs : (cfg('blind.mctsTimeBudgetMs.hard') || 1000);
     const deadline = determin ? 0 : (Date.now() + budgetMs);
@@ -3525,6 +3613,13 @@ function mctsSearchBlind(state, playerId, belief, opts) {
     opts = opts || {};
     const hand = state.players[playerId];
     if (!hand || !hand.length) return null;
+    const needBeatRootEarly = state.lastPlay && state.lastPlayerId !== playerId;
+    const rootPlaysEarly = getAllValidPlays(hand, needBeatRootEarly ? state.lastPlay : null);
+    if (!rootPlaysEarly.length) {
+        // 跟牌且一手都压不出 → 过牌是唯一合法解，不要进入 MCTS 空转整段时间预算
+        if (needBeatRootEarly) return { play: [], visits: 0, wins: 0 };
+        return null;
+    }
     // 搜索模式：'pimc' = 每世界各搜一棵树再聚合；'ismcts' = 信息集共享树（再确定性化）
     const mode = opts.mode || cfg('blind.mctsMode') || 'pimc';
     if (mode === 'ismcts') {
@@ -3534,9 +3629,18 @@ function mctsSearchBlind(state, playerId, belief, opts) {
         } catch (e) { /* 回退到 PIMC */ }
     }
     const determin = isDeterministicSearch();
-    const worlds = determin ? Math.max(1, cfg('search.mctsWorlds') || 4) : Math.max(1, opts.worlds || 3);
+    const diffKey = opts.difficulty || 'hard';
+    const useDiffBudgets = determin && cfg('search.useDifficultyBudgets') === true;
+    const worlds = determin
+        ? (useDiffBudgets
+            ? Math.max(1, cfg('blind.worlds.mcts.' + diffKey) || cfg('search.mctsWorlds') || 3)
+            : Math.max(1, cfg('search.mctsWorlds') || 4))
+        : Math.max(1, opts.worlds || 3);
     const iterations = determin
-        ? Math.max(1, cfg('search.mctsIterations') || 300)
+        ? (useDiffBudgets
+            ? Math.max(cfg('search.minDifficultyIterations') || 100,
+                Math.round((cfg('mcts.iterations.' + diffKey) || 300) * (cfg('search.difficultyBudgetScale') || 1)))
+            : Math.max(1, cfg('search.mctsIterations') || 300))
         : (opts.iterations || cfg('mcts.iterations.hard') || 600);
     const budgetMs = opts.timeBudgetMs !== undefined ? opts.timeBudgetMs : (cfg('blind.mctsTimeBudgetMs.hard') || 1000);
     const deadline = determin ? 0 : (Date.now() + budgetMs);
@@ -3655,7 +3759,11 @@ class AICore {
         const scale = (AI_PERF.factor || 1) * (this.budgetScale || 1);
         return Math.max(50, Math.round(base * scale));
     }
+    _setDifficultyContext() {
+        try { if (typeof globalThis !== 'undefined') globalThis.__aiDifficulty = this.difficulty; } catch (e) {}
+    }
     think(phase, state) {
+        this._setDifficultyContext();
         if (phase === 'call') return this.callDecision(state);
         return this.playDecision(state);
     }
@@ -3682,6 +3790,7 @@ class AICore {
         } catch (e) { this.lastReasoning = null; }
     }
     callDecision(state) {
+        this._setDifficultyContext();
         let curr = state.baseScore;
         let ct = cfg('callThresholds.' + this.difficulty) || {};
         if (this.difficulty === 'easy') {
@@ -3696,33 +3805,48 @@ class AICore {
             return 0;
         }
         if (this.difficulty === 'hard' || this.difficulty === 'grandmaster' || this.difficulty === 'legendary') {
-            // 叫分评估走"信念世界"多模拟，不窥视他人手牌
+            // 叫分评估走"信念世界"多模拟，不窥视他人手牌。
+            // 底牌在叫分阶段对任何玩家都不可见：只能从未见牌池采样 3 张作为
+            // "我若成为地主会拿到的底牌"，绝不能读 state.lordCards。
             const worlds = Math.max(1, cfg('blind.worlds.call.' + this.difficulty) || 6);
-            const trials = { hard: 20, grandmaster: 40, legendary: 60 }[this.difficulty] || 40;
-            const lordCards = state.lordCards || [];
-            // 以"我当地主 + 拿底牌"为前提构造信念（底牌归属公开，因此从对手牌池中剔除）
-            const callState = Object.assign({}, state, {
-                landlord: this.id,
-                phase: 'playing',
-                players: state.players.map((p, i) => (i === this.id ? [...p, ...lordCards] : p))
-            });
-            const belief = new HandBelief(this.id, callState, this.memory);
-            // 只算一次胜率：旧的 bid 循环把同样的 rollout 跑三遍（W 相同 → 分档毫无意义，还 3× 开销）。
-            // 世界池一次采样 + 共同随机数降低方差；连续值保留"差一手赢"的信息。
-            const worldPool = belief.sampleWorlds(trials);
-            let scoreSum = 0;
-            for (let i = 0; i < worldPool.length; i++) {
+            const callQuality = Math.max(1, Math.min(worlds, cfg('blind.callWorldQuality') || 2));
+            const trials = cfg('blind.callTrials.' + this.difficulty) ||
+                ({ hard: 20, grandmaster: 40, legendary: 60 }[this.difficulty] || 40);
+            const ownIds = new Set(state.players[this.id].map(c => c.id));
+            const seenIds = new Set();
+            try { if (this.memory && this.memory.seen) for (const id of this.memory.seen) seenIds.add(id); } catch (e) {}
+            const bottomPool = allCards().filter(c => !ownIds.has(c.id) && !seenIds.has(c.id));
+            const sampleBottom = () => {
+                const pool = bottomPool.slice();
+                for (let i = pool.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    const t = pool[i]; pool[i] = pool[j]; pool[j] = t;
+                }
+                return pool.slice(0, 3).map(c => ({ ...c }));
+            };
+            let scoreSum = 0, scored = 0;
+            for (let i = 0; i < trials; i++) {
+                if (bottomPool.length < 3) break;
+                const bottom = sampleBottom();
+                const callState = Object.assign({}, state, {
+                    landlord: this.id,
+                    phase: 'playing',
+                    players: state.players.map((p, idx) => (idx === this.id ? [...p, ...bottom] : p))
+                });
+                const belief = new HandBelief(this.id, callState, this.memory);
+                const world = belief.sampleWorld(callQuality);
                 const rs = Object.assign({}, state, {
                     landlord: this.id,
                     phase: 'playing',
-                    players: worldPool[i].map(p => p.map(c => ({ ...c })))
+                    players: world.map(p => p.map(c => ({ ...c })))
                 });
                 scoreSum += heuristicPlayoutWithMode(rs, this.id, this.id, this.memory, false, true);
+                scored++;
             }
-            const rawW = (scoreSum / Math.max(1, worldPool.length) + 1) / 2;
+            const rawW = (scoreSum / Math.max(1, scored) + 1) / 2;
             // 先验收缩：把小样本估计拉向手牌强度映射的先验，降低误叫/漏叫
             const prior = Math.max(0.1, Math.min(0.9, 0.5 + evaluateHandStrength(state.players[this.id], this.memory, false, this.id) / 400));
-            const winRate = (rawW * worldPool.length + prior * 12) / (worldPool.length + 12);
+            const winRate = (rawW * scored + prior * 12) / (scored + 12);
             let bestBid = 0, bestEV = 0;
             for (let bid = 1; bid <= 3; bid++) {
                 if (bid <= curr) continue;
@@ -3758,6 +3882,7 @@ class AICore {
     // 这里统一校验一次：不合法就打印诊断并回退到合法选择，绝不让非法走法流到上层
     // （上层会把整局判为 ILLEGAL_PLAY 作废，白白丢掉一局评测数据）。
     playDecision(state) {
+        this._setDifficultyContext();
         let play;
         try { play = this._playDecisionImpl(state); }
         catch (e) {
@@ -3828,7 +3953,8 @@ class AICore {
                 worlds: cfg('blind.worlds.endgame.' + this.difficulty) || 4,
                 worldQuality: cfg('blind.worldQuality.' + this.difficulty) || 1,
                 timeBudgetMs: this.budgetMs('blind.endgameTimeBudgetMs.' + this.difficulty, 600),
-                memory: this.memory
+                memory: this.memory,
+                difficulty: this.difficulty
             });
             if (egResult !== null && egResult !== undefined) {
                 const endgamePlay = (egResult === ENDGAME_PASS || egResult.__endgamePass) ? [] : egResult;
@@ -3840,15 +3966,22 @@ class AICore {
         let mctsIters = cfg('mcts.iterations.' + this.difficulty) || 0;
         if ((this.difficulty === 'hard' || this.difficulty === 'grandmaster' || this.difficulty === 'legendary') && hand.length <= mctsLimit) {
             let leadPref = null;
+            let leadPool = [];
             try {
-                let leadPool = (lastPlay && state.lastPlayerId !== this.id)
+                leadPool = (lastPlay && state.lastPlayerId !== this.id)
                     ? getAllValidPlays(hand, lastPlay) : getAllValidPlays(hand, null);
                 leadPref = this.selectLeadSmart(leadPool, role, hand, state, partnerId);
             } catch (e) { leadPref = null; }
+            if (lastPlay && state.lastPlayerId !== this.id && leadPool.length === 0) {
+                this._recordReasoning([], 'rule', []);
+                return [];
+            }
+            const baseBudgetMs = this.budgetMs('blind.mctsTimeBudgetMs.' + this.difficulty, 1000);
+            const mctsBudgetMs = adaptiveMctsBudget(this.difficulty, leadPool.length, hand.length, baseBudgetMs);
             let mctsResult = mctsSearchBlind(state, this.id, belief, {
                 iterations: mctsIters,
                 worlds: cfg('blind.worlds.mcts.' + this.difficulty) || 3,
-                timeBudgetMs: this.budgetMs('blind.mctsTimeBudgetMs.' + this.difficulty, 1000),
+                timeBudgetMs: mctsBudgetMs,
                 memory: this.memory,
                 difficulty: this.difficulty,
                 leadPref: leadPref
@@ -4009,7 +4142,10 @@ class AICore {
         let rf = cfg('randomFactors');
         let randomFactor = rf[this.difficulty] !== undefined ? rf[this.difficulty] : 0.6;
         let chosenPlay;
-        if (!noRandom && Math.random() < randomFactor && scored.length > 1 && scored[1].play.length > 0) {
+        const blunderFactor = cfg('blunderFactor.' + this.difficulty) || 0;
+        if (!noRandom && blunderFactor > 0 && scored.length > 1 && Math.random() < blunderFactor) {
+            chosenPlay = scored[Math.floor(Math.random() * scored.length)].play;
+        } else if (!noRandom && Math.random() < randomFactor && scored.length > 1 && scored[1].play.length > 0) {
             chosenPlay = scored[1].play;
         } else {
             chosenPlay = scored[0].play;

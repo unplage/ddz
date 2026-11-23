@@ -71,6 +71,12 @@ self.onmessage = function (e) {
                 if (Object.prototype.hasOwnProperty.call(msg || {}, 'params')) _params = msg.params || null;
                 if (typeof invalidateParamCache === 'function') invalidateParamCache();
                 if (msg.correctionRules) _correctionRules = msg.correctionRules;
+                if (typeof setAiPerfOverride === 'function') setAiPerfOverride(msg.perfFactor);
+                self.postMessage({ taskId: msg.taskId, status: 'ok' });
+                break;
+            }
+            case 'setPerfFactor': {
+                if (typeof setAiPerfOverride === 'function') setAiPerfOverride(msg.factor);
                 self.postMessage({ taskId: msg.taskId, status: 'ok' });
                 break;
             }
@@ -125,6 +131,7 @@ self.onmessage = function (e) {
                 try { if (typeof calibrateAiSpeed === 'function') calibrateAiSpeed(); } catch (e) {}
                 let state = msg.state;
                 let memory = rebuildMemory(msg.memory);
+                try { if (typeof globalThis !== 'undefined') globalThis.__aiDifficulty = msg.difficulty || 'hard'; } catch (e) {}
                 let belief = new HandBelief(msg.playerId, state, memory);
                 const scale = (typeof AI_PERF !== 'undefined' && AI_PERF.factor) ? AI_PERF.factor : 1;
                 let mctsResult = mctsSearchBlind(state, msg.playerId, belief, {

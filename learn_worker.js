@@ -699,7 +699,10 @@ const GodViewLearner = {
         'blind.beatProbWeight.grandmaster':{ def: 14, min: 3, max: 24, step: 2 },
         'blind.beatProbWeight.legendary':  { def: 18, min: 4, max: 30, step: 2 },
         'blind.robustness':                { def: 0.25, min: 0.1, max: 0.5, step: 0.03 },
-        'mcts.ucbC':                       { def: 1.4, min: 0.8, max: 2.2, step: 0.1 }
+        'mcts.ucbC':                       { def: 1.4, min: 0.8, max: 2.2, step: 0.1 },
+        'endgame.maxOptions':              { def: 10, min: 6, max: 14, step: 1 },
+        'mcts.rootBranch':                 { def: 12, min: 8, max: 16, step: 1 },
+        'heuristicPlayout.richCandidates': { def: 8, min: 6, max: 12, step: 1 }
     },
 
     _FEATURE_SCALE: {

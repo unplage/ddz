@@ -56,8 +56,11 @@ node bench/run_all.js --only=rules,smoke
 # 快速回归（压平难度差异，仅测流程正确性）：
 node bench/run.js --a hard --b medium --deals 40 --profile fast
 
-# 真实强度对比（保留难度差异，确定性模式）：
+# 真实强度对比（保留世界数/随机因子差异，确定性模式，较快）：
 node bench/run.js --a legendary --b easy --deals 30 --profile fair
+
+# 更接近线上差异（额外按难度保留 MCTS 迭代数/世界数，明显更慢）：
+node bench/run.js --a legendary --b easy --deals 10 --profile diff
 
 # 对比历史版本（保留难度差异）：
 node bench/run.js --fileA ai_core.js --fileB /tmp/old.js --a hard --b hard --deals 200 --profile fair
@@ -66,7 +69,7 @@ node bench/run.js --fileA ai_core.js --fileB /tmp/old.js --a hard --b hard --dea
 node bench/run.js --check-repro
 ```
 
-> 说明：`fast` 档为毫秒级单局、压平难度差异，仅用于流程回归；`fair` 档保留 MCTS 迭代数、盲搜世界数、随机因子等关键差异，用确定性模式（`search.deterministic=true`）保证可复现，单局 ~3 秒，适合强度评测。
+> 说明：`fast` 档为毫秒级单局、压平难度差异，仅用于流程回归；`fair` 档保留盲搜世界数与随机因子、MCTS 用固定小预算，确定性可复现且较快；`diff` 档额外按难度保留 MCTS 迭代数/世界数（`search.useDifficultyBudgets=true`），更接近线上差异但明显更慢。三者都用 `search.deterministic=true` 保证可复现。
 
 > 统计陷阱：n=120 局时 95%CI ≈ ±9pt，**测不出 2~5pt 的真实提升**。
 > 要下结论就用 `--deals 250` 以上，或用更低方差的指标。
@@ -99,7 +102,14 @@ node bench/run.js --check-repro
 | `mctsSearchBlind` | ai_core.js | 多世界 MCTS，跨世界按「均值 − λ×标准差 + 覆盖率」聚合 |
 | `refineLeadByBelief` | ai_core.js | 领出时估计"被下家压住"的概率 |
 
-**信念采样（2026-11 重写）**：`sampleWorld()` 按**手牌形状**分配未见牌池（整组优先 → 形成对子/三张），而不是逐张随机撒牌。理由：均匀随机造出的对手几乎全是散牌，接不住任何牌 → 搜索严重高估自己的控制权。`blind.structuredBelief = 0` 可切回旧行为做 A/B 对照。
+**信念采样**：`sampleWorld()` 支持按手牌形状分配未见牌池，但默认 `blind.structuredBelief = 0`（均匀随机）。实测结构化采样会让对手握炸/组合牌比例失真、AI 过度保守；保留开关仅供 A/B 对照。`_worldLikelihood` 用叫分/过牌/出牌画像等公开信息对采样世界加权。
+
+### 难度档位
+
+五档共用同一套启发式/评分/拆牌/搜索框架，差异来自预算与随机性：
+- `easy/medium`：只走启发式 + 残局求解（阈值 7/9），无 MCTS；`blunderFactor` 分别 0.25/0.08，会偶尔乱出（关键局面除外）。
+- `hard/grandmaster/legendary`：追加盲 MCTS（手牌上限 12/14/17）、对手响应模拟、`beatProb`/炸弹风险修正；`rolling` 精排候选数 8/10/16。
+- `legendary` 用满 4500ms MCTS 自适应预算、12 世界残局、80 次叫分模拟、随机因子 0；多 Worker 并行 MCTS 仅在 hard+ 且 ≥2 空闲 Worker 时触发。
 
 ### 搜索预算与确定性
 
@@ -157,6 +167,7 @@ node bench/run.js --check-repro
 - 强度回归：`node bench/run.js --a hard --b medium --deals 40`（配对自对弈）
 - 与历史版本对比：`git show HEAD~1:ai_core.js > /tmp/old.js` 后用 `--fileA/--fileB` 双文件 A/B
 - 调参可用 `--paramsA/--paramsB` 传局部参数覆盖（如 `{"blind":{"worlds":{"mcts":{"hard":2}}}}`）
+- 顶栏 `⚡自动` 可设置 AI 算力倍率（`0.5~2.5×`），保存于 `landlord_ai_power`；大于 1 会同步到所有 Worker，更耗电但搜得更久
 - 改图标：编辑 `icons/make_icons.js` 的点阵/配色后跑 `node icons/make_icons.js`
 - **提交到 GitHub 规则**：
   - `index.html`、`ai_core.js`、`ai_learner.js`、`ai_worker.js`、`learn_worker.js` 任一变更提交时，

@@ -37,7 +37,8 @@ function makeWorker() {
     // 顶层 const/class 是「全局词法绑定」，不会挂到 globalThis 上 → 需要显式导出
     const EXPORTS = ['AICore', 'MasterMemory', 'HandBelief', 'getCardType', 'canBeat',
         'getAllValidPlays', 'scorePlay', 'extractPlayFeatures', 'DEFAULT_PARAMS', 'cfg',
-        'mctsSearchBlind', 'simulateOpponentResponseBlind', 'invalidateParamCache'];
+        'mctsSearchBlind', 'simulateOpponentResponseBlind', 'invalidateParamCache',
+        'AI_PERF', 'setAiPerfOverride', 'calibrateAiSpeed'];
     let epilogue = '\n;globalThis.__EXP__ = {};\n';
     for (const k of EXPORTS) epilogue += 'try { globalThis.__EXP__[' + JSON.stringify(k) + '] = ' + k + '; } catch (e) {}\n';
     vm.runInContext(AI_CORE + epilogue, sandbox, { filename: 'ai_core.js' });
@@ -163,11 +164,17 @@ check('mcts 有响应', !!mctsMsg, 'no response');
 check('mcts 无错误', mctsMsg && !mctsMsg.error, mctsMsg && mctsMsg.error);
 check('mcts 返回 play 数组', !!(mctsMsg && Array.isArray(mctsMsg.play)));
 
-// ---------- 5. setParams / setRules ----------
+// ---------- 5. setParams / setRules / setPerfFactor ----------
 const sp = call('setParams', { params: { weights: { playPower: 2.5 } } });
 check('setParams 有响应', !!sp && sp.status === 'ok');
 const sr = call('setRules', { correctionRules: [{ context: { needBeat: true }, comparators: {}, penalty: -7, confidence: 0.9 }] });
 check('setRules 有响应', !!sr && sr.status === 'ok');
+const pf = call('setPerfFactor', { factor: 2 });
+check('setPerfFactor 有响应', !!pf && pf.status === 'ok');
+check('算力倍率可大于 1', sandbox.AI_PERF && sandbox.AI_PERF.factor === 2,
+    sandbox.AI_PERF && String(sandbox.AI_PERF.factor));
+call('setPerfFactor', { factor: null });
+check('恢复自动后需重新标定', sandbox.AI_PERF && sandbox.AI_PERF.calibrated === false);
 
 // 参数生效验证：把 playPower 调成 0 应该改变评分
 const after = call('think', { phase: 'play', state: slimState, playerId: 0, difficulty: 'hard', memory: memData });

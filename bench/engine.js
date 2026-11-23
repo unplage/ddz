@@ -159,13 +159,24 @@ function playDeal(AI, deal, landlord, opts) {
 
 // ==================== 确定性参数档 ====================
 // fast：迭代受限（不看挂钟）→ 同种子必然同结果，且单局毫秒级，适合大规模配对评测。
+// fair：保留世界数/随机因子差异，MCTS 用固定小预算（可复现且够快）。
+// diff：在 fair 基础上按难度保留 MCTS 迭代数/世界数（更接近线上，但明显更慢）。
 // prod：接近线上真实强度（用挂钟），适合最终验收，但不可复现、很慢。
 function profileParams(profile) {
     if (profile === 'prod') return null; // null → 用 DEFAULT_PARAMS
+    if (profile === 'diff') {
+        const p = profileParams('fair');
+        p.search = Object.assign({}, p.search, {
+            useDifficultyBudgets: true, difficultyBudgetScale: 0.05
+        });
+        return p;
+    }
     if (profile === 'fair') {
         // fair：保留难度关键差异（MCTS迭代数、盲搜世界数、随机因子），但用确定性模式 → 可复现且有区分度
         return {
-            search: { deterministic: true, nodeBudget: 5000, mctsIterations: 0, mctsWorlds: 2 },
+            search: {
+                deterministic: true, nodeBudget: 5000, mctsIterations: 0, mctsWorlds: 2
+            },
             blind: {
                 worlds: { 
                     endgame: { easy: 2, medium: 3, hard: 6, grandmaster: 8, legendary: 10 },

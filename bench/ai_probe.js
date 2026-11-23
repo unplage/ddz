@@ -18,7 +18,7 @@ const SYMBOLS = [
     'extractHandFeatures', 'decomposeHandDP', 'simulateOpponentResponseV2',
     'heuristicPlayoutWithMode', 'AICore', 'cfg', 'DEFAULT_PARAMS', 'HandBelief', '_fastHandTurns',
     'handPotential', '_withRefParams', 'scorePlay', 'extractPlayFeatures',
-    'HandBelief', 'MasterMemory', 'getCardType',
+    'HandBelief', 'MasterMemory', 'getCardType', 'canParallelMcts', 'adaptiveMctsBudget',
 ];
 const mod = loadAI('ai_core.js', SYMBOLS, makeRng(1));
 
@@ -336,6 +336,83 @@ console.log('== 10. 记牌器没有无调用方的死 API ==');
         }
         check(n + ' 已移除（无定义也无调用）', total === 0, `出现 ${total} 次`);
     }
+}
+
+// ---------------------------------------------------------------- 确定性难度预算
+console.log('== 14. 确定性评测保留难度预算差异 ==');
+{
+    const diffParams = {
+        search: {
+            deterministic: true, nodeBudget: 5000, mctsIterations: 0, mctsWorlds: 2,
+            useDifficultyBudgets: true, difficultyBudgetScale: 0.05
+        },
+        mcts: { iterations: { legendary: 30000, grandmaster: 12000, hard: 1800, medium: 0, easy: 0 } },
+        blind: { worlds: { mcts: { legendary: 6, grandmaster: 5, hard: 3, medium: 0, easy: 0 } } }
+    };
+    const SYMS2 = ['mctsSearchBlind', 'HandBelief', 'MasterMemory', 'allCards', 'getCardType', 'getAllValidPlays'];
+    const m2 = loadAI('ai_core.js', SYMS2, makeRng(77), diffParams);
+    const cards = m2.allCards().map(c => ({ ...c }));
+    const state = {
+        players: [cards.slice(0, 8), cards.slice(8, 20), cards.slice(20, 32)],
+        landlord: 0, currentPlayer: 0, lastPlay: null, lastPlayerId: -1, passCount: 0,
+        phase: 'playing', lordCards: [], callScores: [0, 0, 0]
+    };
+    const visits = {};
+    for (const diff of ['hard', 'legendary']) {
+        const belief = new m2.HandBelief(0, state, new m2.MasterMemory());
+        const res = m2.mctsSearchBlind(state, 0, belief, { difficulty: diff, collectAll: true });
+        visits[diff] = res ? res.visits : 0;
+    }
+    check('legendary 的确定性 MCTS 访问量显著高于 hard',
+        visits.legendary > visits.hard * 2,
+        `legendary=${visits.legendary} hard=${visits.hard}`);
+}
+
+// ---------------------------------------------------------------- 并行 MCTS 门控
+console.log('== 15. 多 Worker 并行 MCTS 门控 ==');
+{
+    const H = (n, offset) => Array.from({ length: n }, (_, i) => ({ id: 'p' + offset + '_' + i, value: i % 15 }));
+    const mid = { players: [H(17, 0), H(17, 1), H(17, 2)], landlord: 0, currentPlayer: 0, phase: 'playing' };
+    const endgame = { players: [H(17, 0), H(2, 1), H(1, 2)], landlord: 0, currentPlayer: 0, phase: 'playing' };
+    const big = { players: [H(20, 0), H(17, 1), H(17, 2)], landlord: 0, currentPlayer: 0, phase: 'playing' };
+    check('legendary 中盘且 ≥2 Worker 可并行', mod.canParallelMcts(mid, 0, 'legendary', 4) === true);
+    check('只有 1 个 Worker 不并行', mod.canParallelMcts(mid, 0, 'legendary', 1) === false);
+    check('残局求解器接管时不并行', mod.canParallelMcts(endgame, 0, 'legendary', 4) === false);
+    check('手牌超过 MCTS 上限时不并行', mod.canParallelMcts(big, 0, 'legendary', 4) === false);
+    check('easy 不并行', mod.canParallelMcts(mid, 0, 'easy', 4) === false);
+    const smallBudget = mod.adaptiveMctsBudget('legendary', 3, 17, 4500);
+    const largeBudget = mod.adaptiveMctsBudget('legendary', 12, 17, 4500);
+    const hardBudget = mod.adaptiveMctsBudget('hard', 12, 12, 1800);
+    check('传奇级预算显著高于困难级且不超过上限',
+        smallBudget === 2000 && largeBudget === 4500 && hardBudget === 420,
+        `legendary small=${smallBudget} large=${largeBudget} hard=${hardBudget}`);
+    const rich = mod.cfg('heuristicPlayout.richCandidatesByDiff');
+    check('rollout 精排候选数按难度递增',
+        rich.easy === 4 && rich.medium === 6 && rich.hard === 8 &&
+        rich.grandmaster === 10 && rich.legendary === 16,
+        JSON.stringify(rich));
+    const blunder = mod.cfg('blunderFactor');
+    check('乱出概率按难度递减，传奇级为 0',
+        blunder.easy > blunder.medium && blunder.medium > blunder.hard &&
+        blunder.hard === 0 && blunder.grandmaster === 0 && blunder.legendary === 0,
+        JSON.stringify(blunder));
+}
+
+// ---------------------------------------------------------------- 算力倍率设置
+console.log('== 16. 用户算力倍率设置 ==');
+{
+    const perfMod = loadAI('ai_core.js',
+        ['setAiPerfOverride', 'calibrateAiSpeed', 'AI_PERF'], makeRng(99));
+    perfMod.setAiPerfOverride(2);
+    check('手动倍率 2 生效', perfMod.AI_PERF.factor === 2,
+        String(perfMod.AI_PERF.factor));
+    perfMod.setAiPerfOverride(99);
+    check('手动倍率被限制到 2.5', perfMod.AI_PERF.factor === 2.5,
+        String(perfMod.AI_PERF.factor));
+    perfMod.setAiPerfOverride('auto');
+    perfMod.calibrateAiSpeed(true);
+    check('恢复自动后按设备标定', perfMod.AI_PERF.factor <= 1,
+        String(perfMod.AI_PERF.factor));
 }
 
 console.log('----------------------------------------');

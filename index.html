@@ -15,7 +15,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon.png">
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
     <meta name="theme-color" content="#1a1a2e">
-    <meta name="app-version" content="v95">
+    <meta name="app-version" content="v99">
     <meta name="description" content="像素风格斗地主：单机公平 AI 对战 + P2P 联机，离线可玩">
     <style>
         * { image-rendering: pixelated; font-family: 'Press Start 2P', cursive; -webkit-tap-highlight-color: transparent; touch-action: manipulation; box-sizing: border-box; }
@@ -102,6 +102,7 @@
                 <option value="legendary" selected>传奇级</option>
             </select>
             <select id="aiSpeed" class="speed-select" onchange="changeSpeed(this.value)"><option value="fast">快速</option><option value="normal" selected>中等</option><option value="slow">慢速</option></select>
+            <select id="aiPower" class="speed-select" title="AI 算力倍率（大于 1 更强但更耗电）" onchange="changeAiPower(this.value)"><option value="auto">⚡自动</option><option value="0.5">0.5×</option><option value="1">1×</option><option value="1.5">1.5×</option><option value="2">2×</option><option value="2.5">2.5×</option></select>
             <div id="voiceToggle" class="voice-btn pixel-btn" style="background:#333; padding:4px 8px;" onclick="toggleVoice()">🔊 开</div>
             <div class="stats-btn pixel-btn" style="background:#333; padding:4px 8px;" onclick="ParamExporter.showUI()">🤖 AI</div>
         </div>
@@ -294,6 +295,31 @@
     }
 
     function changeSpeed(val) { aiSpeed = val; }
+    function changeAiPower(val) {
+        let v = val;
+        if (v !== 'auto') {
+            const n = Number(v);
+            if (!Number.isFinite(n)) return;
+            v = String(Math.max(0.1, Math.min(2.5, n)));
+        }
+        SafeStore.set('landlord_ai_power', v);
+        try {
+            if (typeof setAiPerfOverride === 'function') setAiPerfOverride(v === 'auto' ? null : v);
+            if (v === 'auto' && typeof calibrateAiSpeed === 'function') calibrateAiSpeed(true);
+        } catch (e) {}
+        if (typeof AiWorkerPool !== 'undefined' && AiWorkerPool.ready &&
+            typeof AiWorkerPool.setPerfFactor === 'function') AiWorkerPool.setPerfFactor(v);
+        showToast(v === 'auto' ? 'AI 算力：自动' : 'AI 算力：' + v + '×');
+    }
+    function initAiPower() {
+        const sel = document.getElementById('aiPower');
+        const saved = SafeStore.get('landlord_ai_power', 'auto');
+        let v = saved === 'auto' ? 'auto' : String(Math.max(0.1, Math.min(2.5, Number(saved) || 1)));
+        if (sel) sel.value = v;
+        try {
+            if (typeof setAiPerfOverride === 'function') setAiPerfOverride(v === 'auto' ? null : v);
+        } catch (e) {}
+    }
     function toggleSound() { 
         audioEnabled = !audioEnabled; 
         showToast(audioEnabled ? '音效开' : '音效关'); 
@@ -2740,10 +2766,20 @@ function broadcastFullState() {
             let msg = { cmd: 'init' };
             if (params) msg.params = params;
             if (cr.length > 0) msg.correctionRules = cr;
+            const perf = SafeStore.get('landlord_ai_power', 'auto');
+            msg.perfFactor = perf === 'auto' ? null : Math.max(0.1, Math.min(2.5, Number(perf) || 1));
             for (let w of this.workers) {
                 if (w._ready) w.postMessage(msg);
             }
             this.ready = true;
+        },
+        setPerfFactor(val) {
+            const factor = val === 'auto' ? null : Math.max(0.1, Math.min(2.5, Number(val) || 1));
+            for (let w of this.workers) {
+                if (w && w._ready) {
+                    try { w.postMessage({ cmd: 'setPerfFactor', factor }); } catch (e) {}
+                }
+            }
         },
         think(phase, state, playerId, difficulty, memory) {
             if (phase === 'play' && this._shouldParallelMcts(state, playerId, difficulty)) {
@@ -2755,15 +2791,9 @@ function broadcastFullState() {
             return this._thinkSingle(phase, state, playerId, difficulty, memory);
         },
         _shouldParallelMcts(state, playerId, difficulty) {
-            if (difficulty !== 'hard' && difficulty !== 'grandmaster' && difficulty !== 'legendary') return false;
-            const hand = state.players[playerId];
-            const len = Array.isArray(hand) ? hand.length : 0;
-            const endgameLimit = cfg('endgameThresholds.' + difficulty) || 10;
-            const mctsLimit = cfg('mcts.handLimit.' + difficulty) || 0;
-            if (!len || len <= endgameLimit || len > mctsLimit) return false;
-            const worlds = cfg('blind.worlds.mcts.' + difficulty) || 0;
-            if (worlds < 2) return false;
-            return this.workers.filter(w => !w._dead && w._ready && !w._busy).length >= 2;
+            const active = this.workers.filter(w => !w._dead && w._ready && !w._busy).length;
+            if (typeof canParallelMcts !== 'function') return false;
+            return canParallelMcts(state, playerId, difficulty, active);
         },
         _thinkMctsParallel(state, playerId, difficulty, memory) {
             return new Promise((resolve) => {
@@ -2774,7 +2804,14 @@ function broadcastFullState() {
                 if (n < 2) { resolve(null); return; }
                 const worldsPer = Math.max(1, Math.ceil(totalWorlds / n));
                 const iterations = cfg('mcts.iterations.' + difficulty) || 600;
-                const budgetMs = cfg('blind.mctsTimeBudgetMs.' + difficulty) || 1000;
+                const hand = state.players[playerId];
+                const needBeat = state.lastPlay && state.lastPlayerId !== playerId;
+                let candidateCount = 0;
+                try { candidateCount = getAllValidPlays(hand, needBeat ? state.lastPlay : null).length; } catch (e) {}
+                const baseBudgetMs = cfg('blind.mctsTimeBudgetMs.' + difficulty) || 1000;
+                const budgetMs = (typeof adaptiveMctsBudget === 'function')
+                    ? adaptiveMctsBudget(difficulty, candidateCount, hand.length, baseBudgetMs)
+                    : baseBudgetMs;
                 const serializedState = this._serializeState(state, playerId);
                 const serializedMemory = memoryToData(memory);
                 const tasks = [];
@@ -2988,6 +3025,7 @@ function broadcastFullState() {
     }
 
     window.onload = () => {
+        try { if (typeof initAiPower === 'function') initAiPower(); } catch (e) {}
         // 标定设备速度：移动端自动缩小 AI 时间预算（既不卡 UI，也不会被看门狗判超时）
         try { if (typeof calibrateAiSpeed === 'function') calibrateAiSpeed(); } catch (e) {}
         applyLaunchMode();
