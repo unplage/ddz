@@ -507,6 +507,7 @@ async function main() {
         /@media \(max-width: 420px\)/.test(mainTxt) && mainTxt.includes('#topRightControls'));
     check('顶栏按钮统一样式并强制单行',
         mainTxt.includes('.top-chip') && !mainTxt.includes('flex-wrap: wrap'));
+    check('顶栏保留原始难度/速度文案', mainTxt.includes('大师级') && mainTxt.includes('快速'));
     check('金币显示截断为前 5 位', mainTxt.includes("slice(0, 5)"));
     check('sync 带 epoch 房间纪元', mainTxt.includes('epoch: GameState.roomEpoch'));
     check('客户端只接受房主连接 sync', mainTxt.includes("conn !== GameState.connections[0]"));

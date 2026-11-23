@@ -15,7 +15,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon.png">
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
     <meta name="theme-color" content="#1a1a2e">
-    <meta name="app-version" content="v101">
+    <meta name="app-version" content="v102">
     <meta name="description" content="像素风格斗地主：单机公平 AI 对战 + P2P 联机，离线可玩">
     <style>
         * { image-rendering: pixelated; font-family: 'Press Start 2P', cursive; -webkit-tap-highlight-color: transparent; touch-action: manipulation; box-sizing: border-box; }
@@ -51,7 +51,7 @@
         .card-row.second { margin-top: -10px; }
         .status-bar { background: rgba(0,0,0,0.8); backdrop-filter: blur(10px); border-bottom: 2px solid #333; padding: 8px 12px; height: 50px; flex-wrap: nowrap; gap: 6px; }
         #topLeftControls { flex: 0 0 auto; min-width: 0; }
-        #topRightControls { flex: 1 1 auto; min-width: 0; justify-content: space-evenly; gap: 4px; }
+        #topRightControls { flex: 0 0 auto; display: grid; grid-template-columns: repeat(5, 44px); gap: 4px; align-items: center; }
         #connStatus { max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .player-area { position: fixed; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.8) 60%, transparent 100%); padding-bottom: env(safe-area-inset-bottom, 10px); z-index: 40; padding-top: 10px; }
         .opponent-top { position: fixed; top: calc(70px + env(safe-area-inset-top, 0px)); display: flex; flex-direction: column; align-items: center; gap: 5px; z-index: 30; }
@@ -61,7 +61,7 @@
         .play-area { position: fixed; top: calc(50% + env(safe-area-inset-top, 0px) / 2); left: 50%; transform: translate(-50%, -50%); width: 92%; max-width: 450px; height: 160px; display: flex; align-items: center; justify-content: center; z-index: 55; }
         .toast { position: fixed; top: calc(56px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.9); color: #fff; padding: 12px 24px; border: 3px solid #fff; border-radius: 8px; font-size: 12px; z-index: 100; pointer-events: none; white-space: nowrap; }
         .start-btn { font-size: 16px; padding: 16px 32px; min-height: 56px; }
-        .top-chip { background: #2a2a3e; color: #fff; border: 2px solid #fff; border-radius: 6px; height: 32px; min-height: 32px; padding: 0 6px; margin: 0; font-size: 9px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; cursor: pointer; touch-action: manipulation; -webkit-appearance: none; appearance: none; text-align: center; text-align-last: center; }
+        .top-chip { box-sizing: border-box; width: 100%; background: #2a2a3e; color: #fff; border: 2px solid #fff; border-radius: 6px; height: 32px; min-height: 32px; padding: 0; margin: 0; font-size: 9px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; cursor: pointer; touch-action: manipulation; -webkit-appearance: none; appearance: none; text-align: center; text-align-last: center; }
         .top-chip:active { background: #3d3d59; }
         .quick-actions { display: flex; gap: 10px; margin-bottom: 8px; justify-content: center; }
         .icon-btn { width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,0.2); border: 2px solid #fff; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: pointer; touch-action: manipulation; }
@@ -88,8 +88,8 @@
         [class~="hidden"] { display: none !important; }
         @media (max-width: 420px) {
             .status-bar { height: 46px; padding: 4px 6px; gap: 4px; }
-            .top-chip { height: 28px; min-height: 28px; padding: 0 4px; font-size: 8px; }
-            #topRightControls { gap: 3px; }
+            .top-chip { height: 28px; min-height: 28px; font-size: 8px; }
+            #topRightControls { grid-template-columns: repeat(5, 40px); gap: 3px; }
             #connStatus { font-size: 7px; padding: 2px 4px; max-width: 56px; }
             .opponent-top { top: calc(64px + env(safe-area-inset-top, 0px)); }
         }
@@ -107,11 +107,11 @@
             <select id="difficulty" class="top-chip" title="难度" onchange="changeDifficulty(this.value)">
                 <option value="easy">简单</option>
                 <option value="medium">中等</option>
-                <option value="hard">大师</option>
-                <option value="grandmaster">宗师</option>
-                <option value="legendary" selected>传奇</option>
+                <option value="hard">大师级</option>
+                <option value="grandmaster">宗师级</option>
+                <option value="legendary" selected>传奇级</option>
             </select>
-            <select id="aiSpeed" class="top-chip" title="AI 展示速度" onchange="changeSpeed(this.value)"><option value="fast">快</option><option value="normal" selected>中</option><option value="slow">慢</option></select>
+            <select id="aiSpeed" class="top-chip" title="AI 展示速度" onchange="changeSpeed(this.value)"><option value="fast">快速</option><option value="normal" selected>中等</option><option value="slow">慢速</option></select>
             <select id="aiPower" class="top-chip" title="AI 算力倍率（大于 1 更强但更耗电）" onchange="changeAiPower(this.value)"><option value="auto">⚡自动</option><option value="0.5">0.5×</option><option value="1">1×</option><option value="1.5">1.5×</option><option value="2">2×</option><option value="2.5">2.5×</option></select>
             <div id="voiceToggle" class="top-chip" title="语音播报" onclick="toggleVoice()">🔊 开</div>
             <div class="top-chip" title="AI 参数与学习" onclick="ParamExporter.showUI()">🤖 AI</div>
