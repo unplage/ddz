@@ -1043,9 +1043,9 @@ class HandBelief {
         //    真人历史过牌多 → 采样世界里其牌力偏弱；爱炸弹 → 控牌偏多。
         if (this.humanStyle) {
             const hs = this.humanStyle;
-            const oppIdsHere = oppIds.filter(i => i !== this.playerId);
+            const oppIdsHere = oppIds.filter(i => i !== this.playerId && i === 0);
             for (const id of oppIdsHere) {
-                // 真人座位：单机模式下玩家是 myRole 的对面；这里对所有非己方做温和先验
+                // 真人风格只作用于真人座位（单机固定为 0），不污染 AI 队友的信念
                 const hand = worldPlayers[id] || [];
                 const str = this._handStrengthScore(hand);
                 const wantWeak = (hs.passRate || 0.3) - 0.3;      // >0 表示偏保守
@@ -1977,7 +1977,8 @@ function computePassScore(role, state) {
             target: 'pass',
             needBeat: !!state.lastPlay && state.lastPlayerId !== state.currentPlayer,
             role: role,
-            opponentHandCount: oppCount
+            opponentHandCount: oppCount,
+            lastPlayerIsPartner: lastId >= 0 && lastId !== state.currentPlayer && lastId !== state.landlord
         };
         for (const rule of matchRules(passCtx)) {
             if (rule && rule.context && rule.context.target === 'pass') score += rule.penalty;
@@ -2809,7 +2810,32 @@ function solveEndgameBlind(state, playerId, belief, opts) {
         const score = mean - lambda * Math.sqrt(variance) - 3 * (1 - coverage);
         if (score > bestScore) { bestScore = score; bestPlay = e.play; found = true; }
     }
-    if (found) return bestPlay;
+    if (found) {
+        // 公开信息里的协作先验：盲搜索采样的是"随机可能世界"，看不到队友的真实残牌，
+        // 容易在队友快走完时抢牌权、或地主快走完时把牌权让出去。这里只在两个明确局面
+        // 用公开张数做兜底，不改动其它候选之间的搜索排序。
+        try {
+            if (needBeat && role === 'farmer') {
+                const partnerId = [0, 1, 2].find(i => i !== playerId && i !== state.landlord);
+                const isPass = bestPlay === null || bestPlay === ENDGAME_PASS;
+                const lordCards = state.players[state.landlord] ? state.players[state.landlord].length : 17;
+                const lastId = state.lastPlayerId;
+                if (!isPass && partnerId !== undefined && lastId === partnerId) {
+                    const partnerCards = state.players[partnerId] ? state.players[partnerId].length : 17;
+                    if (partnerCards <= 3 && lordCards > 2 && bestPlay.length !== hand.length) return ENDGAME_PASS;
+                }
+                if (isPass && lastId === state.landlord && lordCards <= 2) {
+                    const beats = plays.slice().sort((a, b) => getPlayPower(a) - getPlayPower(b));
+                    const cheap = beats.find(p => {
+                        const t = getCardType(p);
+                        return t && t.type !== CardType.BOMB && t.type !== CardType.ROCKET;
+                    });
+                    if (cheap) return cheap;
+                }
+            }
+        } catch (e) {}
+        return bestPlay;
+    }
     for (const o of trimmedOptions) if (o && o.length > 0) return o;
     return plays[0] || null;
 }
@@ -3356,7 +3382,7 @@ function _buildRootPriors(state, playerId, memory) {
         const lordRem = state.players[state.landlord] ? state.players[state.landlord].length : 17;
         let passPrior = 0.12;
         if (role === 'farmer') {
-            if (state.lastPlayerId === partnerId) passPrior = (state.players[partnerId] && state.players[partnerId].length <= 2) ? 0.22 : 0.16;
+            if (state.lastPlayerId === partnerId) passPrior = (state.players[partnerId] && state.players[partnerId].length <= 2) ? 0.65 : 0.30;
             else if (state.lastPlayerId === state.landlord) passPrior = lordRem <= 3 ? 0.18 : 0.04;
         } else {
             const farmerRem = Math.min(

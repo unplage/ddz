@@ -782,7 +782,8 @@ const GameAnalyzer = {
         // 3. Pass when should beat (opponent about to win)
         if (action.pass) {
             let oppIdx = state.lastPlayerId;
-            if (oppIdx >= 0 && state.players[oppIdx] && state.players[oppIdx].length <= 3 && beatable.length > 0) {
+            let isPartnerLead = role === 'farmer' && oppIdx >= 0 && oppIdx !== state.landlord && oppIdx !== action.p;
+            if (!isPartnerLead && oppIdx >= 0 && state.players[oppIdx] && state.players[oppIdx].length <= 3 && beatable.length > 0) {
                 mistakes.push({
                     severity: 'high',
                     category: 'bad_pass',
@@ -918,6 +919,7 @@ const CorrectionRules = {
         let results = [];
         for (let rule of this._rules) {
             if (rule.confidence < this.MIN_CONFIDENCE) continue;
+            if (rule.category === 'bad_pass' && context && context.lastPlayerIsPartner) continue;
             if (this._ruleMatches(rule, context)) {
                 results.push(rule);
             }
